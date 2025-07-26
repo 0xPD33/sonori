@@ -132,43 +132,19 @@ impl RealTimeTranscriber {
             let mut config = Config::default();
             let app_config = read_app_config(); // Read config once
 
-            // Determine device based on feature flag and user config
-            #[cfg(feature = "cuda")]
-            {
-                if app_config.device.to_uppercase() == "CUDA" {
-                    println!("INFO: CUDA feature is enabled and config is set to CUDA. Attempting to load model on GPU.");
-                    config.device = Device::CUDA;
-                } else {
-                    println!("INFO: CUDA feature is enabled, but config is set to CPU. Loading model on CPU.");
-                    config.device = Device::CPU;
-                }
-            }
-            #[cfg(not(feature = "cuda"))]
-            {
-                if app_config.device.to_uppercase() == "CUDA" {
-                    println!("WARN: Config specifies CUDA, but the application was not compiled with the 'cuda' feature.");
-                    println!("WARN: Falling back to CPU. To use CUDA, recompile with '--features cuda'.");
-                } else {
-                    println!("INFO: CUDA feature not enabled. Loading model on CPU.");
-                }
-                config.device = Device::CPU;
-            }
+            // Always use CPU for inference
+            config.device = Device::CPU;
+            println!("INFO: Loading model on CPU.");
 
-            // On GPU, FLOAT16 is often faster and uses less VRAM with minimal quality loss.
-            // On CPU, INT8 is usually best.
-            let compute_type_str = if config.device == Device::CUDA {
-                "FLOAT16" // Good default for GPU
-            } else {
-                app_config.compute_type.as_str() // Use configured value for CPU
-            };
-
+            // Use configured compute type for CPU
+            let compute_type_str = app_config.compute_type.as_str();
             config.compute_type = match compute_type_str {
                 "FLOAT16" => ComputeType::FLOAT16,
                 "INT8" => ComputeType::INT8,
                 _ => ComputeType::DEFAULT, // Safe fallback
             };
 
-            // This setting is still relevant for CPU-based operations even when the device is CUDA.
+            // Configure CPU threads
             let cpu_cores = std::thread::available_parallelism()
                 .map(|n| n.get())
                 .unwrap_or(4);
@@ -186,10 +162,6 @@ impl RealTimeTranscriber {
                 }
                 Err(e) => {
                     eprintln!("ERROR: Failed to load Whisper model: {}", e);
-                    #[cfg(feature = "cuda")]
-                    if app_config.device.to_uppercase() == "CUDA" {
-                        eprintln!("HINT: If using CUDA, ensure NVIDIA drivers, CUDA Toolkit, and cuDNN are correctly installed and accessible in your PATH.");
-                    }
                 }
             }
         });

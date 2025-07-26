@@ -1,6 +1,7 @@
 use ndarray::{s, Array, Array2, ArrayBase, ArrayD, Dim, IxDynImpl, OwnedRepr};
 use ort::session::builder::GraphOptimizationLevel;
 use ort::session::{Session, SessionInputs};
+use ort::value::Tensor;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::time::Duration;
@@ -210,20 +211,25 @@ impl SileroVad {
         // Slice to the correct length
         let frame = self.frame_buffer.slice(s![.., ..frame_len]);
 
+        // Convert ndarrays to ort tensors
+        let frame_tensor = Tensor::from_array(frame.to_owned())?;
+        let state_tensor = Tensor::from_array(std::mem::take(&mut self.state))?;
+        let sample_rate_tensor = Tensor::from_array(self.sample_rate.to_owned())?;
+
         // Run inference
         let inps = ort::inputs![
-            frame,
-            std::mem::take(&mut self.state),
-            self.sample_rate.view(),
-        ]?;
+            frame_tensor,
+            state_tensor,
+            sample_rate_tensor,
+        ];
 
         let res = self.session.run(SessionInputs::ValueSlice::<3>(&inps))?;
 
         // Update internal state
-        self.state = res["stateN"].try_extract_tensor().unwrap().to_owned();
+        self.state = res["stateN"].try_extract_array().unwrap().to_owned();
 
         // Extract and return the speech probability
-        let output_tensor = res["output"].try_extract_raw_tensor::<f32>().unwrap();
+        let output_tensor = res["output"].try_extract_tensor::<f32>().unwrap();
         Ok(output_tensor.1[0])
     }
 
