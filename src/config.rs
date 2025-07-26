@@ -235,12 +235,12 @@ impl WhisperOptionsSerde {
 
 /// Helper function to read the application configuration
 pub fn read_app_config() -> AppConfig {
-    match std::fs::read_to_string("config.json") {
-        Ok(config_str) => match serde_json::from_str(&config_str) {
+    match std::fs::read_to_string("config.toml") {
+        Ok(config_str) => match toml::from_str(&config_str) {
             Ok(config) => config,
             Err(e) => {
                 println!(
-                    "Failed to parse config.json: {}. Using default configuration.",
+                    "Failed to parse config.toml: {}. Using default configuration.",
                     e
                 );
                 AppConfig::default()
@@ -248,7 +248,7 @@ pub fn read_app_config() -> AppConfig {
         },
         Err(e) => {
             println!(
-                "Failed to read config.json: {}. Using default configuration.",
+                "Failed to read config.toml: {}. Using default configuration.",
                 e
             );
             AppConfig::default()

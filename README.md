@@ -18,7 +18,7 @@ Contributions are welcome. There are no guidelines yet. Just check the planned f
 - **Pause/Resume Recording**: Pause/Resume recording
 - **Auto-Start Recording**: Begins recording as soon as the application launches
 - **Scroll Controls**: Navigate through longer transcripts
-- **Configurable**: Configure the model, language, and other settings like keyboard shortcuts in the config file (config.json)
+- **Configurable**: Configure the model, language, and other settings like keyboard shortcuts in the config file (config.toml)
 - **Automatic Model Download**: Both Whisper and Silero VAD models are downloaded automatically
 
 ### Planned
@@ -80,7 +80,7 @@ while in the root directory of the repository. The flake includes all necessary 
 
 Sonori needs two types of models to function properly:
 
-1. **Whisper Model** - Configured in the `config.json` file and downloaded automatically on first run
+1. **Whisper Model** - Configured in the `config.toml` file and downloaded automatically on first run
 2. **Silero VAD Model** - Also downloaded automatically on first run
 
    Note: If you need to download the Silero model manually for any reason, you should head to the repo and download the model yourself:
@@ -124,46 +124,44 @@ Sonori needs two types of models to function properly:
 
 ## Configuration
 
-Sonori uses a `config.json` file in the same directory as the executable. If not present, a default configuration is used.
+Sonori uses a `config.toml` file in the same directory as the executable. If not present, a default configuration is used.
 
 Example configuration:
 
-```json
-{
-  "model": "openai/whisper-base.en",
-  "language": "en",
-  "compute_type": "INT8",
-  "log_stats_enabled": false,
-  "buffer_size": 1024,
-  "sample_rate": 16000,
-  "whisper_options": {
-    "beam_size": 5,
-    "patience": 1.0,
-    "repetition_penalty": 1.25
-  },
-  "vad_config": {
-    "threshold": 0.2,
-    "hangbefore_frames": 1,
-    "hangover_frames": 15,
-    "max_buffer_duration_sec": 30.0,
-    "max_segment_count": 20
-  },
-  "audio_processor_config": {
-    "max_vis_samples": 1024
-  },
-  "keyboard_shortcuts": {
-    "copy_transcript": "KeyC",
-    "reset_transcript": "KeyR",
-    "quit_application": "KeyQ",
-    "toggle_recording": "Space",
-    "exit_application": "Escape"
-  }
-}
+```toml
+model = "openai/whisper-base.en"
+language = "en"
+compute_type = "INT8"
+log_stats_enabled = false
+buffer_size = 1024
+sample_rate = 16000
+
+[whisper_options]
+beam_size = 5
+patience = 1.0
+repetition_penalty = 1.25
+
+[vad_config]
+threshold = 0.2
+hangbefore_frames = 1
+hangover_frames = 15
+max_buffer_duration_sec = 30.0
+max_segment_count = 20
+
+[audio_processor_config]
+max_vis_samples = 1024
+
+[keyboard_shortcuts]
+copy_transcript = "KeyC"
+reset_transcript = "KeyR"
+quit_application = "KeyQ"
+toggle_recording = "Space"
+exit_application = "Escape"
 ```
 
 ### Keyboard Shortcuts
 
-You can customize the keyboard shortcuts used in the application by editing the `keyboard_shortcuts` section in the config.json file. The default shortcuts are:
+You can customize the keyboard shortcuts used in the application by editing the `keyboard_shortcuts` section in the config.toml file. The default shortcuts are:
 
 - `copy_transcript`: KeyC (Ctrl+C) - Copy the transcription to clipboard
 - `reset_transcript`: KeyR (Ctrl+R) - Clear the current transcript
