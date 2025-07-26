@@ -1,5 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::io::Write;
 
 mod audio_capture;
 mod audio_processor;
@@ -14,12 +15,25 @@ mod transcription_stats;
 mod ui;
 // mod wayland_connection;
 
+use clap::Parser;
 use config::read_app_config;
 use download::ModelType;
 use real_time_transcriber::RealTimeTranscriber;
 
+#[derive(Parser)]
+#[command(name = "sonori")]
+#[command(about = "Real-time speech transcription with Whisper")]
+#[command(version)]
+struct Args {
+    /// Run in CLI mode (no GUI)
+    #[arg(long, help = "Run in CLI mode without GUI, displaying transcription in the terminal")]
+    cli: bool,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+    
     println!("Loading configuration...");
     let app_config = read_app_config();
     let log_stats_enabled = app_config.log_stats_enabled;
@@ -37,6 +51,59 @@ async fn main() -> anyhow::Result<()> {
     println!("Starting transcription automatically...");
     transcriber.toggle_recording();
 
+    if args.cli {
+        // CLI mode - no GUI
+        run_cli_mode(transcriber).await?;
+    } else {
+        // GUI mode - existing behavior
+        run_gui_mode(transcriber, app_config).await?;
+    }
+
+    Ok(())
+}
+
+async fn run_cli_mode(mut transcriber: RealTimeTranscriber) -> anyhow::Result<()> {
+    println!("Running in CLI mode. Press Ctrl+C to exit.");
+    println!("Transcription will appear below:");
+    println!("=====================================");
+    
+    let mut transcript_rx = transcriber.get_transcript_rx();
+    let running = transcriber.get_running();
+    
+    // Set up Ctrl+C handler
+    let running_clone = running.clone();
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c().await.expect("Failed to listen for Ctrl+C");
+        println!("\nShutting down...");
+        running_clone.store(false, Ordering::Relaxed);
+    });
+    
+    // Listen for transcriptions and print them
+    let mut current_line = String::new();
+    
+    loop {
+        tokio::select! {
+            Ok(transcription) = transcript_rx.recv() => {
+                // Clear the current line and print the new transcription
+                print!("\r{:100}\r", ""); // Clear line with spaces
+                current_line.push(' ');
+                current_line.push_str(&transcription);
+                print!("{}", current_line);
+                std::io::Write::flush(&mut std::io::stdout()).unwrap();
+            }
+            _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
+                if !running.load(Ordering::Relaxed) {
+                    break;
+                }
+            }
+        }
+    }
+    
+    transcriber.shutdown().await?;
+    Ok(())
+}
+
+async fn run_gui_mode(transcriber: RealTimeTranscriber, app_config: config::AppConfig) -> anyhow::Result<()> {
     // Set up shutdown channels and monitoring task
     let (_shutdown_tx, shutdown_rx) = tokio::sync::mpsc::channel::<()>(2);
     let transcript_history = transcriber.get_transcript_history();

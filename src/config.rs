@@ -114,6 +114,8 @@ pub struct AppConfig {
     pub language: String,
     /// Compute type for model inference
     pub compute_type: String,
+    /// Device for model inference
+    pub device: String,
     /// Whether to log statistics
     pub log_stats_enabled: bool,
     /// The global buffer size used throughout the application
@@ -204,9 +206,10 @@ impl Default for AppConfig {
             model: "openai/whisper-base.en".to_string(),
             language: "en".to_string(),
             compute_type: "INT8".to_string(),
+            device: "CPU".to_string(),
             log_stats_enabled: true,
             buffer_size: 1024,
-            sample_rate: 16000, // 16kHz (supported by Silero VAD)
+            sample_rate: 16000,
             whisper_options: WhisperOptionsSerde {
                 beam_size: 5,
                 patience: 1.0,

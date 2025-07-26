@@ -14,6 +14,7 @@ anyhow = "1.0.97"
 serde = { version = "1.0.218", features = ["derive"] }
 serde_json = "1.0.140"
 parking_lot = "0.12.1"
+clap = { version = "4.5.21", features = ["derive"] }
 winit = { version = "0.30.5", git = "https://github.com/SergioRibera/winit", branch = "layer_shell" }
 raw-window-handle = "0.6.2"
 wgpu = "24.0.1"
@@ -31,12 +32,13 @@ rustfft = "6.1.0"
 bytemuck = { version = "1.18.0", features = ["derive"] }
 glyphon = "0.8.0"
 # copypasta = "0.10.1"
-ort = { version = "2.0.0-rc.8", features = ["load-dynamic", "ndarray"] }
+ort = { version = "2.0.0-rc.8", features = ["ndarray"] }
 hound = "3.0.0"
 image = "0.25.5"
 chrono = "0.4.35"
 
 [features]
+cuda = ["ct2rs/cuda", "ct2rs/cudnn"]
 # Enable runtime CPU feature detection
 std = ["std_detect"]
 std_detect = []

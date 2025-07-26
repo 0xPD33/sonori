@@ -56,9 +56,9 @@ pub struct RealTimeTranscriber {
     transcription_stats: Arc<Mutex<TranscriptionStats>>,
     stats_reporter: Option<StatsReporter>,
 
-    // Sub-components
-    transcription_processor: Option<TranscriptionProcessor>,
-    audio_processor_component: Option<AudioProcessor>,
+    // Task handles for graceful shutdown
+    transcription_handle: Option<tokio::task::JoinHandle<()>>,
+    audio_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl RealTimeTranscriber {
@@ -71,13 +71,10 @@ impl RealTimeTranscriber {
     /// # Returns
     /// Result containing the new instance or an error
     pub fn new(model_path: PathBuf, app_config: AppConfig) -> Result<Self, anyhow::Error> {
-        // Use bounded channels with appropriate capacities for better backpressure
-        // 10 is a good default capacity for audio data that ensures we don't queue too much
-        let (tx, rx) = mpsc::channel(10);
+        // Use bounded channels with larger capacities for better performance
+        let (tx, rx) = mpsc::channel(50);
         let (transcript_tx, transcript_rx) = broadcast::channel(100);
-        // Use a bounded channel for audio segments as well
-        let (segment_tx, segment_rx) = mpsc::channel(10);
-        // Keep this one unbounded since it's just for signaling completion
+        let (segment_tx, segment_rx) = mpsc::channel(50);
         let (transcription_done_tx, transcription_done_rx) = mpsc::unbounded_channel();
 
         // Get the Silero model from the models directory
@@ -108,12 +105,6 @@ impl RealTimeTranscriber {
             reset_requested: false,
         }));
 
-        let compute_type = match app_config.compute_type.as_str() {
-            "FLOAT16" => ComputeType::FLOAT16,
-            "INT8" => ComputeType::INT8,
-            _ => ComputeType::INT8,
-        };
-
         let audio_processor = match SileroVad::new(
             (
                 app_config.vad_config.clone(),
@@ -139,9 +130,54 @@ impl RealTimeTranscriber {
 
         tokio::spawn(async move {
             let mut config = Config::default();
-            config.device = Device::CPU;
-            config.compute_type = compute_type;
-            config.num_threads_per_replica = 8;
+            let app_config = read_app_config(); // Read config once
+
+            // Determine device based on feature flag and user config
+            #[cfg(feature = "cuda")]
+            {
+                if app_config.device.to_uppercase() == "CUDA" {
+                    println!("INFO: CUDA feature is enabled and config is set to CUDA. Attempting to load model on GPU.");
+                    config.device = Device::CUDA;
+                } else {
+                    println!("INFO: CUDA feature is enabled, but config is set to CPU. Loading model on CPU.");
+                    config.device = Device::CPU;
+                }
+            }
+            #[cfg(not(feature = "cuda"))]
+            {
+                if app_config.device.to_uppercase() == "CUDA" {
+                    println!("WARN: Config specifies CUDA, but the application was not compiled with the 'cuda' feature.");
+                    println!("WARN: Falling back to CPU. To use CUDA, recompile with '--features cuda'.");
+                } else {
+                    println!("INFO: CUDA feature not enabled. Loading model on CPU.");
+                }
+                config.device = Device::CPU;
+            }
+
+            // On GPU, FLOAT16 is often faster and uses less VRAM with minimal quality loss.
+            // On CPU, INT8 is usually best.
+            let compute_type_str = if config.device == Device::CUDA {
+                "FLOAT16" // Good default for GPU
+            } else {
+                app_config.compute_type.as_str() // Use configured value for CPU
+            };
+
+            config.compute_type = match compute_type_str {
+                "FLOAT16" => ComputeType::FLOAT16,
+                "INT8" => ComputeType::INT8,
+                _ => ComputeType::DEFAULT, // Safe fallback
+            };
+
+            // This setting is still relevant for CPU-based operations even when the device is CUDA.
+            let cpu_cores = std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4);
+            config.num_threads_per_replica = (cpu_cores / 2).max(2).min(4);
+
+            println!(
+                "Attempting to load Whisper model with config: Device={:?}, ComputeType={:?}, CPU threads={}",
+                config.device, config.compute_type, config.num_threads_per_replica
+            );
 
             match Whisper::new(&model_path_clone, config) {
                 Ok(w) => {
@@ -149,7 +185,11 @@ impl RealTimeTranscriber {
                     *whisper_clone.lock() = Some(w);
                 }
                 Err(e) => {
-                    eprintln!("Failed to load Whisper model: {}", e);
+                    eprintln!("ERROR: Failed to load Whisper model: {}", e);
+                    #[cfg(feature = "cuda")]
+                    if app_config.device.to_uppercase() == "CUDA" {
+                        eprintln!("HINT: If using CUDA, ensure NVIDIA drivers, CUDA Toolkit, and cuDNN are correctly installed and accessible in your PATH.");
+                    }
                 }
             }
         });
@@ -174,8 +214,8 @@ impl RealTimeTranscriber {
             transcription_done_rx: Some(transcription_done_rx),
             transcription_stats,
             stats_reporter: None,
-            transcription_processor: None,
-            audio_processor_component: None,
+            transcription_handle: None,
+            audio_handle: None,
         })
     }
 
@@ -215,9 +255,6 @@ impl RealTimeTranscriber {
             self.transcription_stats.clone(),
         );
 
-        // Store the processor first
-        self.transcription_processor = Some(transcription_processor);
-
         // Get config
         let config = read_app_config();
 
@@ -232,20 +269,48 @@ impl RealTimeTranscriber {
             config,
         );
 
-        // Store the processor first
-        self.audio_processor_component = Some(audio_processor);
-
         // Take ownership of the receivers and pass them to the processors
-        if let (Some(processor_a), Some(segment_rx)) =
-            (&self.audio_processor_component, self.segment_rx.take())
-        {
-            if let (Some(processor_t), Some(rx)) = (&self.transcription_processor, self.rx.take()) {
-                processor_t.start(segment_rx, self.transcript_tx.clone());
-                processor_a.start(rx);
-            }
+        if let (Some(segment_rx), Some(rx)) = (self.segment_rx.take(), self.rx.take()) {
+            self.transcription_handle =
+                Some(transcription_processor.start(segment_rx, self.transcript_tx.clone()));
+            self.audio_handle = Some(audio_processor.start(rx));
+            self.start_recording_monitor();
+        } else {
+            return Err(anyhow::anyhow!(
+                "Failed to take ownership of receivers for processors"
+            ));
         }
 
         Ok(())
+    }
+
+    /// Starts a monitoring task that watches for recording state changes
+    /// and manages the audio stream accordingly
+    fn start_recording_monitor(&mut self) {
+        let running = self.running.clone();
+        let recording = self.recording.clone();
+        
+        // We need a way to communicate with the audio capture from the monitoring task
+        // For now, we'll create a simple polling mechanism
+        tokio::spawn(async move {
+            let mut last_recording_state = false;
+            let mut check_interval = tokio::time::interval(tokio::time::Duration::from_millis(100));
+            
+            while running.load(Ordering::Relaxed) {
+                check_interval.tick().await;
+                
+                let current_recording_state = recording.load(Ordering::Relaxed);
+                
+                // If recording state changed, we need to log it
+                // The actual audio stream management is now handled by the audio capture callback
+                if current_recording_state != last_recording_state {
+                    println!("Recording state changed: {} -> {}", last_recording_state, current_recording_state);
+                    last_recording_state = current_recording_state;
+                }
+            }
+            
+            println!("Recording monitor task stopped");
+        });
     }
 
     /// Stops the audio capture and transcription process
@@ -257,11 +322,9 @@ impl RealTimeTranscriber {
     pub async fn stop(&mut self) -> Result<(), anyhow::Error> {
         self.recording.store(false, Ordering::Relaxed);
 
-        // We don't set running to false because we want to be able to resume
-
-        // Pause the audio stream without closing it
-        if let Err(e) = self.audio_capture.pause() {
-            eprintln!("Warning: Failed to pause audio capture: {}", e);
+        // Stop the audio stream to save CPU when not recording
+        if let Err(e) = self.audio_capture.stop_recording() {
+            eprintln!("Warning: Failed to stop audio recording: {}", e);
         }
 
         Ok(())
@@ -272,14 +335,12 @@ impl RealTimeTranscriber {
     /// # Returns
     /// Result indicating success or error
     pub async fn resume(&mut self) -> Result<(), anyhow::Error> {
-        // Resume the audio stream
-        if let Err(e) = self.audio_capture.resume() {
-            return Err(anyhow::anyhow!("Failed to resume audio capture: {}", e));
-        }
-
-        // Set recording back to true if it was previously recording
         self.recording.store(true, Ordering::Relaxed);
 
+        if let Err(e) = self.audio_capture.resume() {
+            eprintln!("Failed to resume audio capture: {}", e);
+            // Even if resume fails, we proceed since state is now "recording"
+        }
         Ok(())
     }
 
@@ -290,46 +351,49 @@ impl RealTimeTranscriber {
     /// # Returns
     /// Result indicating success or an error with detailed message
     pub async fn shutdown(&mut self) -> Result<(), anyhow::Error> {
+        println!("Shutting down transcriber...");
         self.running.store(false, Ordering::Relaxed);
         self.recording.store(false, Ordering::Relaxed);
 
-        // Create a timeout for waiting on the transcription thread
-        if let Some(rx) = &mut self.transcription_done_rx {
-            match tokio::time::timeout(Duration::from_secs(5), rx.recv()).await {
-                Ok(_) => (),
-                Err(_) => eprintln!("Timeout waiting for transcription thread to finish"),
+        // Stop audio capture
+        self.audio_capture.stop();
+
+        // Wait for the audio processor to finish
+        if let Some(handle) = self.audio_handle.take() {
+            if let Err(e) = handle.await {
+                eprintln!("Audio processor task panicked: {:?}", e);
             }
         }
 
-        // Completely stop and clean up the audio capture
-        self.audio_capture.stop();
+        // Wait for the transcription processor to finish
+        if let Some(handle) = self.transcription_handle.take() {
+            if let Err(e) = handle.await {
+                eprintln!("Transcription processor task panicked: {:?}", e);
+            }
+        }
 
+        // Clean up whisper model
+        *self.whisper.lock() = None;
+
+        println!("Transcriber shut down successfully.");
         Ok(())
     }
 
-    /// Toggles the recording state between active and inactive
-    ///
-    /// When active, audio is captured and processed for transcription
+    /// Toggles the recording state between active and paused
     pub fn toggle_recording(&mut self) {
         let was_recording = self.recording.load(Ordering::Relaxed);
         self.recording.store(!was_recording, Ordering::Relaxed);
 
-        // Toggle the audio stream based on the new recording state
+        // Control the audio stream based on the new recording state
         if was_recording {
-            // We were recording, now stopping - pause the stream
-            if let Err(e) = self.audio_capture.pause() {
-                // It's okay if the stream is not started - that's an expected edge case
-                if !e.to_string().contains("StreamIsNotStarted") {
-                    eprintln!("Warning: Failed to pause audio stream: {}", e);
-                }
+            // We were recording, now stopping - stop the stream to save CPU
+            if let Err(e) = self.audio_capture.stop_recording() {
+                eprintln!("Warning: Failed to stop audio recording: {}", e);
             }
         } else {
-            // We were stopped, now recording - resume the stream
-            if let Err(e) = self.audio_capture.resume() {
-                // It's okay if the stream is not stopped - that's an expected edge case
-                if !e.to_string().contains("StreamIsNotStopped") {
-                    eprintln!("Warning: Failed to resume audio stream: {}", e);
-                }
+            // We were stopped, now recording - start the stream
+            if let Err(e) = self.audio_capture.start_recording() {
+                eprintln!("Warning: Failed to start audio recording: {}", e);
             }
         }
 
@@ -390,39 +454,5 @@ impl RealTimeTranscriber {
     /// Get the transcript receiver for listening to new transcriptions
     pub fn get_transcript_rx(&self) -> broadcast::Receiver<String> {
         self.transcript_tx.subscribe()
-    }
-}
-
-impl Drop for RealTimeTranscriber {
-    fn drop(&mut self) {
-        // We need to manually do the cleanup since we can't use the async shutdown method
-        self.running.store(false, Ordering::Relaxed);
-        self.recording.store(false, Ordering::Relaxed);
-
-        // Wait for transcription to finish with a timeout
-        if let Some(mut rx) = self.transcription_done_rx.take() {
-            let start = std::time::Instant::now();
-            let timeout = Duration::from_secs(1);
-
-            while start.elapsed() < timeout {
-                match rx.try_recv() {
-                    Ok(_) => break, // Received shutdown confirmation
-                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
-                        std::thread::sleep(Duration::from_millis(50));
-                        continue;
-                    }
-                    Err(_) => break, // Channel closed or other error
-                }
-            }
-
-            if start.elapsed() >= timeout {
-                eprintln!("Timeout waiting for transcription thread to finish during cleanup");
-            }
-        }
-
-        // Completely stop the audio capture
-        self.audio_capture.stop();
-        *self.whisper.lock() = None;
-        println!("Cleaned up RealTimeTranscriber resources");
     }
 }

@@ -43,7 +43,7 @@ impl TranscriptionProcessor {
         &self,
         mut segment_rx: mpsc::Receiver<AudioSegment>,
         transcript_tx: broadcast::Sender<String>,
-    ) {
+    ) -> tokio::task::JoinHandle<()> {
         let whisper = self.whisper.clone();
         let language = self.language.clone();
         let options = self.options.clone();
@@ -60,14 +60,57 @@ impl TranscriptionProcessor {
 
             // When recording is false, no segments are received from AudioProcessor,
             // so this task naturally idles until recording is resumed
-            'outer: loop {
-                if !running.load(Ordering::Relaxed) && segment_rx.is_empty() {
-                    break 'outer;
+            loop {
+                // Check if we should shut down
+                if !running.load(Ordering::Relaxed) {
+                    // Before shutting down, process any remaining segments
+                    while let Ok(segment) = segment_rx.try_recv() {
+                        let segment_info = format!(
+                            "Segment {:.2}s-{:.2}s",
+                            segment.start_time, segment.end_time
+                        );
+
+                        let thread_start_time = Instant::now();
+
+                        // Process remaining segments
+                        let whisper_clone = whisper.clone();
+                        let language_clone = language.clone();
+                        let options_clone = options.clone();
+                        let stats_clone = transcription_stats.clone();
+                        let tx_clone = transcript_tx.clone();
+
+                        tokio::task::spawn_blocking(move || {
+                            let transcription = transcribe_with_whisper(
+                                &whisper_clone,
+                                &segment,
+                                &language_clone,
+                                &options_clone,
+                                &stats_clone,
+                            );
+
+                            if !transcription.is_empty() {
+                                if let Err(e) = tx_clone.send(transcription) {
+                                    eprintln!("Failed to send transcription: {}", e);
+                                }
+                            }
+                        });
+
+                        let thread_processing_time = thread_start_time.elapsed();
+
+                        if log_stats_enabled {
+                            println!(
+                                "Task processing started for {} - Setup time: {:.2}s",
+                                segment_info,
+                                thread_processing_time.as_secs_f32()
+                            );
+                        }
+                    }
+                    break;
                 }
 
-                // Receive segments with timeout
-                match tokio::time::timeout(Duration::from_millis(100), segment_rx.recv()).await {
-                    Ok(Some(segment)) => {
+                // Block on receiving segments without timeout - this is much more efficient
+                match segment_rx.recv().await {
+                    Some(segment) => {
                         let segment_info = format!(
                             "Segment {:.2}s-{:.2}s",
                             segment.start_time, segment.end_time
@@ -110,19 +153,15 @@ impl TranscriptionProcessor {
                             );
                         }
                     }
-                    Ok(None) => {
+                    None => {
                         // Channel closed
-                        break 'outer;
-                    }
-                    Err(_) => {
-                        // Timeout, continue loop
-                        continue;
+                        break;
                     }
                 }
             }
 
             println!("Transcription task shutting down");
             let _ = transcription_done_tx.send(());
-        });
+        })
     }
 }

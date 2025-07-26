@@ -44,7 +44,7 @@ impl AudioProcessor {
     }
 
     /// Starts audio processing
-    pub fn start(&self, mut rx: mpsc::Receiver<Vec<f32>>) {
+    pub fn start(&self, mut rx: mpsc::Receiver<Vec<f32>>) -> tokio::task::JoinHandle<()> {
         let running = self.running.clone();
         let recording = self.recording.clone();
         let transcript_history = self.transcript_history.clone();
@@ -64,70 +64,78 @@ impl AudioProcessor {
             let mut latest_is_speaking = false;
 
             while running.load(Ordering::Relaxed) {
+                // Check if we should be processing audio
                 if !recording.load(Ordering::Relaxed) {
-                    // When recording is false, clear visualization data to reflect paused state
+                    // When not recording, clear visualization data and wait for recording to start
                     if let Some(mut audio_data) = audio_visualization_data.try_write() {
                         if !audio_data.samples.is_empty() {
                             audio_data.samples.clear();
                             audio_data.is_speaking = false;
                         }
                     }
-                    tokio::time::sleep(Duration::from_millis(32)).await;
+                    
+                    // Use tokio::task::yield_now() to avoid blocking completely but be more efficient
+                    // than polling. This allows other tasks to run and only wakes up when scheduled.
+                    tokio::task::yield_now().await;
                     continue;
                 }
 
-                // Use async recv() instead of try_recv() to avoid polling
-                if let Some(samples) = rx.recv().await {
-                    // Reuse buffer by clearing and extending
-                    audio_buffer.clear();
-                    audio_buffer.extend_from_slice(&samples);
+                // When recording is active, block on receiving audio data
+                match rx.recv().await {
+                    Some(samples) => {
+                        // Reuse buffer by clearing and extending
+                        audio_buffer.clear();
+                        audio_buffer.extend_from_slice(&samples);
 
-                    // Process audio only if we can get both locks
-                    if let (Some(mut processor), Some(mut audio_data)) = (
-                        audio_processor.try_lock(),
-                        audio_visualization_data.try_write(),
-                    ) {
-                        // Only update visualization data if it's different from current samples
-                        let new_samples: Vec<f32> =
-                            audio_buffer.iter().take(max_vis_samples).copied().collect();
-                        if audio_data.samples != new_samples {
-                            audio_data.samples = new_samples;
-                        }
-
-                        // Process audio with the processor
-                        match processor.process_audio(&audio_buffer) {
-                            Ok(segments) => {
-                                latest_is_speaking = processor.is_speaking();
-                                audio_data.is_speaking = latest_is_speaking;
-
-                                // Handle reset request if present
-                                if audio_data.reset_requested {
-                                    audio_data.reset_requested = false;
-                                    audio_data.transcript.clear();
-
-                                    if let Some(mut history) = transcript_history.try_write() {
-                                        history.clear();
-                                    }
-                                }
-
-                                // Send segments for transcription
-                                for segment in segments {
-                                    if let Err(e) = segment_tx.try_send(segment) {
-                                        eprintln!("Failed to send audio segment: {}", e);
-                                    }
-                                }
+                        // Process audio only if we can get both locks
+                        if let (Some(mut processor), Some(mut audio_data)) = (
+                            audio_processor.try_lock(),
+                            audio_visualization_data.try_write(),
+                        ) {
+                            // Only update visualization data if it's different from current samples
+                            let new_samples: Vec<f32> =
+                                audio_buffer.iter().take(max_vis_samples).copied().collect();
+                            if audio_data.samples != new_samples {
+                                audio_data.samples = new_samples;
                             }
-                            Err(e) => {
-                                eprintln!("Error processing audio: {}", e);
-                                audio_data.is_speaking = false;
+
+                            // Process audio with the processor
+                            match processor.process_audio(&audio_buffer) {
+                                Ok(segments) => {
+                                    latest_is_speaking = processor.is_speaking();
+                                    audio_data.is_speaking = latest_is_speaking;
+
+                                    // Handle reset request if present
+                                    if audio_data.reset_requested {
+                                        audio_data.reset_requested = false;
+                                        audio_data.transcript.clear();
+
+                                        if let Some(mut history) = transcript_history.try_write() {
+                                            history.clear();
+                                        }
+                                    }
+
+                                    // Send segments for transcription
+                                    for segment in segments {
+                                        if let Err(e) = segment_tx.try_send(segment) {
+                                            eprintln!("Failed to send audio segment: {}", e);
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("Error processing audio: {}", e);
+                                    audio_data.is_speaking = false;
+                                }
                             }
                         }
                     }
-                } else {
-                    println!("Audio channel disconnected");
-                    break;
+                    None => {
+                        // Channel closed
+                        println!("Audio channel disconnected");
+                        break;
+                    }
                 }
             }
-        });
+        })
     }
 }

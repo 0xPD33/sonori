@@ -118,9 +118,11 @@ impl SileroVad {
         let sample_rate: SampleRate = config.sample_rate.into();
         let frame_size = config.frame_size;
 
-        // Create ONNX session with optimized settings
+        // Create ONNX session with optimized settings and limited threading
         let session = Session::builder()?
             .with_optimization_level(GraphOptimizationLevel::Level3)?
+            .with_intra_threads(1)?  // Single thread for individual operations
+            .with_inter_threads(1)?  // Single thread for operator parallelism
             .commit_from_file(model_path)?;
 
         // Initialize model state

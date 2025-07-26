@@ -10,12 +10,44 @@ use crate::config::read_app_config;
 /// Manages audio capture using PortAudio
 pub struct AudioCapture {
     pa_stream: Option<pa::Stream<pa::NonBlocking, pa::Input<f32>>>,
+    pa: Option<pa::PortAudio>,
+    input_settings: Option<pa::InputStreamSettings<f32>>,
 }
 
 impl AudioCapture {
     /// Creates a new AudioCapture instance
     pub fn new() -> Self {
-        Self { pa_stream: None }
+        Self { 
+            pa_stream: None,
+            pa: None,
+            input_settings: None,
+        }
+    }
+
+    /// Initializes PortAudio settings without starting the stream
+    fn initialize_audio(&mut self) -> Result<(), anyhow::Error> {
+        if self.pa.is_some() {
+            return Ok(()); // Already initialized
+        }
+
+        let config = read_app_config();
+        
+        let pa = pa::PortAudio::new()
+            .map_err(|e| anyhow::anyhow!("Failed to initialize PortAudio: {}", e))?;
+
+        let input_params = pa
+            .default_input_stream_params::<f32>(1)
+            .map_err(|e| anyhow::anyhow!("Failed to get default input stream parameters: {}", e))?;
+        
+        let input_settings = pa::InputStreamSettings::new(
+            input_params,
+            config.sample_rate as f64,
+            config.buffer_size as u32,
+        );
+
+        self.pa = Some(pa);
+        self.input_settings = Some(input_settings);
+        Ok(())
     }
 
     /// Starts audio capture
@@ -33,41 +65,24 @@ impl AudioCapture {
         running: Arc<AtomicBool>,
         recording: Arc<AtomicBool>,
     ) -> Result<(), anyhow::Error> {
-        let config = read_app_config();
+        self.initialize_audio()?;
 
-        let pa = pa::PortAudio::new()
-            .map_err(|e| anyhow::anyhow!("Failed to initialize PortAudio: {}", e))?;
+        let pa = self.pa.as_ref().unwrap();
+        let input_settings = self.input_settings.as_ref().unwrap().clone();
 
-        let input_params = pa
-            .default_input_stream_params::<f32>(1)
-            .map_err(|e| anyhow::anyhow!("Failed to get default input stream parameters: {}", e))?;
-        let input_settings = pa::InputStreamSettings::new(
-            input_params,
-            config.sample_rate as f64,
-            config.buffer_size as u32,
-        );
-
-        let running_clone = running.clone();
-        let recording_clone = recording.clone();
-        tokio::spawn(async move {
-            while running_clone.load(Ordering::Relaxed) {
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                if !running_clone.load(Ordering::Relaxed)
-                    || !recording_clone.load(Ordering::Relaxed)
-                {
-                    // Signal that we should stop monitoring
-                    break;
-                }
-            }
-        });
+        // Clone the recording Arc before moving it into the closure
+        let recording_for_callback = recording.clone();
 
         let callback = move |pa::InputStreamCallbackArgs { buffer, .. }| {
-            if recording.load(Ordering::Relaxed) {
+            // Only send samples when recording is active
+            if recording_for_callback.load(Ordering::Relaxed) {
                 let samples = buffer.to_vec();
                 if let Err(e) = tx.try_send(samples) {
                     eprintln!("Failed to send samples: {}", e);
                 }
             }
+            
+            // Check if we should continue based on running flag
             if running.load(Ordering::Relaxed) {
                 pa::Continue
             } else {
@@ -79,11 +94,38 @@ impl AudioCapture {
             .open_non_blocking_stream(input_settings, callback)
             .map_err(|e| anyhow::anyhow!("Failed to open stream: {}", e))?;
 
-        stream
-            .start()
-            .map_err(|e| anyhow::anyhow!("Failed to start stream: {}", e))?;
+        // Only start the stream if recording is active
+        if recording.load(Ordering::Relaxed) {
+            stream
+                .start()
+                .map_err(|e| anyhow::anyhow!("Failed to start stream: {}", e))?;
+        }
 
         self.pa_stream = Some(stream);
+        Ok(())
+    }
+
+    /// Starts the PortAudio stream when recording begins
+    pub fn start_recording(&mut self) -> Result<(), anyhow::Error> {
+        if let Some(stream) = &mut self.pa_stream {
+            if !stream.is_active().unwrap_or(false) {
+                stream
+                    .start()
+                    .map_err(|e| anyhow::anyhow!("Failed to start recording: {}", e))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Stops the PortAudio stream when recording ends (but keeps stream object)
+    pub fn stop_recording(&mut self) -> Result<(), anyhow::Error> {
+        if let Some(stream) = &mut self.pa_stream {
+            if stream.is_active().unwrap_or(false) {
+                stream
+                    .stop()
+                    .map_err(|e| anyhow::anyhow!("Failed to stop recording: {}", e))?;
+            }
+        }
         Ok(())
     }
 
@@ -93,17 +135,7 @@ impl AudioCapture {
     /// # Returns
     /// Result indicating success or error
     pub fn pause(&mut self) -> Result<(), anyhow::Error> {
-        if let Some(stream) = &mut self.pa_stream {
-            match stream.stop() {
-                Ok(_) => Ok(()),
-                Err(e) => {
-                    eprintln!("Failed to pause stream: {}", e);
-                    Err(anyhow::anyhow!("Failed to pause stream: {}", e))
-                }
-            }
-        } else {
-            Ok(()) // No stream to pause
-        }
+        self.stop_recording()
     }
 
     /// Resumes a previously paused audio capture stream
@@ -111,17 +143,7 @@ impl AudioCapture {
     /// # Returns
     /// Result indicating success or error
     pub fn resume(&mut self) -> Result<(), anyhow::Error> {
-        if let Some(stream) = &mut self.pa_stream {
-            match stream.start() {
-                Ok(_) => Ok(()),
-                Err(e) => {
-                    eprintln!("Failed to resume stream: {}", e);
-                    Err(anyhow::anyhow!("Failed to resume stream: {}", e))
-                }
-            }
-        } else {
-            Err(anyhow::anyhow!("No stream to resume"))
-        }
+        self.start_recording()
     }
 
     /// Completely stops and cleans up the audio capture
@@ -136,6 +158,8 @@ impl AudioCapture {
             }
         }
         self.pa_stream = None;
+        self.pa = None;
+        self.input_settings = None;
     }
 }
 
