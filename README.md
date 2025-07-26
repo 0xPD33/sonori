@@ -18,8 +18,10 @@ Contributions are welcome. There are no guidelines yet. Just check the planned f
 - **Pause/Resume Recording**: Pause/Resume recording
 - **Auto-Start Recording**: Begins recording as soon as the application launches
 - **Scroll Controls**: Navigate through longer transcripts
+- **CLI Mode**: Run without GUI in terminal mode using `--cli` flag for headless usage
 - **Configurable**: Configure the model, language, and other settings like keyboard shortcuts in the config file (config.toml)
-- **Automatic Model Download**: Both Whisper and Silero VAD models are downloaded automatically
+- **Automatic Model Download**: Both Whisper and Silero VAD models are downloaded automatically with automatic CTranslate2 conversion
+- **Performance Monitoring**: Optional statistics logging for transcription performance analysis
 
 ### Planned
 
@@ -109,6 +111,8 @@ Sonori needs two types of models to function properly:
 
 ## Usage
 
+### GUI Mode (Default)
+
 1. Launch the application:
    ```bash
    ./target/release/sonori
@@ -122,6 +126,25 @@ Sonori needs two types of models to function properly:
    - Clear transcript history
    - Exit the application
 
+### CLI Mode
+
+For headless usage or terminal-based transcription:
+
+1. Launch in CLI mode:
+   ```bash
+   ./target/release/sonori --cli
+   ```
+2. Transcription will appear directly in your terminal
+3. Recording starts automatically
+4. Speak naturally - transcriptions will update in real-time on the same line
+5. Press `Ctrl+C` to exit gracefully
+
+### Command Line Options
+
+- `--cli`: Run in CLI mode without GUI
+- `--help`: Show help information
+- `--version`: Display version information
+
 ## Configuration
 
 Sonori uses a `config.toml` file in the same directory as the executable. If not present, a default configuration is used.
@@ -129,34 +152,35 @@ Sonori uses a `config.toml` file in the same directory as the executable. If not
 Example configuration:
 
 ```toml
-model = "openai/whisper-base.en"
-language = "en"
-compute_type = "INT8"
-log_stats_enabled = false
-buffer_size = 1024
-sample_rate = 16000
+model = "openai/whisper-base.en"  # Whisper model from Hugging Face
+language = "en"                   # Language code for transcription
+compute_type = "INT8"             # Compute precision: INT8, FLOAT16
+device = "CPU"                    # Device type: CPU, CUDA (if available)
+log_stats_enabled = false         # Enable performance statistics logging
+buffer_size = 1024                # Audio buffer size (affects latency/performance)
+sample_rate = 16000               # Audio sample rate in Hz
 
 [whisper_options]
-beam_size = 5
-patience = 1.0
-repetition_penalty = 1.25
+beam_size = 5                     # Beam search width (higher = more accurate, slower)
+patience = 1.0                    # Search patience factor
+repetition_penalty = 1.25         # Penalty for repetitive transcriptions
 
 [vad_config]
-threshold = 0.2
-hangbefore_frames = 1
-hangover_frames = 15
-max_buffer_duration_sec = 30.0
-max_segment_count = 20
+threshold = 0.2                   # Voice activity detection sensitivity (0.0-1.0)
+hangbefore_frames = 1             # Frames to wait before confirming speech start
+hangover_frames = 15              # Frames to wait after speech before ending segment
+max_buffer_duration_sec = 30.0    # Maximum audio buffer duration
+max_segment_count = 20            # Maximum segments to keep in memory
 
 [audio_processor_config]
-max_vis_samples = 1024
+max_vis_samples = 1024            # Maximum samples for audio visualization
 
 [keyboard_shortcuts]
-copy_transcript = "KeyC"
-reset_transcript = "KeyR"
-quit_application = "KeyQ"
-toggle_recording = "Space"
-exit_application = "Escape"
+copy_transcript = "KeyC"          # Copy transcription to clipboard (Ctrl+C)
+reset_transcript = "KeyR"         # Clear current transcript (Ctrl+R)
+quit_application = "KeyQ"         # Alternative quit shortcut
+toggle_recording = "Space"        # Pause/resume recording
+exit_application = "Escape"       # Exit the application
 ```
 
 ### Keyboard Shortcuts
@@ -188,6 +212,36 @@ Recommended Local Whisper models:
 - any other bigger whisper model - probably too slow to run on CPU only in real-time
 
 For non-English languages, use the multilingual models (without `.en` suffix) and set the appropriate language code in the configuration.
+
+### Performance Monitoring
+
+Sonori includes optional performance monitoring that can be enabled by setting `log_stats_enabled = true` in your configuration:
+
+- **Statistics Logging**: Detailed performance metrics are logged to `transcription_stats.log` in the current directory
+- **Real-time Factor (RTF)**: Tracks minimum, maximum, and average processing speed relative to real-time
+- **Processing Metrics**: Monitors transcription processing time and segments processed
+- **Automatic Reporting**: Statistics are automatically reported every 10 seconds during operation
+
+This feature is useful for:
+- Optimizing model and configuration choices for your hardware
+- Monitoring performance degradation over time
+- Debugging transcription issues
+- Benchmarking different model configurations
+
+### File Locations
+
+Sonori creates and uses several files and directories:
+
+**Model Storage:**
+- `~/.cache/sonori/models/` - Downloaded and converted Whisper models
+- `~/.cache/sonori/models/silero_vad.onnx` - Silero VAD model
+
+**Logs and Output:**
+- `transcription_stats.log` - Performance statistics (when `log_stats_enabled = true`)
+- Created in the current working directory where Sonori is launched
+
+**Configuration:**
+- `config.toml` - Configuration file (searched in current directory)
 
 ## Known Issues
 
