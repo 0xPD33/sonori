@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Sonori** is a real-time speech transcription application built in Rust with GPU-accelerated rendering and Wayland layer shell integration on Linux.
 
+For detailed architectural information, component relationships, and system design patterns, see [ARCHITECTURE.md](./ARCHITECTURE.md).
+
 ## Development Commands
 
 ### Build and Run
