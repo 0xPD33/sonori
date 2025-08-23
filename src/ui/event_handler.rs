@@ -17,15 +17,23 @@ pub struct EventHandler {
     pub hovering_transcript: bool,
     pub auto_scroll: bool,
     pub recording: Option<Arc<AtomicBool>>,
+    pub manual_session_sender: Option<tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>>,
+    pub transcription_mode_ref: Arc<parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>>,
 }
 
 impl EventHandler {
-    pub fn new(recording: Option<Arc<AtomicBool>>) -> Self {
+    pub fn new(
+        recording: Option<Arc<AtomicBool>>, 
+        manual_session_sender: Option<tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>>,
+        transcription_mode_ref: Arc<parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>>,
+    ) -> Self {
         Self {
             cursor_position: None,
             hovering_transcript: false,
             auto_scroll: true,
             recording,
+            manual_session_sender,
+            transcription_mode_ref,
         }
     }
 
@@ -139,8 +147,11 @@ impl EventHandler {
 
     pub fn toggle_recording(recording: &Option<Arc<AtomicBool>>) {
         if let Some(recording) = recording {
+            // IMMEDIATE: Atomic toggle - UI thread continues instantly
             let was_recording = recording.load(Ordering::Relaxed);
             recording.store(!was_recording, Ordering::Relaxed);
+            println!("Recording state toggled atomically: {} -> {} (non-blocking)", was_recording, !was_recording);
+            // All transcription threads will detect this change via their atomic flag polling
         }
     }
 
@@ -186,8 +197,72 @@ impl EventHandler {
                         // Do NOT immediately exit the event loop - let the monitors handle it
                     }
                     ButtonType::Pause | ButtonType::Play => {
-                        // For both pause and play, toggle the recording state
+                        // IMMEDIATE: Toggle recording state atomically (non-blocking UI)
+                        // Both realtime and manual transcription threads detect this change
                         Self::toggle_recording(&self.recording);
+                    }
+                    ButtonType::RecordToggle => {
+                        // IMMEDIATE UI response: Check state and send command asynchronously
+                        let is_currently_recording = self.recording
+                            .as_ref()
+                            .map(|rec| rec.load(Ordering::Relaxed))
+                            .unwrap_or(false);
+                        
+                        println!("Manual RecordToggle clicked (current state: {}) - UI continues immediately", is_currently_recording);
+                        
+                        if let Some(sender) = &self.manual_session_sender {
+                            let sender = sender.clone();
+                            // ASYNC: Send command without blocking UI thread
+                            tokio::spawn(async move {
+                                let command = if is_currently_recording {
+                                    crate::real_time_transcriber::ManualSessionCommand::StopSession
+                                } else {
+                                    crate::real_time_transcriber::ManualSessionCommand::StartSession
+                                };
+                                
+                                if let Err(e) = sender.send(command).await {
+                                    eprintln!("Failed to send manual session command: {}", e);
+                                } else {
+                                    println!("Manual session command sent successfully (background)");
+                                }
+                            });
+                        } else {
+                            eprintln!("Manual session sender not available");
+                        }
+                        // UI thread continues immediately - manual session processor handles the command
+                    }
+                    ButtonType::Accept => {
+                        // Accept functionality is now handled by RecordToggle button
+                        println!("Accept button clicked but should not be used directly - use RecordToggle instead");
+                    }
+                    ButtonType::ModeToggle => {
+                        // IMMEDIATE UI response: Calculate new mode and send command asynchronously
+                        let current_mode = *self.transcription_mode_ref.lock();
+                        let new_mode = match current_mode {
+                            crate::real_time_transcriber::TranscriptionMode::RealTime => {
+                                crate::real_time_transcriber::TranscriptionMode::Manual
+                            }
+                            crate::real_time_transcriber::TranscriptionMode::Manual => {
+                                crate::real_time_transcriber::TranscriptionMode::RealTime
+                            }
+                        };
+                        
+                        println!("Mode toggle clicked: {:?} -> {:?} (UI continues immediately)", current_mode, new_mode);
+                        
+                        // ASYNC: Send mode switch command without blocking UI
+                        if let Some(sender) = &self.manual_session_sender {
+                            let sender = sender.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = sender.send(crate::real_time_transcriber::ManualSessionCommand::SwitchMode(new_mode)).await {
+                                    eprintln!("Failed to send mode switch command: {}", e);
+                                } else {
+                                    println!("Mode switch command sent successfully (background)");
+                                }
+                            });
+                        } else {
+                            eprintln!("Manual session sender not available for mode switching");
+                        }
+                        // UI thread continues immediately - transcription system handles mode switch
                     }
                 }
                 return true;

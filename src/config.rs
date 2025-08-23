@@ -36,10 +36,36 @@ pub struct KeyboardShortcuts {
 
 /// Configuration for XDG Desktop Portal features
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PortalConfig {
     /// Whether to enable XDG Desktop Portal for input injection
     /// When enabled, allows the application to inject keystrokes via portal
     pub enable_xdg_portal: bool,
+    /// Whether to enable xdg-desktop-portal Global Shortcuts
+    pub enable_global_shortcuts: bool,
+    /// Accelerator string for manual toggle (e.g., "<Super>Tab")
+    pub manual_toggle_accelerator: String,
+    /// Application ID used to register with xdg-desktop-portal (stable name)
+    pub application_id: String,
+}
+
+/// Configuration for manual transcription mode
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManualModeConfig {
+    /// Maximum recording duration in seconds (default: 60)
+    pub max_recording_duration_secs: u32,
+    
+    /// Audio buffer size for manual sessions (default: 16000 * 60 = 1 min at 16kHz)
+    pub manual_buffer_size: usize,
+    
+    /// Whether to auto-start a new session after completing one
+    pub auto_restart_sessions: bool,
+    
+    /// Whether to clear previous transcript when starting new session
+    pub clear_on_new_session: bool,
+    
+    /// Processing timeout in seconds
+    pub processing_timeout_secs: u32,
 }
 
 impl Default for KeyboardShortcuts {
@@ -57,6 +83,21 @@ impl Default for PortalConfig {
     fn default() -> Self {
         Self {
             enable_xdg_portal: true, // Default to enabled for better UX
+            enable_global_shortcuts: true,
+            manual_toggle_accelerator: "<Super>Tab".to_string(),
+            application_id: "dev.paddy.sonori".to_string(),
+        }
+    }
+}
+
+impl Default for ManualModeConfig {
+    fn default() -> Self {
+        Self {
+            max_recording_duration_secs: 60,
+            manual_buffer_size: 16000 * 60, // 1 minute at 16kHz
+            auto_restart_sessions: false,
+            clear_on_new_session: true,
+            processing_timeout_secs: 30,
         }
     }
 }
@@ -140,6 +181,8 @@ pub struct AppConfig {
     /// Audio sample rate in Hz (must be 8000 or 16000 for Silero VAD)
     /// This value is used throughout the application for audio processing
     pub sample_rate: usize,
+    /// Transcription mode: "realtime" or "manual"
+    pub transcription_mode: String,
     /// Whisper model configuration
     pub whisper_options: WhisperOptionsSerde,
     /// Voice Activity Detection configuration
@@ -150,6 +193,8 @@ pub struct AppConfig {
     pub keyboard_shortcuts: KeyboardShortcuts,
     /// XDG Desktop Portal configuration
     pub portal_config: PortalConfig,
+    /// Manual transcription mode configuration
+    pub manual_mode_config: ManualModeConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -228,6 +273,7 @@ impl Default for AppConfig {
             log_stats_enabled: true,
             buffer_size: 1024,
             sample_rate: 16000,
+            transcription_mode: "realtime".to_string(), // Default to realtime for backward compatibility
             whisper_options: WhisperOptionsSerde {
                 beam_size: 5,
                 patience: 1.0,
@@ -237,6 +283,7 @@ impl Default for AppConfig {
             audio_processor_config: AudioProcessorConfig::default(),
             keyboard_shortcuts: KeyboardShortcuts::default(),
             portal_config: PortalConfig::default(),
+            manual_mode_config: ManualModeConfig::default(),
         }
     }
 }

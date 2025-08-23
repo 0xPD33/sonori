@@ -1,10 +1,11 @@
-model = "openai/whisper-base.en"
+model = "distil-whisper/distil-small.en"
 language = "en"
 compute_type = "INT8"
 device = "CPU"
 log_stats_enabled = false
 buffer_size = 1024
 sample_rate = 16000
+transcription_mode = "realtime"
 
 [whisper_options]
 beam_size = 5
@@ -29,3 +30,13 @@ exit_application = "Escape"
 
 [portal_config]
 enable_xdg_portal = true
+enable_global_shortcuts = true
+manual_toggle_accelerator = "<Super>Tab"
+application_id = "dev.paddy.sonori"
+
+[manual_mode_config]
+max_recording_duration_secs = 60
+manual_buffer_size = 960000
+auto_restart_sessions = false
+clear_on_new_session = true
+processing_timeout_secs = 30

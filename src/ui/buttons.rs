@@ -1,4 +1,5 @@
 use parking_lot::Mutex;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use wgpu::{self, util::DeviceExt};
@@ -6,6 +7,8 @@ use winit::{
     dpi::{PhysicalPosition, PhysicalSize},
     event::{ElementState, MouseButton},
 };
+
+use crate::real_time_transcriber::TranscriptionMode;
 
 use super::button_texture::ButtonTexture;
 
@@ -23,13 +26,18 @@ const HOVER_SCALE: f32 = 1.1;
 const PRESS_SCALE: f32 = 0.9;
 const HOVER_ROTATION: f32 = 0.261799; // 15 degrees in radians (π/12)
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ButtonType {
     Copy,
     Reset,
     Close,
     Pause,
     Play,
+    
+    // Manual mode buttons
+    RecordToggle,      // Toggle manual recording (play/pause)
+    Accept,           // Accept and finish current manual session (texture only, not in layout)
+    ModeToggle,        // Switch between real-time/manual modes
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -58,19 +66,22 @@ pub struct Button {
 }
 
 pub struct ButtonManager {
-    copy_button: Button,
-    reset_button: Button,
-    close_button: Button,
-    pause_button: Button,
+    buttons: std::collections::HashMap<ButtonType, Button>,
     text_area_height: u32,
     active_button: Option<ButtonType>,
-    default_texture: Option<ButtonTexture>,
     recording: Option<Arc<AtomicBool>>,
+    transcription_mode: crate::real_time_transcriber::TranscriptionMode,
+    // Texture cache
+    copy_texture: Option<ButtonTexture>,
+    reset_texture: Option<ButtonTexture>,
     pause_texture: Option<ButtonTexture>,
     play_texture: Option<ButtonTexture>,
+    accept_texture: Option<ButtonTexture>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::TextureFormat,
+    window_width: u32,
+    window_height: u32,
 }
 
 impl Button {
@@ -102,21 +113,34 @@ impl Button {
             source: wgpu::ShaderSource::Wgsl(include_str!("button.wgsl").into()),
         });
 
-        // Create rotation uniform buffer and bind group for close button
-        let (rotation_buffer, rotation_bind_group) = if button_type == ButtonType::Close {
-            // Create rotation uniform buffer
+        // Create rotation uniform buffer and bind group for shader-based buttons
+        let (rotation_buffer, rotation_bind_group) = if button_type == ButtonType::Close || button_type == ButtonType::ModeToggle {
+            // Create rotation uniform buffer (now includes mode for ModeToggle)
+            let initial_data = if button_type == ButtonType::ModeToggle {
+                [0.0f32, 0.0f32] // rotation, mode (0.0 = RealTime by default)
+            } else {
+                [0.0f32, 0.0f32] // rotation, unused mode field
+            };
             let rotation_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Close Button Rotation Buffer"),
-                contents: bytemuck::cast_slice(&[0.0f32]), // Initial rotation of 0
+                label: Some("Shader Button Uniform Buffer"),
+                contents: bytemuck::cast_slice(&initial_data),
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             });
 
-            // Create bind group layout
+            // Create bind group layout with correct visibility for this button type
+            let bind_group_visibility = if button_type == ButtonType::ModeToggle {
+                // ModeToggle fragment shader needs access to the mode uniform
+                wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT
+            } else {
+                // Close and CancelRecording only need vertex access
+                wgpu::ShaderStages::VERTEX
+            };
+            
             let bind_group_layout =
                 device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                     entries: &[wgpu::BindGroupLayoutEntry {
                         binding: 0,
-                        visibility: wgpu::ShaderStages::VERTEX,
+                        visibility: bind_group_visibility,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
                             has_dynamic_offset: false,
@@ -124,7 +148,7 @@ impl Button {
                         },
                         count: None,
                     }],
-                    label: Some("Close Button Bind Group Layout"),
+                    label: Some("Shader Button Bind Group Layout"),
                 });
 
             // Create bind group
@@ -134,7 +158,7 @@ impl Button {
                     binding: 0,
                     resource: rotation_buffer.as_entire_binding(),
                 }],
-                label: Some("Close Button Bind Group"),
+                label: Some("Shader Button Bind Group"),
             });
 
             (Some(rotation_buffer), Some(bind_group))
@@ -143,13 +167,21 @@ impl Button {
         };
 
         // Create appropriate pipeline layout based on button type
-        let pipeline_layout = if button_type == ButtonType::Close {
-            // For close button - use the rotation uniform bind group layout
+        let pipeline_layout = if button_type == ButtonType::Close || button_type == ButtonType::ModeToggle {
+            // For shader-based buttons - use the same visibility logic as the bind group
+            let pipeline_visibility = if button_type == ButtonType::ModeToggle {
+                // ModeToggle fragment shader needs access to the mode uniform
+                wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT
+            } else {
+                // Close and CancelRecording only need vertex access
+                wgpu::ShaderStages::VERTEX
+            };
+            
             let bind_group_layout =
                 device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                     entries: &[wgpu::BindGroupLayoutEntry {
                         binding: 0,
-                        visibility: wgpu::ShaderStages::VERTEX,
+                        visibility: pipeline_visibility,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
                             has_dynamic_offset: false,
@@ -157,11 +189,11 @@ impl Button {
                         },
                         count: None,
                     }],
-                    label: Some("Close Button Bind Group Layout"),
+                    label: Some("Shader Button Pipeline Bind Group Layout"),
                 });
 
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Close Button Pipeline Layout"),
+                label: Some("Shader Button Pipeline Layout"),
                 bind_group_layouts: &[&bind_group_layout],
                 push_constant_ranges: &[],
             })
@@ -214,6 +246,9 @@ impl Button {
                     ButtonType::Reset => Some("vs_reset"),
                     ButtonType::Close => Some("vs_close"),
                     ButtonType::Pause | ButtonType::Play => Some("vs_copy"),
+                    ButtonType::RecordToggle => Some("vs_copy"),
+                    ButtonType::Accept => Some("vs_copy"), // Use texture-based rendering
+                    ButtonType::ModeToggle => Some("vs_close"), // Use close vertex shader
                 },
                 buffers: &[wgpu::VertexBufferLayout {
                     array_stride: 8,
@@ -229,6 +264,9 @@ impl Button {
                     ButtonType::Reset => Some("fs_reset"),
                     ButtonType::Close => Some("fs_close"),
                     ButtonType::Pause | ButtonType::Play => Some("fs_copy"),
+                    ButtonType::RecordToggle => Some("fs_copy"),
+                    ButtonType::Accept => Some("fs_copy"), // Use texture-based rendering
+                    ButtonType::ModeToggle => Some("fs_mode_toggle"), // Custom shader for R/M text
                 },
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
@@ -413,10 +451,15 @@ impl Button {
         }
     }
 
-    // Update rotation buffer with current rotation value
-    fn update_rotation_buffer(&self, queue: &wgpu::Queue) {
+    // Update rotation buffer with current rotation and mode values
+    fn update_rotation_buffer(&self, queue: &wgpu::Queue, mode: Option<f32>) {
         if let Some(buffer) = &self.rotation_buffer {
-            queue.write_buffer(buffer, 0, bytemuck::cast_slice(&[self.rotation]));
+            let data = if self.button_type == ButtonType::ModeToggle {
+                [self.rotation, mode.unwrap_or(0.0)] // Include mode for ModeToggle
+            } else {
+                [self.rotation, 0.0] // Only rotation for other buttons
+            };
+            queue.write_buffer(buffer, 0, bytemuck::cast_slice(&data));
         }
     }
 
@@ -425,10 +468,19 @@ impl Button {
         view: &wgpu::TextureView,
         encoder: &mut wgpu::CommandEncoder,
         queue: &wgpu::Queue,
+        transcription_mode: Option<crate::real_time_transcriber::TranscriptionMode>,
     ) {
         // Update rotation buffer if needed
-        if self.button_type == ButtonType::Close {
-            self.update_rotation_buffer(queue);
+        if self.button_type == ButtonType::Close || self.button_type == ButtonType::ModeToggle {
+            let mode_value = if self.button_type == ButtonType::ModeToggle {
+                transcription_mode.map(|mode| match mode {
+                    crate::real_time_transcriber::TranscriptionMode::RealTime => 0.0,
+                    crate::real_time_transcriber::TranscriptionMode::Manual => 1.0,
+                })
+            } else {
+                None
+            };
+            self.update_rotation_buffer(queue, mode_value);
         }
 
         // Create a new render pass for this button
@@ -467,8 +519,8 @@ impl Button {
         render_pass.set_pipeline(&self.pipeline);
 
         // Set the appropriate bind group
-        if self.button_type == ButtonType::Close {
-            // Set rotation uniform bind group for close button
+        if self.button_type == ButtonType::Close || self.button_type == ButtonType::ModeToggle {
+            // Set rotation uniform bind group for shader-based buttons
             if let Some(bind_group) = &self.rotation_bind_group {
                 render_pass.set_bind_group(0, bind_group, &[]);
             }
@@ -488,92 +540,89 @@ impl ButtonManager {
         queue: &wgpu::Queue,
         window_size: PhysicalSize<u32>,
         format: wgpu::TextureFormat,
+        transcription_mode: TranscriptionMode,
     ) -> Self {
         let text_area_height = super::window::TEXT_AREA_HEIGHT - super::window::GAP;
 
-        // Calculate positions for the buttons - centered at bottom
-        let total_buttons_width =
-            COPY_BUTTON_SIZE + RESET_BUTTON_SIZE + PAUSE_BUTTON_SIZE + BUTTON_SPACING * 2;
+        // Define button sets based on transcription mode
+        let button_types = match transcription_mode {
+            TranscriptionMode::RealTime => {
+                vec![
+                    ButtonType::Pause, 
+                    ButtonType::Copy, 
+                    ButtonType::Reset, 
+                    ButtonType::ModeToggle,  // Always visible
+                    ButtonType::Close
+                ]
+            }
+            TranscriptionMode::Manual => {
+                vec![
+                    ButtonType::RecordToggle,
+                    ButtonType::Copy,
+                    ButtonType::Reset,
+                    ButtonType::ModeToggle,  // Always visible
+                    ButtonType::Close,
+                ]
+            }
+        };
+
+        // Calculate button layout
+        let bottom_buttons: Vec<_> = button_types.iter().filter(|&&bt| bt != ButtonType::Close).cloned().collect();
+        let button_count = bottom_buttons.len();
+        let total_buttons_width = (button_count as u32) * COPY_BUTTON_SIZE + (button_count.saturating_sub(1) as u32) * BUTTON_SPACING;
         let center_x = window_size.width / 2;
         let start_x = center_x - total_buttons_width / 2;
 
-        // Position buttons at the bottom of the text area
-        let pause_y_position = text_area_height - PAUSE_BUTTON_SIZE - BUTTON_MARGIN;
-        let copy_y_position = text_area_height - COPY_BUTTON_SIZE - BUTTON_MARGIN;
-        let reset_y_position = text_area_height - RESET_BUTTON_SIZE - BUTTON_MARGIN;
+        // Create buttons with calculated positions
+        let mut buttons = HashMap::new();
+        
+        // Position bottom buttons (all except Close)
+        for (i, &button_type) in bottom_buttons.iter().enumerate() {
+            let button_x = start_x + (i as u32) * (COPY_BUTTON_SIZE + BUTTON_SPACING);
+            let button_y = text_area_height - COPY_BUTTON_SIZE - BUTTON_MARGIN;
+            
+            let button = Button::new(
+                device,
+                queue,
+                button_type,
+                (button_x, button_y),
+                (COPY_BUTTON_SIZE, COPY_BUTTON_SIZE),
+                format,
+                None,
+            );
+            buttons.insert(button_type, button);
+        }
 
-        // Positions for the buttons - pause button on the left
-        let pause_position = (start_x, pause_y_position);
-        let copy_position = (
-            start_x + PAUSE_BUTTON_SIZE + BUTTON_SPACING,
-            copy_y_position,
-        );
-        let reset_position = (
-            start_x + PAUSE_BUTTON_SIZE + COPY_BUTTON_SIZE + BUTTON_SPACING * 2,
-            reset_y_position,
-        );
-
-        // Close button position in top right corner
-        let close_position = (
-            window_size.width - BUTTON_MARGIN - CLOSE_BUTTON_SIZE,
-            BUTTON_MARGIN,
-        );
-
-        // Create buttons
-        let pause_button = Button::new(
-            device,
-            queue,
-            ButtonType::Pause,
-            pause_position,
-            (PAUSE_BUTTON_SIZE, PAUSE_BUTTON_SIZE),
-            format,
-            None,
-        );
-
-        let copy_button = Button::new(
-            device,
-            queue,
-            ButtonType::Copy,
-            copy_position,
-            (COPY_BUTTON_SIZE, COPY_BUTTON_SIZE),
-            format,
-            None,
-        );
-
-        let reset_button = Button::new(
-            device,
-            queue,
-            ButtonType::Reset,
-            reset_position,
-            (RESET_BUTTON_SIZE, RESET_BUTTON_SIZE),
-            format,
-            None,
-        );
-
-        let close_button = Button::new(
-            device,
-            queue,
-            ButtonType::Close,
-            close_position,
-            (CLOSE_BUTTON_SIZE, CLOSE_BUTTON_SIZE),
-            format,
-            None,
-        );
+        // Add close button in top right corner
+        if button_types.contains(&ButtonType::Close) {
+            let close_button = Button::new(
+                device,
+                queue,
+                ButtonType::Close,
+                (window_size.width - BUTTON_MARGIN - CLOSE_BUTTON_SIZE, BUTTON_MARGIN),
+                (CLOSE_BUTTON_SIZE, CLOSE_BUTTON_SIZE),
+                format,
+                None,
+            );
+            buttons.insert(ButtonType::Close, close_button);
+        }
 
         Self {
-            copy_button,
-            reset_button,
-            close_button,
-            pause_button,
+            buttons,
             text_area_height,
             active_button: None,
-            default_texture: None,
             recording: None,
+            transcription_mode,
+            copy_texture: None,
+            reset_texture: None,
             pause_texture: None,
             play_texture: None,
+            accept_texture: None,
             device: device.clone(),
             queue: queue.clone(),
             config: format,
+            window_width: window_size.width,
+            window_height: window_size.height,
         }
     }
 
@@ -585,164 +634,150 @@ impl ButtonManager {
         reset_image_bytes: Option<&[u8]>,
         pause_image_bytes: Option<&[u8]>,
         play_image_bytes: Option<&[u8]>,
+        accept_image_bytes: Option<&[u8]>,
         format: wgpu::TextureFormat,
     ) {
-        // Load copy button texture if provided
+        // Load copy button texture
         if let Some(image_bytes) = copy_image_bytes {
-            if let Ok(texture) = ButtonTexture::from_bytes(
-                device,
-                queue,
-                image_bytes,
-                Some("Copy Button Texture"),
-                format,
-            ) {
-                self.copy_button = Button::new(
-                    device,
-                    queue,
-                    ButtonType::Copy,
-                    self.copy_button.position,
-                    (COPY_BUTTON_SIZE, COPY_BUTTON_SIZE),
-                    format,
-                    Some(texture),
-                );
+            if let Ok(texture) = ButtonTexture::from_bytes(device, queue, image_bytes, Some("Copy Button Texture"), format) {
+                self.copy_texture = Some(texture.clone());
+                if let Some(button) = self.buttons.get_mut(&ButtonType::Copy) {
+                    button.texture = Some(texture);
+                }
             }
         }
 
-        // Load reset button texture if provided
+        // Load reset button texture
         if let Some(image_bytes) = reset_image_bytes {
-            if let Ok(texture) = ButtonTexture::from_bytes(
-                device,
-                queue,
-                image_bytes,
-                Some("Reset Button Texture"),
-                format,
-            ) {
-                self.reset_button = Button::new(
-                    device,
-                    queue,
-                    ButtonType::Reset,
-                    self.reset_button.position,
-                    (RESET_BUTTON_SIZE, RESET_BUTTON_SIZE),
-                    format,
-                    Some(texture),
-                );
+            if let Ok(texture) = ButtonTexture::from_bytes(device, queue, image_bytes, Some("Reset Button Texture"), format) {
+                self.reset_texture = Some(texture.clone());
+                if let Some(button) = self.buttons.get_mut(&ButtonType::Reset) {
+                    button.texture = Some(texture);
+                }
             }
         }
 
-        // Load pause button texture if provided
+        // Load pause button texture
         if let Some(image_bytes) = pause_image_bytes {
-            if let Ok(texture) = ButtonTexture::from_bytes(
-                device,
-                queue,
-                image_bytes,
-                Some("Pause Button Texture"),
-                format,
-            ) {
+            if let Ok(texture) = ButtonTexture::from_bytes(device, queue, image_bytes, Some("Pause Button Texture"), format) {
                 self.pause_texture = Some(texture.clone());
-                self.pause_button = Button::new(
-                    device,
-                    queue,
-                    ButtonType::Pause,
-                    self.pause_button.position,
-                    (PAUSE_BUTTON_SIZE, PAUSE_BUTTON_SIZE),
-                    format,
-                    Some(texture),
-                );
+                if let Some(button) = self.buttons.get_mut(&ButtonType::Pause) {
+                    button.texture = Some(texture);
+                }
             }
         }
 
-        // Load play button texture if provided
+        // Load play button texture  
         if let Some(image_bytes) = play_image_bytes {
-            if let Ok(texture) = ButtonTexture::from_bytes(
-                device,
-                queue,
-                image_bytes,
-                Some("Play Button Texture"),
-                format,
-            ) {
-                self.play_texture = Some(texture);
+            if let Ok(texture) = ButtonTexture::from_bytes(device, queue, image_bytes, Some("Play Button Texture"), format) {
+                self.play_texture = Some(texture.clone());
+                if let Some(button) = self.buttons.get_mut(&ButtonType::Play) {
+                    button.texture = Some(texture);
+                }
             }
         }
+
+        // Load accept button texture
+        if let Some(image_bytes) = accept_image_bytes {
+            if let Ok(texture) = ButtonTexture::from_bytes(device, queue, image_bytes, Some("Accept Button Texture"), format) {
+                self.accept_texture = Some(texture.clone());
+                if let Some(button) = self.buttons.get_mut(&ButtonType::Accept) {
+                    button.texture = Some(texture);
+                }
+            }
+        }
+
+        // Manual mode buttons use play/pause textures:
+        // RecordToggle button will dynamically switch between play/pause textures
     }
 
     pub fn resize(&mut self, window_size: PhysicalSize<u32>) {
-        // Calculate positions for the buttons - centered at bottom
-        let total_buttons_width =
-            COPY_BUTTON_SIZE + RESET_BUTTON_SIZE + PAUSE_BUTTON_SIZE + BUTTON_SPACING * 2;
+        // Update stored window dimensions
+        self.window_width = window_size.width;
+        self.window_height = window_size.height;
+        
+        // Define the correct button order based on current mode
+        let button_order = match self.transcription_mode {
+            TranscriptionMode::RealTime => {
+                vec![ButtonType::Pause, ButtonType::Copy, ButtonType::Reset, ButtonType::ModeToggle]
+            }
+            TranscriptionMode::Manual => {
+                vec![ButtonType::RecordToggle, ButtonType::Copy, ButtonType::Reset, ButtonType::ModeToggle]
+            }
+        };
+        
+        // Filter to only buttons that actually exist
+        let bottom_buttons: Vec<_> = button_order.into_iter().filter(|bt| self.buttons.contains_key(bt)).collect();
+        let button_count = bottom_buttons.len();
+        let total_buttons_width = (button_count as u32) * COPY_BUTTON_SIZE + (button_count.saturating_sub(1) as u32) * BUTTON_SPACING;
         let center_x = window_size.width / 2;
         let start_x = center_x - total_buttons_width / 2;
 
-        // Position buttons at the bottom of the text area
-        let pause_y_position = self.text_area_height - PAUSE_BUTTON_SIZE - BUTTON_MARGIN;
-        let copy_y_position = self.text_area_height - COPY_BUTTON_SIZE - BUTTON_MARGIN;
-        let reset_y_position = self.text_area_height - RESET_BUTTON_SIZE - BUTTON_MARGIN;
+        // Update positions for bottom buttons in the correct order
+        for (i, &button_type) in bottom_buttons.iter().enumerate() {
+            if let Some(button) = self.buttons.get_mut(&button_type) {
+                let button_x = start_x + (i as u32) * (COPY_BUTTON_SIZE + BUTTON_SPACING);
+                let button_y = self.text_area_height - COPY_BUTTON_SIZE - BUTTON_MARGIN;
+                button.position = (button_x, button_y);
+            }
+        }
 
-        // Update positions - pause button on the left
-        self.pause_button.position = (start_x, pause_y_position);
-        self.copy_button.position = (
-            start_x + PAUSE_BUTTON_SIZE + BUTTON_SPACING,
-            copy_y_position,
-        );
-        self.reset_button.position = (
-            start_x + PAUSE_BUTTON_SIZE + COPY_BUTTON_SIZE + BUTTON_SPACING * 2,
-            reset_y_position,
-        );
-
-        // Close button stays in top right
-        self.close_button.position = (
-            window_size.width - BUTTON_MARGIN - CLOSE_BUTTON_SIZE,
-            BUTTON_MARGIN,
-        );
+        // Update close button position
+        if let Some(close_button) = self.buttons.get_mut(&ButtonType::Close) {
+            close_button.position = (
+                window_size.width - BUTTON_MARGIN - CLOSE_BUTTON_SIZE,
+                BUTTON_MARGIN,
+            );
+        }
     }
 
     pub fn reset_hover_states(&mut self) {
-        self.copy_button.set_state(ButtonState::Normal);
-        self.reset_button.set_state(ButtonState::Normal);
-        self.close_button.set_state(ButtonState::Normal);
-        self.pause_button.set_state(ButtonState::Normal);
+        for button in self.buttons.values_mut() {
+            button.set_state(ButtonState::Normal);
+        }
         self.active_button = None;
     }
 
     pub fn handle_mouse_move(&mut self, position: PhysicalPosition<f64>) {
-        // Check if mouse is over any button
         let x = position.x;
         let y = position.y;
 
-        // Determine which button (if any) is being hovered over
-        let current_hover = if self.copy_button.contains_point(x, y) {
-            Some(ButtonType::Copy)
-        } else if self.reset_button.contains_point(x, y) {
-            Some(ButtonType::Reset)
-        } else if self.close_button.contains_point(x, y) {
-            Some(ButtonType::Close)
-        } else if self.pause_button.contains_point(x, y) {
-            if let Some(recording) = &self.recording {
-                if recording.load(Ordering::Relaxed) {
-                    Some(ButtonType::Pause)
+        // Find which button (if any) contains the mouse position
+        let current_hover = self.buttons.iter()
+            .find(|(_, button)| button.contains_point(x, y))
+            .map(|(&button_type, _)| {
+                // Handle special case for pause/play button state detection
+                if button_type == ButtonType::Pause {
+                    if let Some(recording) = &self.recording {
+                        if recording.load(Ordering::Relaxed) {
+                            ButtonType::Pause
+                        } else {
+                            ButtonType::Play
+                        }
+                    } else {
+                        ButtonType::Pause
+                    }
                 } else {
-                    Some(ButtonType::Play)
+                    button_type
                 }
-            } else {
-                Some(ButtonType::Pause)
-            }
-        } else {
-            None
-        };
+            });
 
-        // Only update states if there's an actual change to avoid wiggling
+        // Only update states if there's an actual change to avoid unnecessary updates
         if current_hover != self.active_button {
             // Reset all buttons to normal state first
             self.reset_hover_states();
 
             // Set the newly hovered button to hover state
-            match current_hover {
-                Some(ButtonType::Copy) => self.copy_button.set_state(ButtonState::Hover),
-                Some(ButtonType::Reset) => self.reset_button.set_state(ButtonState::Hover),
-                Some(ButtonType::Close) => self.close_button.set_state(ButtonState::Hover),
-                Some(ButtonType::Pause | ButtonType::Play) => {
-                    self.pause_button.set_state(ButtonState::Hover)
+            if let Some(hovered_button_type) = current_hover {
+                // Find the actual button to update (handle pause/play mapping)
+                let target_button_type = match hovered_button_type {
+                    ButtonType::Play => ButtonType::Pause, // Play state is handled by pause button
+                    _ => hovered_button_type,
+                };
+                
+                if let Some(button) = self.buttons.get_mut(&target_button_type) {
+                    button.set_state(ButtonState::Hover);
                 }
-                None => {}
             }
 
             // Update active button tracking
@@ -756,77 +791,51 @@ impl ButtonManager {
         state: ElementState,
         position: PhysicalPosition<f64>,
     ) -> Option<ButtonType> {
+        let x = position.x;
+        let y = position.y;
         let mut result = None;
 
         match state {
             ElementState::Pressed => {
-                // Check each button to see if it contains the point
-                if self.copy_button.contains_point(position.x, position.y) {
-                    self.copy_button.set_state(ButtonState::Pressed);
-                } else if self.reset_button.contains_point(position.x, position.y) {
-                    self.reset_button.set_state(ButtonState::Pressed);
-                } else if self.close_button.contains_point(position.x, position.y) {
-                    self.close_button.set_state(ButtonState::Pressed);
-                } else if self.pause_button.contains_point(position.x, position.y) {
-                    self.pause_button.set_state(ButtonState::Pressed);
+                // Find and set pressed state for any button containing the point
+                for (_, button) in self.buttons.iter_mut() {
+                    if button.contains_point(x, y) {
+                        button.set_state(ButtonState::Pressed);
+                        break;
+                    }
                 }
             }
             ElementState::Released => {
-                // Check for clicks - only register if the mouse is released on the same button
-                if self.copy_button.contains_point(position.x, position.y)
-                    && matches!(self.copy_button.state, ButtonState::Pressed)
-                {
-                    result = Some(ButtonType::Copy);
-                } else if self.reset_button.contains_point(position.x, position.y)
-                    && matches!(self.reset_button.state, ButtonState::Pressed)
-                {
-                    result = Some(ButtonType::Reset);
-                } else if self.close_button.contains_point(position.x, position.y)
-                    && matches!(self.close_button.state, ButtonState::Pressed)
-                {
-                    result = Some(ButtonType::Close);
-                } else if self.pause_button.contains_point(position.x, position.y)
-                    && matches!(self.pause_button.state, ButtonState::Pressed)
-                {
-                    // Check current recording state to determine button type
-                    if let Some(recording) = &self.recording {
-                        if recording.load(Ordering::Relaxed) {
-                            result = Some(ButtonType::Pause);
+                // Check for clicks - only register if mouse released on a pressed button
+                for (&button_type, button) in self.buttons.iter_mut() {
+                    if button.contains_point(x, y) && matches!(button.state, ButtonState::Pressed) {
+                        // Handle special case for pause/play button
+                        result = Some(if button_type == ButtonType::Pause {
+                            if let Some(recording) = &self.recording {
+                                if recording.load(Ordering::Relaxed) {
+                                    ButtonType::Pause
+                                } else {
+                                    ButtonType::Play
+                                }
+                            } else {
+                                ButtonType::Pause
+                            }
                         } else {
-                            result = Some(ButtonType::Play);
-                        }
+                            button_type
+                        });
+                        break;
                     }
                 }
 
-                // Reset all buttons to normal or hover state
-                self.reset_button.set_state(
-                    if self.reset_button.contains_point(position.x, position.y) {
+                // Reset all buttons to appropriate state (hover if mouse over, normal otherwise)
+                for (_, button) in self.buttons.iter_mut() {
+                    let new_state = if button.contains_point(x, y) {
                         ButtonState::Hover
                     } else {
                         ButtonState::Normal
-                    },
-                );
-                self.copy_button.set_state(
-                    if self.copy_button.contains_point(position.x, position.y) {
-                        ButtonState::Hover
-                    } else {
-                        ButtonState::Normal
-                    },
-                );
-                self.close_button.set_state(
-                    if self.close_button.contains_point(position.x, position.y) {
-                        ButtonState::Hover
-                    } else {
-                        ButtonState::Normal
-                    },
-                );
-                self.pause_button.set_state(
-                    if self.pause_button.contains_point(position.x, position.y) {
-                        ButtonState::Hover
-                    } else {
-                        ButtonState::Normal
-                    },
-                );
+                    };
+                    button.set_state(new_state);
+                }
             }
         }
 
@@ -842,80 +851,236 @@ impl ButtonManager {
     ) {
         // Only render buttons when hovering over the transcript
         if is_hovering_transcript {
-            // Get current recording state
+            // Handle pause/play button texture switching for real-time mode
+            if self.transcription_mode == TranscriptionMode::RealTime {
+                let is_recording = self
+                    .recording
+                    .as_ref()
+                    .map(|rec| rec.load(Ordering::Relaxed))
+                    .unwrap_or(false);
+
+                let current_type = if is_recording { ButtonType::Pause } else { ButtonType::Play };
+                
+                // Update pause button texture if recording state changed
+                if let Some(pause_button) = self.buttons.get_mut(&ButtonType::Pause) {
+                    if pause_button.button_type != current_type {
+                        let texture_option = if is_recording {
+                            self.pause_texture.clone()
+                        } else {
+                            self.play_texture.clone()
+                        };
+
+                        if let Some(texture) = texture_option {
+                            let current_state = pause_button.state;
+                            pause_button.texture = Some(texture);
+                            pause_button.button_type = current_type;
+                            pause_button.set_state(current_state);
+                        }
+                    }
+                }
+            } else if self.transcription_mode == TranscriptionMode::Manual {
+                // Update record toggle button texture based on recording state
+                self.update_record_toggle_button_texture();
+            }
+
+            // Update animations for all buttons
+            self.update_animations();
+
+            // Render all buttons
+            for button in self.buttons.values() {
+                button.render(view, encoder, queue, Some(self.transcription_mode));
+            }
+        }
+    }
+
+    pub fn update_animations(&mut self) {
+        for button in self.buttons.values_mut() {
+            button.update_animation();
+        }
+    }
+
+    pub fn set_recording(&mut self, recording: Option<Arc<AtomicBool>>) {
+        self.recording = recording;
+    }
+    
+    pub fn set_transcription_mode(&mut self, mode: TranscriptionMode) {
+        if self.transcription_mode != mode {
+            let old_mode = self.transcription_mode;
+            self.transcription_mode = mode;
+            println!("ButtonManager: Switching from {:?} to {:?} mode", old_mode, mode);
+            
+            // Update button layout for the new mode
+            self.update_button_layout_for_mode();
+        }
+    }
+    
+    fn update_button_layout_for_mode(&mut self) {
+        // Define button sets based on transcription mode
+        let new_button_types = match self.transcription_mode {
+            TranscriptionMode::RealTime => {
+                vec![
+                    ButtonType::Pause, 
+                    ButtonType::Copy, 
+                    ButtonType::Reset, 
+                    ButtonType::ModeToggle,
+                    ButtonType::Close
+                ]
+            }
+            TranscriptionMode::Manual => {
+                vec![
+                    ButtonType::RecordToggle,
+                    ButtonType::Copy,
+                    ButtonType::Reset,
+                    ButtonType::ModeToggle,
+                    ButtonType::Close,
+                ]
+            }
+        };
+        
+        // Remove buttons that are no longer needed
+        let current_types: Vec<ButtonType> = self.buttons.keys().cloned().collect();
+        for button_type in current_types {
+            if !new_button_types.contains(&button_type) {
+                self.buttons.remove(&button_type);
+                println!("ButtonManager: Removed button {:?}", button_type);
+            }
+        }
+        
+        // Add new buttons that don't exist yet
+        for &button_type in &new_button_types {
+            if !self.buttons.contains_key(&button_type) {
+                self.add_button(button_type);
+                println!("ButtonManager: Added button {:?}", button_type);
+            }
+        }
+        
+        // Update button positions for the new layout
+        self.recalculate_button_positions();
+    }
+    
+    fn add_button(&mut self, button_type: ButtonType) {
+        let position = (0, 0); // Temporary position, will be recalculated
+        let size = (COPY_BUTTON_SIZE, COPY_BUTTON_SIZE);
+        
+        let button = Button::new(
+            &self.device,
+            &self.queue,
+            button_type,
+            position,
+            size,
+            self.config,
+            None, // Texture will be assigned later if needed
+        );
+        
+        self.buttons.insert(button_type, button);
+        
+        // Assign appropriate textures
+        match button_type {
+            ButtonType::RecordToggle => {
+                // RecordToggle starts with play texture (not recording)
+                if let Some(play_texture) = &self.play_texture {
+                    if let Some(button) = self.buttons.get_mut(&ButtonType::RecordToggle) {
+                        button.texture = Some(play_texture.clone());
+                    }
+                }
+            }
+            // Other textures are already handled by the existing load_textures method
+            _ => {}
+        }
+    }
+    
+    fn recalculate_button_positions(&mut self) {
+        // Define the correct button order based on current mode
+        let button_order = match self.transcription_mode {
+            TranscriptionMode::RealTime => {
+                vec![ButtonType::Pause, ButtonType::Copy, ButtonType::Reset, ButtonType::ModeToggle]
+            }
+            TranscriptionMode::Manual => {
+                vec![ButtonType::RecordToggle, ButtonType::Copy, ButtonType::Reset, ButtonType::ModeToggle]
+            }
+        };
+        
+        // Filter to only buttons that actually exist
+        let bottom_buttons: Vec<_> = button_order.into_iter().filter(|bt| self.buttons.contains_key(bt)).collect();
+        let button_count = bottom_buttons.len();
+        let total_buttons_width = (button_count as u32) * COPY_BUTTON_SIZE + (button_count.saturating_sub(1) as u32) * BUTTON_SPACING;
+        let center_x = self.window_width / 2;
+        let start_x = center_x - total_buttons_width / 2;
+
+        // Position bottom buttons (all except Close) in the correct order
+        for (i, &button_type) in bottom_buttons.iter().enumerate() {
+            if let Some(button) = self.buttons.get_mut(&button_type) {
+                let button_x = start_x + (i as u32) * (COPY_BUTTON_SIZE + BUTTON_SPACING);
+                let button_y = self.text_area_height - COPY_BUTTON_SIZE - BUTTON_MARGIN;
+                button.position = (button_x, button_y);
+            }
+        }
+
+        // Update close button position
+        if let Some(close_button) = self.buttons.get_mut(&ButtonType::Close) {
+            close_button.position = (
+                self.window_width - BUTTON_MARGIN - CLOSE_BUTTON_SIZE,
+                BUTTON_MARGIN,
+            );
+        }
+    }
+
+    pub fn update_pause_button_texture(&mut self) {
+        if let Some(pause_button) = self.buttons.get_mut(&ButtonType::Pause) {
             let is_recording = self
                 .recording
                 .as_ref()
                 .map(|rec| rec.load(Ordering::Relaxed))
                 .unwrap_or(false);
 
-            // Check if recording state has changed and update button type
-            let current_type = if is_recording {
-                ButtonType::Pause
+            if is_recording {
+                // We're recording, show the pause button
+                if let Some(texture) = &self.pause_texture {
+                    pause_button.texture = Some(texture.clone());
+                }
             } else {
-                ButtonType::Play
-            };
-
-            // Update the button type if needed
-            if self.pause_button.button_type != current_type {
-                // Get the appropriate texture
-                let texture_option = if is_recording {
-                    self.pause_texture.clone()
-                } else {
-                    self.play_texture.clone()
-                };
-
-                if let Some(texture) = texture_option {
-                    // Save current state
-                    let current_state = self.pause_button.state;
-
-                    // Update the texture and button type
-                    self.pause_button.texture = Some(texture);
-                    self.pause_button.button_type = current_type;
-
-                    // Preserve the button state
-                    self.pause_button.set_state(current_state);
+                // We're not recording, show the play button
+                if let Some(texture) = &self.play_texture {
+                    pause_button.texture = Some(texture.clone());
                 }
             }
-
-            // Update animations first
-            self.update_animations();
-
-            // Render buttons
-            self.copy_button.render(view, encoder, queue);
-            self.reset_button.render(view, encoder, queue);
-            self.close_button.render(view, encoder, queue);
-            self.pause_button.render(view, encoder, queue);
         }
     }
+    
+    pub fn update_record_toggle_button_texture(&mut self) {
+        if let Some(record_button) = self.buttons.get_mut(&ButtonType::RecordToggle) {
+            let is_recording = self
+                .recording
+                .as_ref()
+                .map(|rec| rec.load(Ordering::Relaxed))
+                .unwrap_or(false);
 
-    pub fn update_animations(&mut self) {
-        self.copy_button.update_animation();
-        self.reset_button.update_animation();
-        self.close_button.update_animation();
-        self.pause_button.update_animation();
-    }
-
-    pub fn set_recording(&mut self, recording: Option<Arc<AtomicBool>>) {
-        self.recording = recording;
-    }
-
-    pub fn update_pause_button_texture(&mut self) {
-        let is_recording = self
-            .recording
-            .as_ref()
-            .map(|rec| rec.load(Ordering::Relaxed))
-            .unwrap_or(false);
-
-        if is_recording {
-            // We're recording, show the pause button
-            if let Some(texture) = &self.pause_texture {
-                self.pause_button.texture = Some(texture.clone());
-            }
-        } else {
-            // We're not recording, show the play button
-            if let Some(texture) = &self.play_texture {
-                self.pause_button.texture = Some(texture.clone());
+            // In manual mode, check current transcription mode to determine behavior
+            let current_mode = self.transcription_mode;
+            
+            if current_mode == crate::real_time_transcriber::TranscriptionMode::Manual {
+                if is_recording {
+                    // We're recording in manual mode, show the accept button (to finish recording)
+                    if let Some(texture) = &self.accept_texture {
+                        record_button.texture = Some(texture.clone());
+                    }
+                } else {
+                    // We're not recording in manual mode, show the play button (to start recording)
+                    if let Some(texture) = &self.play_texture {
+                        record_button.texture = Some(texture.clone());
+                    }
+                }
+            } else {
+                // Real-time mode: use pause/play logic
+                if is_recording {
+                    if let Some(texture) = &self.pause_texture {
+                        record_button.texture = Some(texture.clone());
+                    }
+                } else {
+                    if let Some(texture) = &self.play_texture {
+                        record_button.texture = Some(texture.clone());
+                    }
+                }
             }
         }
     }

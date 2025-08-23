@@ -51,6 +51,8 @@ pub struct WindowState {
     pub event_handler: EventHandler,
     pub running: Option<Arc<AtomicBool>>,
     pub recording: Option<Arc<AtomicBool>>,
+    transcription_mode_ref: Arc<parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>>,
+    last_known_mode: crate::real_time_transcriber::TranscriptionMode,
 }
 
 impl WindowState {
@@ -58,6 +60,9 @@ impl WindowState {
         window: Box<dyn Window>,
         running: Option<Arc<AtomicBool>>,
         recording: Option<Arc<AtomicBool>>,
+        transcription_mode: crate::real_time_transcriber::TranscriptionMode,
+        manual_session_sender: Option<tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>>,
+        transcription_mode_ref: Arc<parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>>,
     ) -> Self {
         let window: Arc<dyn Window> = Arc::from(window);
 
@@ -137,6 +142,7 @@ impl WindowState {
             &queue,
             PhysicalSize::new(config.width, config.height),
             config.format,
+            transcription_mode,
         );
 
         // Load button icons
@@ -144,6 +150,9 @@ impl WindowState {
         let reset_icon = include_bytes!("../../assets/reset.png");
         let pause_icon = include_bytes!("../../assets/pause.png");
         let play_icon = include_bytes!("../../assets/play.png");
+        let accept_icon = include_bytes!("../../assets/accept.png");
+
+        // ModeToggle will use shader-based text rendering (R/M)
 
         button_manager.load_textures(
             &device,
@@ -152,6 +161,7 @@ impl WindowState {
             Some(reset_icon),
             Some(pause_icon),
             Some(play_icon),
+            Some(accept_icon),
             config.format,
         );
 
@@ -177,7 +187,8 @@ impl WindowState {
         );
 
         // Create event handler
-        let event_handler = EventHandler::new(recording.clone());
+        let event_handler = EventHandler::new(recording.clone(), manual_session_sender, transcription_mode_ref.clone());
+        let last_known_mode = transcription_mode;
 
         Self {
             window,
@@ -208,6 +219,8 @@ impl WindowState {
             // Transcriber state references
             running,
             recording,
+            transcription_mode_ref,
+            last_known_mode,
         }
     }
 
@@ -247,6 +260,13 @@ impl WindowState {
     }
 
     pub fn draw(&mut self, _width: u32) {
+        // Check if transcription mode has changed
+        let current_mode = *self.transcription_mode_ref.lock();
+        if current_mode != self.last_known_mode {
+            println!("WindowState: Detected mode change from {:?} to {:?}", self.last_known_mode, current_mode);
+            self.button_manager.set_transcription_mode(current_mode);
+            self.last_known_mode = current_mode;
+        }
         let output = self.surface.get_current_texture().unwrap();
         let view = output
             .texture
@@ -304,11 +324,9 @@ impl WindowState {
         if let Some(spectrogram) = &mut self.spectrogram {
             let samples = if let Some(audio_data) = &self.audio_data {
                 let audio_data_lock = audio_data.read();
-                let samples_clone = if is_recording {
-                    audio_data_lock.samples.clone() // Only use real samples when recording
-                } else {
-                    empty_samples.clone() // Use empty samples when not recording
-                };
+                // Always show the current samples - when paused, these will be the decaying samples
+                // The audio processor handles the decay animation, not the UI
+                let samples_clone = audio_data_lock.samples.clone();
                 is_speaking = is_recording && audio_data_lock.is_speaking; // Only show speaking state when recording
                 let transcript = audio_data_lock.transcript.clone();
                 display_text = self.text_processor.clean_whitespace(&transcript);
@@ -427,10 +445,10 @@ impl WindowState {
         }
 
         // Render the buttons after the text - only when hovering over transcript
-        // First make sure the pause/play button texture is up-to-date
+        // First make sure the RecordToggle button texture is up-to-date
         if self.event_handler.hovering_transcript {
-            // Update button texture based on recording state
-            self.button_manager.update_pause_button_texture();
+            // Update RecordToggle button texture based on recording state
+            self.button_manager.update_record_toggle_button_texture();
 
             // Only render buttons when hovering over transcript area
             (&mut self.button_manager).render(&view, &mut encoder, true, &self.queue);
@@ -440,7 +458,8 @@ impl WindowState {
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
 
-        // Request redraw to keep animation loop going
+        // ALWAYS request redraw to keep animation loop going
+        // This ensures spectrogram decay animation continues when paused
         self.window.request_redraw();
     }
 
@@ -523,17 +542,51 @@ impl WindowState {
 
     pub fn toggle_recording(&mut self) {
         if let Some(recording) = &self.recording {
-            // Toggle recording state
+            // IMMEDIATE: Toggle recording state atomically (non-blocking)
             let was_recording = recording.load(Ordering::Relaxed);
             let new_state = !was_recording;
             recording.store(new_state, Ordering::Relaxed);
-            println!("Recording toggled to: {}", new_state);
+            println!("Recording toggled to: {} (UI thread continues immediately)", new_state);
 
-            // Update button texture after toggling recording state
-            self.button_manager.update_pause_button_texture();
+            // IMMEDIATE: Update button texture (local UI state, non-blocking)
+            self.button_manager.update_record_toggle_button_texture();
+            
+            // The transcription systems will detect this change asynchronously
+            // via their polling of the atomic flag - no blocking here
         } else {
             println!("Error: recording state is None");
         }
+    }
+
+    pub fn toggle_manual_session(&mut self) {
+        // IMMEDIATE: Check current state and send command asynchronously
+        let is_currently_recording = self.recording
+            .as_ref()
+            .map(|rec| rec.load(Ordering::Relaxed))
+            .unwrap_or(false);
+        
+        println!("Manual session toggle requested (current: {}) - UI continues immediately", is_currently_recording);
+        
+        if let Some(sender) = &self.event_handler.manual_session_sender {
+            let sender = sender.clone();
+            // ASYNC: Send command without blocking UI thread
+            tokio::spawn(async move {
+                let command = if is_currently_recording {
+                    crate::real_time_transcriber::ManualSessionCommand::StopSession
+                } else {
+                    crate::real_time_transcriber::ManualSessionCommand::StartSession
+                };
+                
+                if let Err(e) = sender.send(command).await {
+                    eprintln!("Failed to send manual session command: {}", e);
+                } else {
+                    println!("Manual session command sent successfully (background)");
+                }
+            });
+        } else {
+            eprintln!("Manual session sender not available");
+        }
+        // UI thread continues immediately - manual session processor handles the command
     }
 
     pub fn quit(&mut self) {

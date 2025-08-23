@@ -34,6 +34,8 @@ pub fn run() {
         recording: None,
         current_modifiers: Modifiers::default(),
         config: app_config,
+        manual_session_sender: None,
+        transcription_mode_ref: Arc::new(parking_lot::Mutex::new(crate::real_time_transcriber::TranscriptionMode::RealTime)),
     };
     event_loop.run_app(&mut app).unwrap();
 }
@@ -43,6 +45,8 @@ pub fn run_with_audio_data(
     running: Arc<AtomicBool>,
     recording: Arc<AtomicBool>,
     config: AppConfig,
+    manual_session_sender: Option<tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>>,
+    transcription_mode_ref: Arc<parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>>,
 ) {
     let event_loop = EventLoop::new().unwrap();
     let mut app = WindowApp {
@@ -52,6 +56,8 @@ pub fn run_with_audio_data(
         recording: Some(recording),
         current_modifiers: Modifiers::default(),
         config,
+        manual_session_sender,
+        transcription_mode_ref,
     };
 
     event_loop.run_app(&mut app).unwrap();
@@ -64,9 +70,33 @@ pub struct WindowApp {
     pub recording: Option<Arc<AtomicBool>>,
     pub current_modifiers: Modifiers,
     pub config: AppConfig,
+    pub manual_session_sender: Option<tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>>,
+    pub transcription_mode_ref: Arc<parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>>,
 }
 
 impl ApplicationHandler for WindowApp {
+    fn resumed(&mut self, event_loop: &dyn ActiveEventLoop) {
+        // Check running flag on resume and exit if shutting down
+        if let Some(running) = &self.running {
+            if !running.load(std::sync::atomic::Ordering::Relaxed) {
+                println!("App resumed but running flag is false - exiting event loop");
+                event_loop.exit();
+                return;
+            }
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
+        // Periodic check when event loop is idle - ensures shutdown happens even without events
+        if let Some(running) = &self.running {
+            if !running.load(std::sync::atomic::Ordering::Relaxed) {
+                println!("Event loop idle but running flag is false - exiting event loop");
+                event_loop.exit();
+                return;
+            }
+        }
+    }
+
     fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
         let window_attributes = WindowAttributes::default()
             .with_decorations(false)
@@ -89,6 +119,9 @@ impl ApplicationHandler for WindowApp {
                 mode,
                 self.running.clone(),
                 self.recording.clone(),
+                *self.transcription_mode_ref.lock(),
+                self.manual_session_sender.clone(),
+                self.transcription_mode_ref.clone(),
             );
 
             if let Some(audio_data) = &self.audio_data {
@@ -106,6 +139,14 @@ impl ApplicationHandler for WindowApp {
         window_id: WindowId,
         event: WindowEvent,
     ) {
+        // IMMEDIATE: Check running flag and exit event loop if shutting down
+        if let Some(running) = &self.running {
+            if !running.load(std::sync::atomic::Ordering::Relaxed) {
+                println!("Running flag is false - exiting event loop immediately");
+                event_loop.exit();
+                return;
+            }
+        }
         match event {
             WindowEvent::ModifiersChanged(modifiers) => {
                 // Update modifiers without borrowing the window
@@ -151,14 +192,29 @@ impl ApplicationHandler for WindowApp {
                         println!("Reset transcript shortcut pressed, resetting transcript");
                         window.reset_transcript();
                     }
-                    // Check for toggle recording shortcut
+                    // Check for toggle recording shortcut (Space) - only in real-time mode
                     else if key_code
                         == shortcuts
                             .to_key_code(&shortcuts.toggle_recording)
                             .unwrap_or(KeyCode::Space)
                     {
-                        println!("Toggle recording shortcut pressed, toggling recording");
-                        window.toggle_recording();
+                        let current_mode = *self.transcription_mode_ref.lock();
+                        if current_mode == crate::real_time_transcriber::TranscriptionMode::RealTime {
+                            println!("Space pressed in real-time mode, toggling recording");
+                            window.toggle_recording();
+                        } else {
+                            println!("Space pressed in manual mode, ignoring (use Tab instead)");
+                        }
+                    }
+                    // Check for Tab key in manual mode (manual session start/stop)
+                    else if key_code == KeyCode::Tab {
+                        let current_mode = *self.transcription_mode_ref.lock();
+                        if current_mode == crate::real_time_transcriber::TranscriptionMode::Manual {
+                            println!("Tab pressed in manual mode, toggling manual session");
+                            window.toggle_manual_session();
+                        } else {
+                            println!("Tab pressed in real-time mode, ignoring (use Space instead)");
+                        }
                     }
                     // Check for exit application shortcut
                     else if key_code
@@ -226,6 +282,9 @@ fn create_window(
     monitor_mode: VideoModeHandle,
     running: Option<Arc<AtomicBool>>,
     recording: Option<Arc<AtomicBool>>,
+    transcription_mode: crate::real_time_transcriber::TranscriptionMode,
+    manual_session_sender: Option<tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>>,
+    transcription_mode_ref: Arc<parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>>,
 ) -> WindowState {
     // Use spectrogram size plus text area height and gap
     let fixed_size = PhysicalSize::new(
@@ -237,6 +296,15 @@ fn create_window(
     // Set the fixed size in the window attributes
     let w = w.with_surface_size(logical_size);
 
+    // Determine keyboard interactivity mode: request exclusive keyboard when in manual mode
+    let keyboard_mode = if transcription_mode
+        == crate::real_time_transcriber::TranscriptionMode::Manual
+    {
+        KeyboardInteractivity::Exclusive
+    } else {
+        KeyboardInteractivity::OnDemand
+    };
+
     let w = if ev.is_wayland() {
         // For Wayland, we need to specify the output (monitor)
         w.with_anchor(Anchor::BOTTOM)
@@ -244,14 +312,14 @@ fn create_window(
             .with_margin(MARGIN as i32, MARGIN as i32, MARGIN as i32, MARGIN as i32)
             .with_output(monitor_mode.monitor().native_id())
             .with_resizable(false)
-            .with_keyboard_interactivity(KeyboardInteractivity::OnDemand)
+            .with_keyboard_interactivity(keyboard_mode)
     } else {
         w.with_position(LogicalPosition::new(0, 0))
             .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
             // Don't use fullscreen as it would override our fixed size
             // .with_fullscreen(Some(winit::window::Fullscreen::Borderless(None)))
             .with_resizable(false)
-            .with_keyboard_interactivity(KeyboardInteractivity::OnDemand)
+            .with_keyboard_interactivity(keyboard_mode)
     };
 
     ev.listen_device_events(DeviceEvents::Always);
@@ -261,5 +329,8 @@ fn create_window(
             .unwrap(),
         running,
         recording,
+        transcription_mode,
+        manual_session_sender,
+        transcription_mode_ref,
     )
 }
