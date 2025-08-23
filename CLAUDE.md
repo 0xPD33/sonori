@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Sonori** is a real-time speech transcription application that provides a lightweight, transparent overlay displaying live transcriptions using OpenAI's Whisper AI models on Linux. The application is written in Rust and features both GUI and CLI modes with GPU-accelerated rendering.
+**Sonori** is a real-time speech transcription application built in Rust with GPU-accelerated rendering and Wayland layer shell integration on Linux.
 
 ## Development Commands
 
@@ -15,81 +15,78 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `nix develop` - Enter NixOS development shell with all dependencies
 
 ### Dependencies
-For NixOS users, simply use `nix develop`. For other distributions, refer to the extensive dependency lists in README.md for Debian/Ubuntu, Fedora/RHEL, and Arch-based systems.
+For NixOS users, use `nix develop`. For other distributions, refer to dependency lists in README.md.
 
-## Architecture and Code Structure
+## Implementation Guidelines
 
-### Core Components
-- **`src/main.rs`** - Entry point with CLI/GUI mode selection
-- **`src/real_time_transcriber.rs`** - Main coordinator integrating all components
-- **`src/audio_*.rs`** - Audio capture and processing modules using PortAudio
-- **`src/ui/`** - GPU-accelerated UI components with custom WGSL shaders
-- **`src/config.rs`** - Configuration management (reads `config.toml`)
-- **`src/download.rs`** - Automatic model downloading from Hugging Face
+### Threading and Concurrency Patterns
+- Use `Arc<AtomicBool>` for lock-free state flags (running, recording, processing)
+- Use `Arc<RwLock<T>>` for shared mutable state (transcript history, visualization data)  
+- Use `Arc<Mutex<T>>` for thread-safe resource access (models, statistics)
+- Prefer bounded/unbounded channels for data pipeline communication
+- Use try-lock patterns to avoid blocking critical real-time paths
+- Implement producer-consumer patterns for audio processing pipeline
 
-### Technology Stack
-- **GPU Rendering**: Custom WGPU-based UI with WGSL shaders (no traditional GUI framework)
-- **Audio**: PortAudio for capture, rustfft for spectrograms
-- **AI Models**: OpenAI Whisper via CTranslate2 (`ct2rs`), Silero VAD via ONNX Runtime (`ort`)  
-- **Windowing**: Custom fork of `winit` with Wayland layer shell support
-- **Async**: Tokio-based architecture with Arc<RwLock<T>> for thread-safe shared state
+### Performance Best Practices
+- Maintain real-time constraints: < 50ms audio latency, < 500ms transcription delay
+- Use minimal allocations with object pooling and pre-allocation patterns
+- Implement circular buffer management with automatic trimming
+- Use lock-free data structures with atomic operations where possible
+- Pre-compute transformation matrices and batch rendering operations
+- Target 60 FPS UI rendering with < 16ms frame time
 
-### Real-time Pipeline
-Audio capture → Voice Activity Detection → Whisper transcription → GPU-rendered overlay display
+### Memory Management
+- Implement RAII-based resource cleanup with Drop implementations
+- Use pre-allocated circular buffers for audio data
+- Implement automatic buffer trimming to prevent memory growth
+- Use object pooling for frequently allocated structures
+- Ensure bounded memory usage with automatic cleanup
 
-## Key Design Decisions
+### Audio Processing Guidelines
+- Use configurable buffer size (default 1024) and sample rate (16000 Hz)
+- Implement state machine patterns for Voice Activity Detection
+- Use adaptive thresholding and hangover frame handling
+- Preserve speech context with padding around segments
+- Handle noise robustly in various acoustic environments
 
-1. **Custom UI Framework**: Uses WGPU instead of traditional GUI frameworks for learning and performance
-2. **Wayland Layer Shell**: Uses layer shell protocol for transparent overlay functionality
-3. **Modular Architecture**: Clean separation between audio processing, AI inference, and UI rendering
-4. **Configuration-driven**: Extensive TOML-based configuration in `config.toml`
+### GPU Rendering Practices
+- Require Vulkan support for WGPU rendering (will fail without proper drivers)
+- Use instanced rendering for repeated UI elements
+- Implement vertex buffer management and reuse
+- Use efficient shader variants for different rendering modes
+- Implement multi-pass rendering with layered alpha blending
 
-## Configuration
+### Configuration Management
+- Use TOML-based hierarchical configuration with runtime updates
+- Implement hot-reloading of configuration files
+- Provide validation and error handling with graceful fallbacks
+- Support component-specific update handling
+- Maintain default values as hardcoded fallbacks
 
-The application uses `config.toml` for runtime configuration:
-- Whisper model selection (e.g., "openai/whisper-base.en")
-- Audio parameters (buffer size, sample rate)  
-- VAD thresholds and timing
-- Keyboard shortcuts (customizable key bindings)
-- Whisper inference parameters (beam size, repetition penalty)
+### Error Handling and Robustness
+- Implement graceful degradation for missing dependencies
+- Handle Wayland/X11 fallback scenarios appropriately
+- Provide clear error messages for missing Vulkan drivers
+- Handle model download and conversion failures gracefully
+- Implement proper cleanup on shutdown signals
 
-Models are automatically downloaded to `~/.cache/sonori/models/` on first run.
+### Platform Integration
+- Use Wayland layer shell protocol for transparent overlays when available
+- Implement X11 fallback with override-redirect and composite extension
+- Handle multiple monitor configurations properly
+- Implement proper focus management and stacking order
+- Use system clipboard integration (wl-copy/wtype) for text pasting
 
-## Development Environment
+### Code Organization Principles
+- Maintain clean separation between audio processing, AI inference, and UI rendering
+- Use Facade pattern for main coordination (RealTimeTranscriber)
+- Encapsulate component state within respective modules
+- Implement modular, self-contained UI components
+- Use async/await patterns for I/O operations and model management
 
-### NixOS (Recommended)
-The `flake.nix` provides a complete development environment including:
-- Rust toolchain (beta channel, specified in `rust-toolchain.toml`)
-- All system dependencies (Vulkan, PortAudio, FFTW, Wayland/X11 libraries)
-- Development tools (rust-analyzer, mold linker for faster builds)
-
-### Platform Support
-- **Primary**: Linux with Wayland (tested on KDE Plasma/KWin)
-- **Fallback**: X11 support included
-- **Not supported**: Windows/macOS (explicitly not planned)
-
-## Important Implementation Notes
-
-### Thread Safety
-Heavy use of `Arc<RwLock<T>>` and `Arc<AtomicBool>` for shared state between the real-time transcription pipeline and UI rendering thread.
-
-### GPU Requirements
-Requires Vulkan support for WGPU rendering. The application will fail without proper Vulkan drivers and libraries.
-
-### Model Conversion
-Whisper models are automatically converted to CTranslate2 format for faster inference. Manual conversion can be done using the `model-conversion/shell.nix` environment.
-
-### Audio Processing
-Uses a configurable buffer size (default 1024) and sample rate (16000 Hz) for real-time processing. CPU usage is currently high and being optimized.
-
-## Known Limitations
-
-- No comprehensive test suite (relies on manual testing)
-- High CPU usage even when idle
-- Limited Wayland compositor compatibility (primarily tested with KWin)
-- Occasional truncation of last words in transcription segments
-- CUDA support is planned but currently broken
-
-## Recent Development Focus
-
-Current work centers on performance optimization, reducing memory usage, and attempting to add CUDA support for GPU acceleration of inference (see recent commits).
+### Testing and Validation
+- Currently relies on manual testing (no comprehensive test suite)
+- Validate real-time performance constraints during development  
+- Test across different Wayland compositors when possible
+- Verify memory usage patterns and cleanup behavior
+- Test graceful shutdown and error recovery paths
