@@ -150,19 +150,8 @@ async fn run_gui_mode(transcriber: RealTimeTranscriber, app_config: config::AppC
     // Portal worker: separate channel to avoid moving the same receiver twice
     let (portal_tx, portal_rx) = std_mpsc::channel::<String>();
 
-    thread::spawn(move || {
-
-
-        loop {
-            match clipboard_rx.recv_timeout(Duration::from_millis(500)) {
-                Ok(text) => {
-                    let _ = crate::copy::WlCopy::copy_to_clipboard(&text);
-                }
-                Err(std_mpsc::RecvTimeoutError::Timeout) => {}
-                Err(std_mpsc::RecvTimeoutError::Disconnected) => break,
-            }
-        }
-    });
+    // In portal mode we will handle clipboard inside the portal worker to ensure paste uses
+    // the correct, freshly-copied contents. Otherwise, run a dedicated clipboard worker.
 
     let clipboard_tx_clone = clipboard_tx.clone();
     let portal_tx_clone = portal_tx.clone();
@@ -209,6 +198,18 @@ async fn run_gui_mode(transcriber: RealTimeTranscriber, app_config: config::AppC
                         if let Err(e) = portal.paste_via_ctrl_v().await {
                             eprintln!("Portal paste failed: {}", e);
                         }
+                    }
+                    Err(std_mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(std_mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            }
+        });
+    } else {
+        thread::spawn(move || {
+            loop {
+                match clipboard_rx.recv_timeout(Duration::from_millis(500)) {
+                    Ok(text) => {
+                        let _ = crate::copy::WlCopy::copy_to_clipboard(&text);
                     }
                     Err(std_mpsc::RecvTimeoutError::Timeout) => {}
                     Err(std_mpsc::RecvTimeoutError::Disconnected) => break,
