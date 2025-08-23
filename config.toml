@@ -26,3 +26,6 @@ copy_transcript = "KeyC"
 reset_transcript = "KeyR"
 toggle_recording = "Space"
 exit_application = "Escape"
+
+[portal_config]
+enable_xdg_portal = true

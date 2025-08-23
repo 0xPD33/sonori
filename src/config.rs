@@ -34,6 +34,14 @@ pub struct KeyboardShortcuts {
     pub exit_application: String,
 }
 
+/// Configuration for XDG Desktop Portal features
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PortalConfig {
+    /// Whether to enable XDG Desktop Portal for input injection
+    /// When enabled, allows the application to inject keystrokes via portal
+    pub enable_xdg_portal: bool,
+}
+
 impl Default for KeyboardShortcuts {
     fn default() -> Self {
         Self {
@@ -41,6 +49,14 @@ impl Default for KeyboardShortcuts {
             reset_transcript: "KeyR".to_string(),   // Default: Ctrl+R
             toggle_recording: "Space".to_string(),  // Default: Space
             exit_application: "Escape".to_string(), // Default: Escape
+        }
+    }
+}
+
+impl Default for PortalConfig {
+    fn default() -> Self {
+        Self {
+            enable_xdg_portal: true, // Default to enabled for better UX
         }
     }
 }
@@ -132,6 +148,8 @@ pub struct AppConfig {
     pub audio_processor_config: AudioProcessorConfig,
     /// Keyboard shortcuts configuration
     pub keyboard_shortcuts: KeyboardShortcuts,
+    /// XDG Desktop Portal configuration
+    pub portal_config: PortalConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -218,6 +236,7 @@ impl Default for AppConfig {
             vad_config: VadConfigSerde::default(),
             audio_processor_config: AudioProcessorConfig::default(),
             keyboard_shortcuts: KeyboardShortcuts::default(),
+            portal_config: PortalConfig::default(),
         }
     }
 }

@@ -13,9 +13,13 @@ mod transcribe;
 mod transcription_processor;
 mod transcription_stats;
 mod ui;
-// mod wayland_connection;
+mod copy;
+mod portal_input;
 
 use clap::Parser;
+use std::sync::mpsc as std_mpsc;
+use std::thread;
+use std::time::Duration;
 use config::read_app_config;
 use download::ModelType;
 use real_time_transcriber::RealTimeTranscriber;
@@ -141,6 +145,28 @@ async fn run_gui_mode(transcriber: RealTimeTranscriber, app_config: config::AppC
         std::process::exit(0);
     });
 
+    // Clipboard worker: forward transcript chunks to clipboard
+    let (clipboard_tx, clipboard_rx) = std_mpsc::channel::<String>();
+    // Portal worker: separate channel to avoid moving the same receiver twice
+    let (portal_tx, portal_rx) = std_mpsc::channel::<String>();
+
+    thread::spawn(move || {
+
+
+        loop {
+            match clipboard_rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(text) => {
+                    let _ = crate::copy::WlCopy::copy_to_clipboard(&text);
+                }
+                Err(std_mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std_mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+    });
+
+    let clipboard_tx_clone = clipboard_tx.clone();
+    let portal_tx_clone = portal_tx.clone();
+
     tokio::spawn(async move {
         while let Ok(transcription) = transcript_rx.recv().await {
             let updated_transcript = {
@@ -153,8 +179,43 @@ async fn run_gui_mode(transcriber: RealTimeTranscriber, app_config: config::AppC
             };
             let mut audio_data = audio_visualization_data_for_thread.write();
             audio_data.transcript = updated_transcript;
+
+            // Forward chunk to clipboard and portal workers
+            let _ = clipboard_tx_clone.send(transcription.clone());
+            let _ = portal_tx_clone.send(transcription);
         }
     });
+
+    // Portal paste worker: establish a portal session and paste on demand (only if enabled)
+    if app_config.portal_config.enable_xdg_portal {
+        tokio::spawn(async move {
+            // Attempt to start screencast + remote desktop session
+            let portal = crate::portal_input::PortalInput::new(true).await;
+            let portal = match portal {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("Portal integration disabled: {}", e);
+                    return;
+                }
+            };
+            // Drain the channel and paste using portal Ctrl+V after wl-copy
+            loop {
+                match portal_rx.recv_timeout(Duration::from_millis(500)) {
+                    Ok(text) => {
+                        // Copy to clipboard (using our simplified wayland connection)
+                        let _ = crate::copy::WlCopy::copy_to_clipboard(&text);
+
+                        // Trigger paste via portal
+                        if let Err(e) = portal.paste_via_ctrl_v().await {
+                            eprintln!("Portal paste failed: {}", e);
+                        }
+                    }
+                    Err(std_mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(std_mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            }
+        });
+    }
 
     let running = transcriber.get_running();
     let recording = transcriber.get_recording();

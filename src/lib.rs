@@ -9,6 +9,8 @@ pub mod transcribe;
 pub mod transcription_processor;
 pub mod transcription_stats;
 pub mod ui;
+pub mod portal_input;
+pub mod copy;
 
 // Re-export key components for easier access
 pub use audio_capture::AudioCapture;
