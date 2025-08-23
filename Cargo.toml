@@ -12,29 +12,19 @@ tokio = { version = "1.43.0", features = ["full"] }
 futures-util = "0.3.31"
 anyhow = "1.0.97"
 serde = { version = "1.0.218", features = ["derive"] }
-serde_json = "1.0.140"
 toml = "0.8.0"
 parking_lot = "0.12.1"
 clap = { version = "4.5.21", features = ["derive"] }
 winit = { version = "0.30.5", git = "https://github.com/SergioRibera/winit", branch = "layer_shell" }
-raw-window-handle = "0.6.2"
 wgpu = "24.0.1"
-softbuffer = { version = "0.4.1", default-features = false, features = [
-    "wayland",
-    "x11",
-] }
-# wayland-client = "0.31.8"
-# wayland-protocols = { version = "0.32.6", features = ["client", "unstable"] }
 smithay-client-toolkit = "0.19.2"
 pollster = "0.4.0"
-rand = "0.9.0"
-# x11-dl = "2.21.0"
 rustfft = "6.1.0"
 bytemuck = { version = "1.18.0", features = ["derive"] }
 glyphon = "0.8.0"
-# copypasta = "0.10.1"
+ashpd = { version = "0.11", default-features = false, features = ["tokio"] }
+xkbcommon = { version = "0.7", features = ["wayland"] }
 ort = { version = "2.0.0-rc.10", features = ["ndarray"] }
-hound = "3.0.0"
 image = "0.25.5"
 chrono = "0.4.35"
 
