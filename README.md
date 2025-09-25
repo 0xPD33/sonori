@@ -11,17 +11,20 @@ Contributions are welcome. There are no guidelines yet. Just check the planned f
 ### Current
 
 - **Real-Time Transcription**: Transcribes your speech in real-time using OpenAI's Whisper models
+- **Manual Transcription Mode**: Accumulate audio in sessions for on-demand batch transcription (toggle with --manual or UI button)
 - **Voice Activity Detection**: Uses Silero VAD for accurate speech detection
 - **Transparent Overlay**: Non-intrusive overlay that sits at the bottom of your screen
 - **Audio Visualization**: Visual feedback when speaking with a spectrogram display
 - **Copy/Paste Functionality**: Easily copy transcribed text to clipboard
-- **Pause/Resume Recording**: Pause/Resume recording
+- **Pause/Resume Recording**: Pause/Resume recording (real-time mode) or Start/Stop sessions (manual mode)
 - **Auto-Start Recording**: Begins recording as soon as the application launches
 - **Scroll Controls**: Navigate through longer transcripts
 - **CLI Mode**: Run without GUI in terminal mode using `--cli` flag for headless usage
-- **Configurable**: Configure the model, language, and other settings like keyboard shortcuts in the config file (config.toml)
+- **Configurable**: Configure the model, language, transcription mode, and other settings like keyboard shortcuts in the config file (config.toml)
 - **Automatic Model Download**: Both Whisper and Silero VAD models are downloaded automatically with automatic CTranslate2 conversion
 - **Performance Monitoring**: Optional statistics logging for transcription performance analysis
+- **Global Shortcuts**: Optional XDG Desktop Portal integration for system-wide hotkeys (e.g., Super+Tab to toggle manual sessions)
+- **Portal Input**: Optional automatic pasting via XDG Desktop Portal for seamless text injection
 
 ### Planned
 
@@ -118,13 +121,17 @@ Sonori needs two types of models to function properly:
    ./target/release/sonori
    ```
 2. A transparent overlay will appear at the bottom of your screen
-3. Recording starts automatically
+3. Recording starts automatically (real-time mode)
 4. Speak naturally - your speech will be transcribed in real-time or near real-time (based on the model and hardware)
 5. Use the buttons on the overlay to:
-   - Pause/Resume recording
+   - Pause/Resume recording (real-time mode)
+   - Start/Stop manual sessions and Accept transcript (manual mode)
    - Copy text to clipboard
    - Clear transcript history
+   - Toggle between real-time and manual modes
    - Exit the application
+
+For manual mode, start a session with the Record button, speak, then stop and accept to transcribe the accumulated audio.
 
 ### CLI Mode
 
@@ -136,12 +143,14 @@ For headless usage or terminal-based transcription:
    ```
 2. Transcription will appear directly in your terminal
 3. Recording starts automatically
-4. Speak naturally - transcriptions will update in real-time on the same line
+4. Speak naturally - transcriptions will update in real-time on the same line (real-time mode) or use spacebar to start/stop sessions (manual mode)
 5. Press `Ctrl+C` to exit gracefully
 
 ### Command Line Options
 
 - `--cli`: Run in CLI mode without GUI
+- `--mode <realtime|manual>`: Set transcription mode (default: realtime)
+- `--manual`: Shorthand for `--mode manual` to start in manual transcription mode
 - `--help`: Show help information
 - `--version`: Display version information
 
@@ -159,6 +168,7 @@ device = "CPU"                    # Device type: CPU, CUDA (if available)
 log_stats_enabled = false         # Enable performance statistics logging
 buffer_size = 1024                # Audio buffer size (affects latency/performance)
 sample_rate = 16000               # Audio sample rate in Hz
+transcription_mode = "realtime"   # Mode: "realtime" or "manual"
 
 [whisper_options]
 beam_size = 5                     # Beam search width (higher = more accurate, slower)
@@ -178,9 +188,21 @@ max_vis_samples = 1024            # Maximum samples for audio visualization
 [keyboard_shortcuts]
 copy_transcript = "KeyC"          # Copy transcription to clipboard (Ctrl+C)
 reset_transcript = "KeyR"         # Clear current transcript (Ctrl+R)
-quit_application = "KeyQ"         # Alternative quit shortcut
-toggle_recording = "Space"        # Pause/resume recording
+toggle_recording = "Space"        # Pause/resume recording (real-time) or manual session (manual mode)
 exit_application = "Escape"       # Exit the application
+
+[portal_config]
+enable_xdg_portal = true          # Enable XDG Desktop Portal for input injection and global shortcuts
+enable_global_shortcuts = true    # Enable global shortcuts via portal
+manual_toggle_accelerator = "<Super>Tab"  # Accelerator for toggling manual sessions
+application_id = "dev.paddy.sonori"       # App ID for portal integration
+
+[manual_mode_config]
+max_recording_duration_secs = 60  # Maximum duration per manual session in seconds
+manual_buffer_size = 960000       # Buffer size for manual sessions (samples)
+auto_restart_sessions = false     # Auto-start new session after completing one
+clear_on_new_session = true       # Clear previous transcript when starting new session
+processing_timeout_secs = 30      # Timeout for processing manual sessions
 ```
 
 ### Keyboard Shortcuts
@@ -189,7 +211,7 @@ You can customize the keyboard shortcuts used in the application by editing the 
 
 - `copy_transcript`: KeyC (Ctrl+C) - Copy the transcription to clipboard
 - `reset_transcript`: KeyR (Ctrl+R) - Clear the current transcript
-- `toggle_recording`: Space - Toggle recording on/off
+- `toggle_recording`: Space - Toggle recording on/off (real-time) or manual session (manual mode)
 - `exit_application`: Escape - Exit the application
 
 When specifying keys, use the key names from the [KeyCode enum in winit](https://docs.rs/winit/latest/winit/keyboard/enum.KeyCode.html), such as:
@@ -199,7 +221,7 @@ When specifying keys, use the key names from the [KeyCode enum in winit](https:/
 - Function keys: F1, F2, etc.
 - Special keys: Space, Escape, Enter, Tab, etc.
 
-Note: The Ctrl modifier is automatically applied to copy_transcript, reset_transcript shortcuts.
+Note: The Ctrl modifier is automatically applied to copy_transcript and reset_transcript shortcuts.
 
 ### Model Options
 
@@ -223,6 +245,7 @@ Sonori includes optional performance monitoring that can be enabled by setting `
 - **Automatic Reporting**: Statistics are automatically reported every 10 seconds during operation
 
 This feature is useful for:
+
 - Optimizing model and configuration choices for your hardware
 - Monitoring performance degradation over time
 - Debugging transcription issues
