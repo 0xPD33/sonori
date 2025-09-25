@@ -35,7 +35,9 @@ pub fn run() {
         current_modifiers: Modifiers::default(),
         config: app_config,
         manual_session_sender: None,
-        transcription_mode_ref: Arc::new(parking_lot::Mutex::new(crate::real_time_transcriber::TranscriptionMode::RealTime)),
+        transcription_mode_ref: Arc::new(parking_lot::Mutex::new(
+            crate::real_time_transcriber::TranscriptionMode::RealTime,
+        )),
     };
     event_loop.run_app(&mut app).unwrap();
 }
@@ -45,8 +47,12 @@ pub fn run_with_audio_data(
     running: Arc<AtomicBool>,
     recording: Arc<AtomicBool>,
     config: AppConfig,
-    manual_session_sender: Option<tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>>,
-    transcription_mode_ref: Arc<parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>>,
+    manual_session_sender: Option<
+        tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>,
+    >,
+    transcription_mode_ref: Arc<
+        parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>,
+    >,
 ) {
     let event_loop = EventLoop::new().unwrap();
     let mut app = WindowApp {
@@ -70,8 +76,10 @@ pub struct WindowApp {
     pub recording: Option<Arc<AtomicBool>>,
     pub current_modifiers: Modifiers,
     pub config: AppConfig,
-    pub manual_session_sender: Option<tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>>,
-    pub transcription_mode_ref: Arc<parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>>,
+    pub manual_session_sender:
+        Option<tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>>,
+    pub transcription_mode_ref:
+        Arc<parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>>,
 }
 
 impl ApplicationHandler for WindowApp {
@@ -199,7 +207,8 @@ impl ApplicationHandler for WindowApp {
                             .unwrap_or(KeyCode::Space)
                     {
                         let current_mode = *self.transcription_mode_ref.lock();
-                        if current_mode == crate::real_time_transcriber::TranscriptionMode::RealTime {
+                        if current_mode == crate::real_time_transcriber::TranscriptionMode::RealTime
+                        {
                             println!("Space pressed in real-time mode, toggling recording");
                             window.toggle_recording();
                         } else {
@@ -283,8 +292,12 @@ fn create_window(
     running: Option<Arc<AtomicBool>>,
     recording: Option<Arc<AtomicBool>>,
     transcription_mode: crate::real_time_transcriber::TranscriptionMode,
-    manual_session_sender: Option<tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>>,
-    transcription_mode_ref: Arc<parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>>,
+    manual_session_sender: Option<
+        tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>,
+    >,
+    transcription_mode_ref: Arc<
+        parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>,
+    >,
 ) -> WindowState {
     // Use spectrogram size plus text area height and gap
     let fixed_size = PhysicalSize::new(
@@ -297,13 +310,12 @@ fn create_window(
     let w = w.with_surface_size(logical_size);
 
     // Determine keyboard interactivity mode: request exclusive keyboard when in manual mode
-    let keyboard_mode = if transcription_mode
-        == crate::real_time_transcriber::TranscriptionMode::Manual
-    {
-        KeyboardInteractivity::Exclusive
-    } else {
-        KeyboardInteractivity::OnDemand
-    };
+    let keyboard_mode =
+        if transcription_mode == crate::real_time_transcriber::TranscriptionMode::Manual {
+            KeyboardInteractivity::Exclusive
+        } else {
+            KeyboardInteractivity::OnDemand
+        };
 
     let w = if ev.is_wayland() {
         // For Wayland, we need to specify the output (monitor)

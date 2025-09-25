@@ -8,7 +8,6 @@
       url = "github:oxalica/rust-overlay";
       inputs = {
         nixpkgs.follows = "nixpkgs";
-        flake-utils.follows = "flake-utils";
       };
     };
   };
@@ -87,6 +86,64 @@
               pkgs.lib.makeSearchPathOutput "dev" "include" [ pkgs.openssl.dev ]
             ) + "/openssl";
           };
+        };
+
+        packages = let
+          sonoriPkg = pkgs.rustPlatform.buildRustPackage rec {
+            pname = "sonori";
+            version = "0.2.0";  # Match Cargo.toml
+
+            src = pkgs.lib.cleanSource ./.;
+
+            cargoLock = { lockFile = ./Cargo.lock; };
+
+            nativeBuildInputs = with pkgs; [
+              pkg-config
+              cmake
+              (pkgs.lib.optionals stdenv.isLinux mold)
+              clang
+            ];
+
+            buildInputs = with pkgs; [
+              libxkbcommon
+              libxkbcommon.dev
+              wayland
+              wayland.dev
+              xorg.libX11.dev
+              xorg.libX11
+              xorg.libXcursor
+              xorg.libXi
+              xorg.libXrandr
+              libiconv
+              openssl.dev
+              alsa-lib
+              portaudio
+              fftw
+              curl
+              ctranslate2
+              sentencepiece
+              wtype
+              vulkan-loader
+            ];
+
+            postInstall = ''
+              mkdir -p $out/share/applications
+              cat > $out/share/applications/dev.paddy.sonori.desktop <<EOF
+              [Desktop Entry]
+              Type=Application
+              Name=Sonori
+              Comment=Real-time speech transcription with Whisper
+              Exec=$out/bin/sonori
+              Icon=sonori
+              Terminal=false
+              Categories=Utility;AudioVideo;
+              StartupNotify=true
+              EOF
+            '';
+          };
+        in {
+          sonori = sonoriPkg;
+          default = sonoriPkg;
         };
       });
 }

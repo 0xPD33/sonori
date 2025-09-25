@@ -1,14 +1,14 @@
 use parking_lot::{Mutex, RwLock};
-use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::time::Duration;
 
 use crate::config::{AppConfig, AudioProcessorConfig};
-use crate::silero_audio_processor::{AudioSegment, SileroVad, VadState};
-use crate::ui::common::AudioVisualizationData;
 use crate::real_time_transcriber::TranscriptionMode;
+use crate::silero_audio_processor::{AudioSegment, SileroVad, VadState};
+use crate::transcription_stats::TranscriptionStats;
+use crate::ui::common::AudioVisualizationData;
 
 /// Handles audio processing and voice activity detection
 pub struct AudioProcessor {
@@ -20,7 +20,8 @@ pub struct AudioProcessor {
     segment_tx: mpsc::Sender<AudioSegment>,
     buffer_size: usize,
     config: AudioProcessorConfig,
-    
+    transcription_stats: Arc<Mutex<TranscriptionStats>>,
+
     // Manual mode fields
     transcription_mode: Arc<Mutex<TranscriptionMode>>,
     manual_audio_buffer: Arc<Mutex<Vec<f32>>>,
@@ -35,10 +36,13 @@ impl AudioProcessor {
         audio_visualization_data: Arc<RwLock<AudioVisualizationData>>,
         segment_tx: mpsc::Sender<AudioSegment>,
         transcription_mode: Arc<Mutex<TranscriptionMode>>,
+        transcription_stats: Arc<Mutex<TranscriptionStats>>,
         app_config: AppConfig,
     ) -> Self {
-        let manual_audio_buffer = Arc::new(Mutex::new(Vec::with_capacity(app_config.manual_mode_config.manual_buffer_size)));
-        
+        let manual_audio_buffer = Arc::new(Mutex::new(Vec::with_capacity(
+            app_config.manual_mode_config.manual_buffer_size,
+        )));
+
         Self {
             running,
             recording,
@@ -48,6 +52,7 @@ impl AudioProcessor {
             segment_tx,
             buffer_size: app_config.buffer_size,
             config: app_config.audio_processor_config,
+            transcription_stats,
             transcription_mode,
             manual_audio_buffer,
         }
@@ -65,6 +70,7 @@ impl AudioProcessor {
         let buffer_size = self.buffer_size;
         let transcription_mode = self.transcription_mode.clone();
         let manual_audio_buffer = self.manual_audio_buffer.clone();
+        let transcription_stats = self.transcription_stats.clone();
 
         // Create thread-local buffer
         let mut audio_buffer = Vec::with_capacity(buffer_size);
@@ -78,7 +84,7 @@ impl AudioProcessor {
             while running.load(Ordering::Relaxed) {
                 // Check if we should be processing audio or just doing decay animation
                 let is_recording = recording.load(Ordering::Relaxed);
-                
+
                 if !is_recording {
                     // When paused, decay spectrogram to zero instead of clearing immediately
                     {
@@ -89,12 +95,14 @@ impl AudioProcessor {
                             for sample in &mut audio_data.samples {
                                 *sample *= 0.95; // Exponential decay factor
                             }
-                            
+
                             // Check if samples are essentially zero (below threshold)
-                            let max_amplitude = audio_data.samples.iter()
+                            let max_amplitude = audio_data
+                                .samples
+                                .iter()
                                 .map(|&x| x.abs())
                                 .fold(0.0, f32::max);
-                            
+
                             if max_amplitude < 0.001 {
                                 // Samples have decayed enough, clear them
                                 audio_data.samples.clear();
@@ -103,7 +111,7 @@ impl AudioProcessor {
                         }
                         audio_data.is_speaking = false; // No longer speaking when paused
                     } // Release lock here
-                    
+
                     // Continue the fade-out animation at ~60fps
                     tokio::time::sleep(Duration::from_millis(16)).await;
                     continue;
@@ -126,9 +134,11 @@ impl AudioProcessor {
                                     &audio_visualization_data,
                                     &segment_tx,
                                     &transcript_history,
+                                    &transcription_stats,
                                     max_vis_samples,
                                     &mut latest_is_speaking,
-                                ).await;
+                                )
+                                .await;
                             }
                             TranscriptionMode::Manual => {
                                 Self::process_manual_audio(
@@ -136,7 +146,8 @@ impl AudioProcessor {
                                     &manual_audio_buffer,
                                     &audio_visualization_data,
                                     max_vis_samples,
-                                ).await;
+                                )
+                                .await;
                             }
                         }
                     }
@@ -162,48 +173,80 @@ impl AudioProcessor {
         audio_visualization_data: &Arc<RwLock<AudioVisualizationData>>,
         segment_tx: &mpsc::Sender<AudioSegment>,
         transcript_history: &Arc<RwLock<String>>,
+        transcription_stats: &Arc<Mutex<TranscriptionStats>>,
         max_vis_samples: usize,
         latest_is_speaking: &mut bool,
     ) {
-        // Process audio only if we can get both locks
-        if let (Some(mut processor), Some(mut audio_data)) = (
-            audio_processor.try_lock(),
-            audio_visualization_data.try_write(),
-        ) {
-            // Only update visualization data if it's different from current samples
-            let new_samples: Vec<f32> =
-                audio_buffer.iter().take(max_vis_samples).copied().collect();
+        let (segments_result, vad_speaking) = {
+            let mut processor = audio_processor.lock();
+            let result = processor.process_audio(audio_buffer);
+            let speaking = processor.is_speaking();
+            (result, speaking)
+        };
+
+        let new_samples: Vec<f32> = audio_buffer.iter().take(max_vis_samples).copied().collect();
+
+        let mut reset_history = false;
+        {
+            let mut audio_data = audio_visualization_data.write();
+
             if audio_data.samples != new_samples {
                 audio_data.samples = new_samples;
             }
 
-            // Process audio with the processor
-            match processor.process_audio(audio_buffer) {
-                Ok(segments) => {
-                    *latest_is_speaking = processor.is_speaking();
+            match &segments_result {
+                Ok(_) => {
+                    *latest_is_speaking = vad_speaking;
                     audio_data.is_speaking = *latest_is_speaking;
-
-                    // Handle reset request if present
-                    if audio_data.reset_requested {
-                        audio_data.reset_requested = false;
-                        audio_data.transcript.clear();
-
-                        if let Some(mut history) = transcript_history.try_write() {
-                            history.clear();
-                        }
-                    }
-
-                    // Send segments for transcription
-                    for segment in segments {
-                        if let Err(e) = segment_tx.try_send(segment) {
-                            eprintln!("Failed to send audio segment: {}", e);
-                        }
-                    }
                 }
-                Err(e) => {
-                    eprintln!("Error processing audio: {}", e);
+                Err(_) => {
+                    *latest_is_speaking = false;
                     audio_data.is_speaking = false;
                 }
+            }
+
+            if audio_data.reset_requested {
+                audio_data.reset_requested = false;
+                audio_data.transcript.clear();
+                reset_history = true;
+            }
+        }
+
+        if reset_history {
+            transcript_history.write().clear();
+        }
+
+        match segments_result {
+            Ok(segments) => {
+                if segments.is_empty() {
+                    return;
+                }
+
+                let total = segments.len();
+                for (idx, segment) in segments.into_iter().enumerate() {
+                    if let Err(e) = segment_tx.send(segment).await {
+                        eprintln!("Failed to send audio segment: {}", e);
+                        let dropped = (total - idx) as u64;
+                        if dropped > 0 {
+                            if let Some(mut stats) = transcription_stats.try_lock() {
+                                let total_drops = stats.record_segment_drop(dropped);
+                                eprintln!(
+                                    "Dropped {} audio segments (total: {}) due to channel error",
+                                    dropped, total_drops
+                                );
+                            } else {
+                                eprintln!(
+                                    "Dropped {} audio segments but could not update stats",
+                                    dropped
+                                );
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Error processing audio: {}", e);
             }
         }
     }
@@ -234,8 +277,8 @@ impl AudioProcessor {
 
     /// Process accumulated manual audio when session ends
     pub async fn process_accumulated_manual_audio(
-        &self, 
-        sample_rate: usize
+        &self,
+        sample_rate: usize,
     ) -> Result<(), anyhow::Error> {
         let accumulated_audio = {
             let mut manual_buffer = self.manual_audio_buffer.lock();
@@ -247,7 +290,10 @@ impl AudioProcessor {
             audio
         };
 
-        println!("Processing accumulated manual audio: {} samples", accumulated_audio.len());
+        println!(
+            "Processing accumulated manual audio: {} samples",
+            accumulated_audio.len()
+        );
 
         // Create a single large audio segment for the entire manual session
         let duration_secs = accumulated_audio.len() as f64 / sample_rate as f64;
@@ -258,9 +304,19 @@ impl AudioProcessor {
         };
 
         // Send to transcription processor
-        if let Err(e) = self.segment_tx.try_send(segment) {
+        if let Err(e) = self.segment_tx.send(segment).await {
             eprintln!("Failed to send manual audio segment: {}", e);
-            return Err(anyhow::anyhow!("Failed to send manual audio segment: {}", e));
+            if let Some(mut stats) = self.transcription_stats.try_lock() {
+                let total = stats.record_segment_drop(1);
+                eprintln!(
+                    "Manual segment dropped (total drops: {}) due to channel error",
+                    total
+                );
+            }
+            return Err(anyhow::anyhow!(
+                "Failed to send manual audio segment: {}",
+                e
+            ));
         }
 
         // Update visualization to show processing state
@@ -284,7 +340,10 @@ impl AudioProcessor {
     }
 
     /// Trigger manual transcription of accumulated audio
-    pub async fn trigger_manual_transcription(&self, sample_rate: usize) -> Result<(), anyhow::Error> {
+    pub async fn trigger_manual_transcription(
+        &self,
+        sample_rate: usize,
+    ) -> Result<(), anyhow::Error> {
         self.process_accumulated_manual_audio(sample_rate).await
     }
 }

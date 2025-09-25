@@ -1,8 +1,8 @@
 use anyhow::Result;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use tokio::sync::mpsc;
 use futures_util::StreamExt;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+use tokio::sync::mpsc;
 
 use crate::real_time_transcriber::{ManualSessionCommand, TranscriptionMode};
 
@@ -37,9 +37,13 @@ pub async fn run_listener(
             if mode == TranscriptionMode::Manual {
                 let is_recording = recording.load(std::sync::atomic::Ordering::Relaxed);
                 if is_recording {
-                    let _ = manual_session_tx.send(ManualSessionCommand::StopSession).await;
+                    let _ = manual_session_tx
+                        .send(ManualSessionCommand::StopSession)
+                        .await;
                 } else {
-                    let _ = manual_session_tx.send(ManualSessionCommand::StartSession).await;
+                    let _ = manual_session_tx
+                        .send(ManualSessionCommand::StartSession)
+                        .await;
                 }
             }
         }

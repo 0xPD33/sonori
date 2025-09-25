@@ -17,15 +17,21 @@ pub struct EventHandler {
     pub hovering_transcript: bool,
     pub auto_scroll: bool,
     pub recording: Option<Arc<AtomicBool>>,
-    pub manual_session_sender: Option<tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>>,
-    pub transcription_mode_ref: Arc<parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>>,
+    pub manual_session_sender:
+        Option<tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>>,
+    pub transcription_mode_ref:
+        Arc<parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>>,
 }
 
 impl EventHandler {
     pub fn new(
-        recording: Option<Arc<AtomicBool>>, 
-        manual_session_sender: Option<tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>>,
-        transcription_mode_ref: Arc<parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>>,
+        recording: Option<Arc<AtomicBool>>,
+        manual_session_sender: Option<
+            tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>,
+        >,
+        transcription_mode_ref: Arc<
+            parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>,
+        >,
     ) -> Self {
         Self {
             cursor_position: None,
@@ -150,7 +156,10 @@ impl EventHandler {
             // IMMEDIATE: Atomic toggle - UI thread continues instantly
             let was_recording = recording.load(Ordering::Relaxed);
             recording.store(!was_recording, Ordering::Relaxed);
-            println!("Recording state toggled atomically: {} -> {} (non-blocking)", was_recording, !was_recording);
+            println!(
+                "Recording state toggled atomically: {} -> {} (non-blocking)",
+                was_recording, !was_recording
+            );
             // All transcription threads will detect this change via their atomic flag polling
         }
     }
@@ -203,13 +212,14 @@ impl EventHandler {
                     }
                     ButtonType::RecordToggle => {
                         // IMMEDIATE UI response: Check state and send command asynchronously
-                        let is_currently_recording = self.recording
+                        let is_currently_recording = self
+                            .recording
                             .as_ref()
                             .map(|rec| rec.load(Ordering::Relaxed))
                             .unwrap_or(false);
-                        
+
                         println!("Manual RecordToggle clicked (current state: {}) - UI continues immediately", is_currently_recording);
-                        
+
                         if let Some(sender) = &self.manual_session_sender {
                             let sender = sender.clone();
                             // ASYNC: Send command without blocking UI thread
@@ -219,11 +229,13 @@ impl EventHandler {
                                 } else {
                                     crate::real_time_transcriber::ManualSessionCommand::StartSession
                                 };
-                                
+
                                 if let Err(e) = sender.send(command).await {
                                     eprintln!("Failed to send manual session command: {}", e);
                                 } else {
-                                    println!("Manual session command sent successfully (background)");
+                                    println!(
+                                        "Manual session command sent successfully (background)"
+                                    );
                                 }
                             });
                         } else {
@@ -246,9 +258,12 @@ impl EventHandler {
                                 crate::real_time_transcriber::TranscriptionMode::RealTime
                             }
                         };
-                        
-                        println!("Mode toggle clicked: {:?} -> {:?} (UI continues immediately)", current_mode, new_mode);
-                        
+
+                        println!(
+                            "Mode toggle clicked: {:?} -> {:?} (UI continues immediately)",
+                            current_mode, new_mode
+                        );
+
                         // ASYNC: Send mode switch command without blocking UI
                         if let Some(sender) = &self.manual_session_sender {
                             let sender = sender.clone();

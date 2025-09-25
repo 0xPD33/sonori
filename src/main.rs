@@ -1,11 +1,14 @@
+use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::io::Write;
 
 mod audio_capture;
 mod audio_processor;
 mod config;
+mod copy;
 mod download;
+mod global_shortcuts;
+mod portal_input;
 mod real_time_transcriber;
 mod silero_audio_processor;
 mod stats_reporter;
@@ -13,19 +16,16 @@ mod transcribe;
 mod transcription_processor;
 mod transcription_stats;
 mod ui;
-mod copy;
-mod portal_input;
-mod global_shortcuts;
 
+use ashpd::register_host_app;
+use ashpd::AppID;
 use clap::{Parser, ValueEnum};
-use std::sync::mpsc as std_mpsc;
-use std::thread;
-use std::time::Duration;
 use config::read_app_config;
 use download::ModelType;
 use real_time_transcriber::{RealTimeTranscriber, TranscriptionMode};
-use ashpd::register_host_app;
-use ashpd::AppID;
+use std::sync::mpsc as std_mpsc;
+use std::thread;
+use std::time::Duration;
 
 #[derive(Debug, Clone, ValueEnum)]
 enum TranscriptionModeArg {
@@ -39,13 +39,16 @@ enum TranscriptionModeArg {
 #[command(version)]
 struct Args {
     /// Run in CLI mode (no GUI)
-    #[arg(long, help = "Run in CLI mode without GUI, displaying transcription in the terminal")]
+    #[arg(
+        long,
+        help = "Run in CLI mode without GUI, displaying transcription in the terminal"
+    )]
     cli: bool,
-    
+
     /// Transcription mode: realtime or manual
     #[arg(long, value_enum, help = "Set transcription mode")]
     mode: Option<TranscriptionModeArg>,
-    
+
     /// Start in manual mode (shorthand for --mode manual)
     #[arg(long, help = "Start in manual transcription mode")]
     manual: bool,
@@ -54,10 +57,14 @@ struct Args {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    
+
     println!("Loading configuration...");
     let mut app_config = read_app_config();
-    
+
+    // Set stable portal App ID env var early for consistent identity across launches
+    let app_id_str = app_config.portal_config.application_id.clone();
+    std::env::set_var("XDG_DESKTOP_PORTAL_APP_ID", &app_id_str);
+
     // Override transcription mode from CLI arguments
     let transcription_mode = if args.manual {
         TranscriptionMode::Manual
@@ -69,13 +76,13 @@ async fn main() -> anyhow::Result<()> {
     } else {
         TranscriptionMode::from(app_config.transcription_mode.as_str())
     };
-    
+
     // Update config with CLI override
     app_config.transcription_mode = match transcription_mode {
         TranscriptionMode::Manual => "manual".to_string(),
         TranscriptionMode::RealTime => "realtime".to_string(),
     };
-    
+
     println!("Transcription mode: {:?}", transcription_mode);
 
     println!("Initializing models...");
@@ -102,14 +109,13 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn run_cli_mode(transcriber: RealTimeTranscriber, mode: TranscriptionMode) -> anyhow::Result<()> {
+async fn run_cli_mode(
+    transcriber: RealTimeTranscriber,
+    mode: TranscriptionMode,
+) -> anyhow::Result<()> {
     match mode {
-        TranscriptionMode::RealTime => {
-            run_realtime_cli(transcriber).await
-        }
-        TranscriptionMode::Manual => {
-            run_manual_cli(transcriber).await
-        }
+        TranscriptionMode::RealTime => run_realtime_cli(transcriber).await,
+        TranscriptionMode::Manual => run_manual_cli(transcriber).await,
     }
 }
 
@@ -117,21 +123,23 @@ async fn run_realtime_cli(mut transcriber: RealTimeTranscriber) -> anyhow::Resul
     println!("Running in real-time CLI mode. Press Ctrl+C to exit.");
     println!("Transcription will appear below:");
     println!("=====================================");
-    
+
     let mut transcript_rx = transcriber.get_transcript_rx();
     let running = transcriber.get_running();
-    
+
     // Set up Ctrl+C handler
     let running_clone = running.clone();
     tokio::spawn(async move {
-        tokio::signal::ctrl_c().await.expect("Failed to listen for Ctrl+C");
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to listen for Ctrl+C");
         println!("\nShutting down...");
         running_clone.store(false, Ordering::Relaxed);
     });
-    
+
     // Listen for transcriptions and print them
     let mut current_line = String::new();
-    
+
     loop {
         tokio::select! {
             Ok(transcription) = transcript_rx.recv() => {
@@ -149,7 +157,7 @@ async fn run_realtime_cli(mut transcriber: RealTimeTranscriber) -> anyhow::Resul
             }
         }
     }
-    
+
     transcriber.shutdown().await?;
     Ok(())
 }
@@ -161,34 +169,36 @@ async fn run_manual_cli(mut transcriber: RealTimeTranscriber) -> anyhow::Result<
     println!("  r     - Reset transcript");
     println!("  q     - Quit");
     println!("====================================");
-    
+
     let mut transcript_rx = transcriber.get_transcript_rx();
     let running = transcriber.get_running();
     // Get transcription mode to determine configuration behavior
     let transcription_mode = transcriber.get_transcription_mode();
-    
+
     // Set up Ctrl+C handler
     let running_clone = running.clone();
     tokio::spawn(async move {
-        tokio::signal::ctrl_c().await.expect("Failed to listen for Ctrl+C");
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to listen for Ctrl+C");
         println!("\nShutting down...");
         running_clone.store(false, Ordering::Relaxed);
     });
-    
+
     // Set up keyboard input handling with blocking thread
     let (input_tx, mut input_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     let running_for_input = running.clone();
-    
+
     // Spawn blocking task for stdin reading
     std::thread::spawn(move || {
         use std::io::{self, BufRead};
         let stdin = io::stdin();
-        
+
         loop {
             if !running_for_input.load(Ordering::Relaxed) {
                 break;
             }
-            
+
             let mut line = String::new();
             match stdin.lock().read_line(&mut line) {
                 Ok(_) => {
@@ -198,20 +208,23 @@ async fn run_manual_cli(mut transcriber: RealTimeTranscriber) -> anyhow::Result<
             }
         }
     });
-    
+
     // Status display
     let mut current_transcript = String::new();
     let mut session_status = "Ready";
-    
-    println!("\nStatus: {} | Transcript: {}", session_status, current_transcript);
-    
+
+    println!(
+        "\nStatus: {} | Transcript: {}",
+        session_status, current_transcript
+    );
+
     // Main event loop
     loop {
         tokio::select! {
             Ok(transcription) = transcript_rx.recv() => {
                 current_transcript.push(' ');
                 current_transcript.push_str(&transcription);
-                
+
                 // Clear previous line and print updated status
                 print!("\r{:100}\r", ""); // Clear line
                 print!("Status: {} | Transcript: {}", session_status, current_transcript);
@@ -223,7 +236,7 @@ async fn run_manual_cli(mut transcriber: RealTimeTranscriber) -> anyhow::Result<
                         println!("\nSpace pressed - toggling session...");
                         // Toggle manual session based on current state
                         let is_currently_recording = transcriber.get_recording().load(std::sync::atomic::Ordering::Relaxed);
-                        
+
                         if is_currently_recording {
                             // Currently recording, stop the session
                             match transcriber.stop_manual_session() {
@@ -278,17 +291,17 @@ async fn run_manual_cli(mut transcriber: RealTimeTranscriber) -> anyhow::Result<
                         let mut history = transcript_history.write();
                         history.clear();
                         drop(history);
-                        
+
                         // Clear the local current_transcript display
                         current_transcript.clear();
-                        
+
                         // Clear audio visualization data transcript
                         let audio_data = transcriber.get_audio_visualization_data();
                         let mut audio_data_lock = audio_data.write();
                         audio_data_lock.transcript.clear();
                         audio_data_lock.reset_requested = true;
                         drop(audio_data_lock);
-                        
+
                         println!("Transcript reset successfully");
                     }
                     "q" | "quit" => {
@@ -310,7 +323,7 @@ async fn run_manual_cli(mut transcriber: RealTimeTranscriber) -> anyhow::Result<
                 if !running.load(Ordering::Relaxed) {
                     break;
                 }
-                
+
                 // Update session status based on manual session state
                 if let Some(manual_status) = transcriber.get_manual_session_status() {
                     session_status = if manual_status.is_recording {
@@ -326,12 +339,15 @@ async fn run_manual_cli(mut transcriber: RealTimeTranscriber) -> anyhow::Result<
             }
         }
     }
-    
+
     transcriber.shutdown().await?;
     Ok(())
 }
 
-async fn run_gui_mode(transcriber: RealTimeTranscriber, app_config: config::AppConfig) -> anyhow::Result<()> {
+async fn run_gui_mode(
+    transcriber: RealTimeTranscriber,
+    app_config: config::AppConfig,
+) -> anyhow::Result<()> {
     // Set up shutdown channels and monitoring task
     let (_shutdown_tx, shutdown_rx) = tokio::sync::mpsc::channel::<()>(2);
     let transcript_history = transcriber.get_transcript_history();
@@ -401,13 +417,6 @@ async fn run_gui_mode(transcriber: RealTimeTranscriber, app_config: config::AppC
 
     // Portal paste worker: establish a portal session and paste on demand (only if enabled)
     if app_config.portal_config.enable_xdg_portal {
-        // Register a stable application ID with the portal so our actions show up consistently
-        let app_id_str = app_config.portal_config.application_id.clone();
-        tokio::spawn(async move {
-            if let Ok(app_id) = AppID::try_from(app_id_str.as_str()) {
-                let _ = register_host_app(app_id).await;
-            }
-        });
         tokio::spawn(async move {
             // Attempt to start screencast + remote desktop session
             let portal = crate::portal_input::PortalInput::new(true).await;
@@ -436,15 +445,13 @@ async fn run_gui_mode(transcriber: RealTimeTranscriber, app_config: config::AppC
             }
         });
     } else {
-        thread::spawn(move || {
-            loop {
-                match clipboard_rx.recv_timeout(Duration::from_millis(500)) {
-                    Ok(text) => {
-                        let _ = crate::copy::WlCopy::copy_to_clipboard(&text);
-                    }
-                    Err(std_mpsc::RecvTimeoutError::Timeout) => {}
-                    Err(std_mpsc::RecvTimeoutError::Disconnected) => break,
+        thread::spawn(move || loop {
+            match clipboard_rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(text) => {
+                    let _ = crate::copy::WlCopy::copy_to_clipboard(&text);
                 }
+                Err(std_mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std_mpsc::RecvTimeoutError::Disconnected) => break,
             }
         });
     }
@@ -461,14 +468,28 @@ async fn run_gui_mode(transcriber: RealTimeTranscriber, app_config: config::AppC
         let mode_ref = transcription_mode_ref.clone();
         let recording_ref = recording.clone();
         tokio::spawn(async move {
-            if let Err(e) = crate::global_shortcuts::run_listener(&accelerator, manual_tx, mode_ref, recording_ref).await {
+            if let Err(e) = crate::global_shortcuts::run_listener(
+                &accelerator,
+                manual_tx,
+                mode_ref,
+                recording_ref,
+            )
+            .await
+            {
                 eprintln!("Global shortcuts disabled: {}", e);
             }
         });
     }
 
     // Run the UI with AtomicBool values directly and pass the configuration
-    ui::run_with_audio_data(audio_visualization_data, running, recording, app_config, Some(manual_session_sender), transcription_mode_ref);
+    ui::run_with_audio_data(
+        audio_visualization_data,
+        running,
+        recording,
+        app_config,
+        Some(manual_session_sender),
+        transcription_mode_ref,
+    );
 
     Ok(())
 }

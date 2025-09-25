@@ -51,7 +51,8 @@ pub struct WindowState {
     pub event_handler: EventHandler,
     pub running: Option<Arc<AtomicBool>>,
     pub recording: Option<Arc<AtomicBool>>,
-    transcription_mode_ref: Arc<parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>>,
+    transcription_mode_ref:
+        Arc<parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>>,
     last_known_mode: crate::real_time_transcriber::TranscriptionMode,
 }
 
@@ -61,8 +62,12 @@ impl WindowState {
         running: Option<Arc<AtomicBool>>,
         recording: Option<Arc<AtomicBool>>,
         transcription_mode: crate::real_time_transcriber::TranscriptionMode,
-        manual_session_sender: Option<tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>>,
-        transcription_mode_ref: Arc<parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>>,
+        manual_session_sender: Option<
+            tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>,
+        >,
+        transcription_mode_ref: Arc<
+            parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>,
+        >,
     ) -> Self {
         let window: Arc<dyn Window> = Arc::from(window);
 
@@ -187,7 +192,11 @@ impl WindowState {
         );
 
         // Create event handler
-        let event_handler = EventHandler::new(recording.clone(), manual_session_sender, transcription_mode_ref.clone());
+        let event_handler = EventHandler::new(
+            recording.clone(),
+            manual_session_sender,
+            transcription_mode_ref.clone(),
+        );
         let last_known_mode = transcription_mode;
 
         Self {
@@ -263,7 +272,10 @@ impl WindowState {
         // Check if transcription mode has changed
         let current_mode = *self.transcription_mode_ref.lock();
         if current_mode != self.last_known_mode {
-            println!("WindowState: Detected mode change from {:?} to {:?}", self.last_known_mode, current_mode);
+            println!(
+                "WindowState: Detected mode change from {:?} to {:?}",
+                self.last_known_mode, current_mode
+            );
             self.button_manager.set_transcription_mode(current_mode);
             self.last_known_mode = current_mode;
         }
@@ -546,11 +558,14 @@ impl WindowState {
             let was_recording = recording.load(Ordering::Relaxed);
             let new_state = !was_recording;
             recording.store(new_state, Ordering::Relaxed);
-            println!("Recording toggled to: {} (UI thread continues immediately)", new_state);
+            println!(
+                "Recording toggled to: {} (UI thread continues immediately)",
+                new_state
+            );
 
             // IMMEDIATE: Update button texture (local UI state, non-blocking)
             self.button_manager.update_record_toggle_button_texture();
-            
+
             // The transcription systems will detect this change asynchronously
             // via their polling of the atomic flag - no blocking here
         } else {
@@ -560,13 +575,17 @@ impl WindowState {
 
     pub fn toggle_manual_session(&mut self) {
         // IMMEDIATE: Check current state and send command asynchronously
-        let is_currently_recording = self.recording
+        let is_currently_recording = self
+            .recording
             .as_ref()
             .map(|rec| rec.load(Ordering::Relaxed))
             .unwrap_or(false);
-        
-        println!("Manual session toggle requested (current: {}) - UI continues immediately", is_currently_recording);
-        
+
+        println!(
+            "Manual session toggle requested (current: {}) - UI continues immediately",
+            is_currently_recording
+        );
+
         if let Some(sender) = &self.event_handler.manual_session_sender {
             let sender = sender.clone();
             // ASYNC: Send command without blocking UI thread
@@ -576,7 +595,7 @@ impl WindowState {
                 } else {
                     crate::real_time_transcriber::ManualSessionCommand::StartSession
                 };
-                
+
                 if let Err(e) = sender.send(command).await {
                     eprintln!("Failed to send manual session command: {}", e);
                 } else {

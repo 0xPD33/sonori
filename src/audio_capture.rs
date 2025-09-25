@@ -1,11 +1,12 @@
 use anyhow;
-use parking_lot::Mutex;
 use portaudio as pa;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use crate::config::read_app_config;
+use crate::transcription_stats::TranscriptionStats;
+use parking_lot::Mutex;
 
 /// Manages audio capture using PortAudio
 pub struct AudioCapture {
@@ -17,7 +18,7 @@ pub struct AudioCapture {
 impl AudioCapture {
     /// Creates a new AudioCapture instance
     pub fn new() -> Self {
-        Self { 
+        Self {
             pa_stream: None,
             pa: None,
             input_settings: None,
@@ -31,14 +32,14 @@ impl AudioCapture {
         }
 
         let config = read_app_config();
-        
+
         let pa = pa::PortAudio::new()
             .map_err(|e| anyhow::anyhow!("Failed to initialize PortAudio: {}", e))?;
 
         let input_params = pa
             .default_input_stream_params::<f32>(1)
             .map_err(|e| anyhow::anyhow!("Failed to get default input stream parameters: {}", e))?;
-        
+
         let input_settings = pa::InputStreamSettings::new(
             input_params,
             config.sample_rate as f64,
@@ -64,6 +65,7 @@ impl AudioCapture {
         tx: mpsc::Sender<Vec<f32>>,
         running: Arc<AtomicBool>,
         recording: Arc<AtomicBool>,
+        transcription_stats: Arc<Mutex<TranscriptionStats>>,
     ) -> Result<(), anyhow::Error> {
         self.initialize_audio()?;
 
@@ -72,16 +74,21 @@ impl AudioCapture {
 
         // Clone the recording Arc before moving it into the closure
         let recording_for_callback = recording.clone();
+        let stats_for_callback = transcription_stats.clone();
 
         let callback = move |pa::InputStreamCallbackArgs { buffer, .. }| {
             // Only send samples when recording is active
             if recording_for_callback.load(Ordering::Relaxed) {
                 let samples = buffer.to_vec();
-                if let Err(e) = tx.try_send(samples) {
+                if let Err(e) = tx.blocking_send(samples) {
                     eprintln!("Failed to send samples: {}", e);
+                    if let Some(mut stats) = stats_for_callback.try_lock() {
+                        let total = stats.record_audio_drop(1);
+                        eprintln!("Audio channel drop recorded (total: {})", total);
+                    }
                 }
             }
-            
+
             // Check if we should continue based on running flag
             if running.load(Ordering::Relaxed) {
                 pa::Continue

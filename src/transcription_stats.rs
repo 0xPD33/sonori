@@ -12,6 +12,8 @@ pub struct TranscriptionStats {
     pub min_rtf: f32,
     pub max_rtf: f32,
     pub avg_rtf: f32,
+    pub audio_channel_drops: u64,
+    pub segment_channel_drops: u64,
 }
 
 impl TranscriptionStats {
@@ -24,6 +26,8 @@ impl TranscriptionStats {
             min_rtf: f32::MAX,
             max_rtf: 0.0,
             avg_rtf: 0.0,
+            audio_channel_drops: 0,
+            segment_channel_drops: 0,
         }
     }
 
@@ -40,6 +44,16 @@ impl TranscriptionStats {
         self.avg_rtf = self.total_inference_time / self.total_audio_duration;
     }
 
+    pub fn record_audio_drop(&mut self, count: u64) -> u64 {
+        self.audio_channel_drops += count;
+        self.audio_channel_drops
+    }
+
+    pub fn record_segment_drop(&mut self, count: u64) -> u64 {
+        self.segment_channel_drops += count;
+        self.segment_channel_drops
+    }
+
     pub fn report(&self) -> String {
         format!(
             "Transcription Statistics:\n\
@@ -49,7 +63,9 @@ impl TranscriptionStats {
              - Total processing time: {:.2}s\n\
              - Average real-time factor (RTF): {:.2}x\n\
              - Min RTF: {:.2}x\n\
-             - Max RTF: {:.2}x",
+             - Max RTF: {:.2}x\n\
+             - Audio channel drops: {}\n\
+             - Segment channel drops: {}",
             self.segments_processed,
             self.total_audio_duration,
             self.total_inference_time,
@@ -60,7 +76,9 @@ impl TranscriptionStats {
             } else {
                 self.min_rtf
             },
-            self.max_rtf
+            self.max_rtf,
+            self.audio_channel_drops,
+            self.segment_channel_drops
         )
     }
 

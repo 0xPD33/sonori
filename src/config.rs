@@ -54,16 +54,16 @@ pub struct PortalConfig {
 pub struct ManualModeConfig {
     /// Maximum recording duration in seconds (default: 60)
     pub max_recording_duration_secs: u32,
-    
+
     /// Audio buffer size for manual sessions (default: 16000 * 60 = 1 min at 16kHz)
     pub manual_buffer_size: usize,
-    
+
     /// Whether to auto-start a new session after completing one
     pub auto_restart_sessions: bool,
-    
+
     /// Whether to clear previous transcript when starting new session
     pub clear_on_new_session: bool,
-    
+
     /// Processing timeout in seconds
     pub processing_timeout_secs: u32,
 }
@@ -206,6 +206,7 @@ pub struct WhisperOptionsSerde {
 
 /// Configuration for Voice Activity Detection
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct VadConfigSerde {
     /// Probability threshold for speech detection (0.0-1.0)
     pub threshold: f32,
@@ -213,6 +214,8 @@ pub struct VadConfigSerde {
     pub hangbefore_frames: usize,
     /// Number of frames after speech before ending segment
     pub hangover_frames: usize,
+    /// Number of samples to advance between frames
+    pub hop_samples: usize,
     /// Maximum buffer size in seconds
     pub max_buffer_duration_sec: f32,
     /// Maximum number of segments to keep
@@ -225,6 +228,7 @@ impl Default for VadConfigSerde {
             threshold: 0.2,                // Silero uses probability threshold (0.0-1.0)
             hangbefore_frames: 1,          // Wait for this many frames before confirming speech
             hangover_frames: 15, // Wait for this many frames of silence before ending segment
+            hop_samples: 160,    // 10ms hop for overlapping windows
             max_buffer_duration_sec: 30.0, // Maximum buffer size in seconds
             max_segment_count: 20, // Maximum number of segments to keep
         }
@@ -234,15 +238,16 @@ impl Default for VadConfigSerde {
 impl SileroVadConfig {
     pub fn from_config(
         vad_config: &VadConfigSerde,
-        buffer_size: usize,
+        _buffer_size: usize,
         sample_rate: usize,
     ) -> Self {
         Self {
             threshold: vad_config.threshold,
-            frame_size: buffer_size,
+            frame_size: 512,
             sample_rate,
             hangbefore_frames: vad_config.hangbefore_frames,
             hangover_frames: vad_config.hangover_frames,
+            hop_samples: vad_config.hop_samples,
             max_buffer_duration: (vad_config.max_buffer_duration_sec * sample_rate as f32) as usize,
             max_segment_count: vad_config.max_segment_count,
         }
@@ -250,13 +255,14 @@ impl SileroVadConfig {
 }
 
 impl From<(VadConfigSerde, usize, usize)> for SileroVadConfig {
-    fn from((config, buffer_size, sample_rate): (VadConfigSerde, usize, usize)) -> Self {
+    fn from((config, _buffer_size, sample_rate): (VadConfigSerde, usize, usize)) -> Self {
         Self {
             threshold: config.threshold,
-            frame_size: buffer_size,
+            frame_size: 512,
             sample_rate,
             hangbefore_frames: config.hangbefore_frames,
             hangover_frames: config.hangover_frames,
+            hop_samples: config.hop_samples,
             max_buffer_duration: (config.max_buffer_duration_sec * sample_rate as f32) as usize,
             max_segment_count: config.max_segment_count,
         }

@@ -198,24 +198,34 @@ impl TranscriptionProcessor {
     ) -> String {
         let start_time = Instant::now();
         let duration = segment.end_time - segment.start_time;
-        
+
         println!("Processing manual segment: {:.2}s of audio", duration);
-        
+
         // For very long segments, we might want to split them into smaller chunks
         // to avoid memory issues and improve processing reliability
         if duration > 30.0 {
             println!("Large manual segment detected, processing in chunks...");
             // For manual segments, we need to estimate sample rate from the segment data
             let estimated_sample_rate = (segment.samples.len() as f64 / duration) as usize;
-            return Self::process_large_manual_segment(whisper, segment, language, options, stats, estimated_sample_rate);
+            return Self::process_large_manual_segment(
+                whisper,
+                segment,
+                language,
+                options,
+                stats,
+                estimated_sample_rate,
+            );
         }
-        
+
         // Process normally for smaller manual segments
         let result = transcribe_with_whisper(whisper, segment, language, options, stats);
-        
+
         let processing_time = start_time.elapsed();
-        println!("Manual segment processing completed in {:.2}s", processing_time.as_secs_f32());
-        
+        println!(
+            "Manual segment processing completed in {:.2}s",
+            processing_time.as_secs_f32()
+        );
+
         result
     }
 
@@ -232,46 +242,44 @@ impl TranscriptionProcessor {
         let overlap_samples = 2 * sample_rate; // 2 seconds overlap to avoid cutting words
         let mut transcriptions = Vec::new();
         let mut start_idx = 0;
-        
+
         while start_idx < segment.samples.len() {
             let end_idx = (start_idx + chunk_duration_samples).min(segment.samples.len());
-            
+
             // Create chunk segment
             let chunk_audio = segment.samples[start_idx..end_idx].to_vec();
             let chunk_start_time = start_idx as f64 / sample_rate as f64;
             let chunk_end_time = end_idx as f64 / sample_rate as f64;
-            
+
             let chunk_segment = AudioSegment {
                 samples: chunk_audio,
                 start_time: chunk_start_time,
                 end_time: chunk_end_time,
             };
-            
-            println!("Processing chunk {:.1}s - {:.1}s", chunk_start_time, chunk_end_time);
-            
-            // Transcribe chunk
-            let chunk_transcription = transcribe_with_whisper(
-                whisper, 
-                &chunk_segment, 
-                language, 
-                options, 
-                stats
+
+            println!(
+                "Processing chunk {:.1}s - {:.1}s",
+                chunk_start_time, chunk_end_time
             );
-            
+
+            // Transcribe chunk
+            let chunk_transcription =
+                transcribe_with_whisper(whisper, &chunk_segment, language, options, stats);
+
             if !chunk_transcription.is_empty() {
                 transcriptions.push(chunk_transcription.trim().to_string());
             }
-            
+
             // Move to next chunk with overlap to avoid cutting words
             if end_idx >= segment.samples.len() {
                 break;
             }
             start_idx = end_idx - overlap_samples;
         }
-        
+
         // Combine all chunk transcriptions
         let combined = transcriptions.join(" ");
-        
+
         // Clean up potential word duplicates from overlapping chunks
         Self::clean_overlap_duplicates(&combined)
     }
@@ -282,19 +290,19 @@ impl TranscriptionProcessor {
         if words.is_empty() {
             return String::new();
         }
-        
+
         let mut cleaned_words = vec![words[0]];
-        
+
         for i in 1..words.len() {
             let current_word = words[i].to_lowercase();
-            let previous_word = words[i-1].to_lowercase();
-            
+            let previous_word = words[i - 1].to_lowercase();
+
             // Skip if current word is the same as previous (likely overlap duplicate)
             if current_word != previous_word {
                 cleaned_words.push(words[i]);
             }
         }
-        
+
         cleaned_words.join(" ")
     }
 }

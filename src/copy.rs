@@ -11,14 +11,8 @@ impl WlCopy {
                 println!("Copied '{}' to clipboard", text);
                 Ok(())
             }
-            Ok(status) => {
-                Err(format!("wl-copy failed with status {}", status))
-            }
-            Err(e) => {
-                Err(format!("Error executing wl-copy: {}", e))
-            }
+            Ok(status) => Err(format!("wl-copy failed with status {}", status)),
+            Err(e) => Err(format!("Error executing wl-copy: {}", e)),
         }
     }
 }
-
-

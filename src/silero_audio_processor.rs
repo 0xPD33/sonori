@@ -36,6 +36,8 @@ pub struct VadConfig {
     pub hangbefore_frames: usize,
     /// Number of frames after speech before silence
     pub hangover_frames: usize,
+    /// Number of samples to advance between frames
+    pub hop_samples: usize,
     /// Maximum buffer size in samples
     pub max_buffer_duration: usize,
     /// Maximum number of segments to process at once
@@ -46,10 +48,11 @@ impl Default for VadConfig {
     fn default() -> Self {
         Self {
             threshold: 0.2,
-            frame_size: 1024,            // ~64ms at 16kHz
+            frame_size: 512,             // 32ms window at 16kHz
             sample_rate: 16000,          // 16kHz (supported by Silero VAD)
             hangbefore_frames: 1,        // Frames before confirming speech
             hangover_frames: 15,         // Frames after speech before silence
+            hop_samples: 160,            // 10ms hop for overlapping windows
             max_buffer_duration: 480000, // 30 seconds at 16kHz
             max_segment_count: 20,       // Maximum segments to keep in memory
         }
@@ -122,8 +125,8 @@ impl SileroVad {
         // Create ONNX session with optimized settings and limited threading
         let session = Session::builder()?
             .with_optimization_level(GraphOptimizationLevel::Level3)?
-            .with_intra_threads(1)?  // Single thread for individual operations
-            .with_inter_threads(1)?  // Single thread for operator parallelism
+            .with_intra_threads(1)? // Single thread for individual operations
+            .with_inter_threads(1)? // Single thread for operator parallelism
             .commit_from_file(model_path)?;
 
         // Initialize model state
@@ -217,11 +220,7 @@ impl SileroVad {
         let sample_rate_tensor = Tensor::from_array(self.sample_rate.to_owned())?;
 
         // Run inference
-        let inps = ort::inputs![
-            frame_tensor,
-            state_tensor,
-            sample_rate_tensor,
-        ];
+        let inps = ort::inputs![frame_tensor, state_tensor, sample_rate_tensor,];
 
         let res = self.session.run(SessionInputs::ValueSlice::<3>(&inps))?;
 
@@ -234,21 +233,28 @@ impl SileroVad {
     }
 
     /// Process a frame of audio samples and update VAD state
-    pub fn process_frame(&mut self, frame: &[f32]) -> Result<VadState, ort::Error> {
+    pub fn process_frame(&mut self, frame: &[f32], hop_len: usize) -> Result<VadState, ort::Error> {
         let speech_prob = self.calc_speech_prob(frame)?;
 
         // Update VAD state first, before changing time or buffer
         self.update_vad_state(speech_prob);
 
-        // Update current time
-        let time_increment = frame.len() as f64 / self.sample_rate_f64;
+        let effective_hop = if self.sample_buffer.is_empty() {
+            frame.len()
+        } else {
+            hop_len.min(frame.len())
+        };
+
+        // Update current time using hop advancement
+        let time_increment = effective_hop as f64 / self.sample_rate_f64;
         self.current_time += time_increment;
 
-        // Add frame to sample buffer
-        self.sample_buffer.extend_from_slice(frame);
+        // Add only the newly observed samples to the buffer to avoid duplication
+        let start_idx = frame.len().saturating_sub(effective_hop);
+        self.sample_buffer.extend_from_slice(&frame[start_idx..]);
 
         // Track number of samples added since last trim
-        self.samples_since_trim += frame.len();
+        self.samples_since_trim += effective_hop;
 
         // Only check buffer size every N frames
         self.frame_counter += 1;
@@ -336,12 +342,17 @@ impl SileroVad {
 
                     if self.frames_in_state >= hangbefore_frames {
                         // Precompute values needed for start time calculation
-                        let frames_to_time = hangbefore_frames as f64
-                            * self.config.frame_size as f64
-                            / self.sample_rate_f64;
+                        let hop = self.config.hop_samples.max(1);
+                        let frame_samples = self.config.frame_size;
+                        let total_samples = if hangbefore_frames == 0 {
+                            0
+                        } else {
+                            frame_samples + (hangbefore_frames - 1) * hop
+                        };
+                        let frames_to_time = total_samples as f64 / self.sample_rate_f64;
 
                         // Set speech start time, accounting for the hangbefore frames
-                        let start_time = self.current_time - frames_to_time;
+                        let start_time = (self.current_time - frames_to_time).max(0.0);
 
                         self.speech_start_time = Some(start_time);
                         self.current_state = VadState::Speech;
@@ -475,21 +486,24 @@ impl SileroVad {
 
         // Pre-allocate frame vector once and reuse it
         let frame_size = self.config.frame_size;
+        let hop_samples = self.config.hop_samples.max(1);
         let mut frame = Vec::with_capacity(frame_size);
 
         // Add the new samples to our buffer
         self.buffer.extend(samples);
 
-        // Process as many full frames as we can
+        // Process as many full frames as we can using a sliding window
         while self.buffer.len() >= frame_size {
             frame.clear();
 
-            // Extract exactly frame_size samples into our frame buffer
-            let drain_size = frame_size.min(self.buffer.len());
-            frame.extend(self.buffer.drain(0..drain_size));
+            frame.extend(self.buffer.iter().take(frame_size).copied());
 
-            // Process this frame
-            self.process_frame(&frame)?;
+            // Process this frame; advance time by hop size while keeping overlap
+            let hop = hop_samples.min(frame.len());
+            self.process_frame(&frame, hop)?;
+
+            let drain = hop.min(self.buffer.len());
+            self.buffer.drain(0..drain);
         }
 
         // Only process partial frames if they are at least 1/4 of a frame
@@ -502,11 +516,15 @@ impl SileroVad {
 
             // Copy the remaining samples into the frame
             let remaining = self.buffer.len();
-            frame[0..remaining].copy_from_slice(&self.buffer.make_contiguous()[0..remaining]);
-            self.buffer.clear();
+            {
+                let contiguous = self.buffer.make_contiguous();
+                frame[0..remaining].copy_from_slice(&contiguous[0..remaining]);
+            }
 
-            // Process this partial frame
-            self.process_frame(&frame)?;
+            // Process this partial frame using the actual remaining samples as hop
+            self.process_frame(&frame, remaining)?;
+
+            self.buffer.clear();
         }
 
         // Only check for proactive trimming when we've added enough
