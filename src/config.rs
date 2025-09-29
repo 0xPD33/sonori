@@ -102,6 +102,67 @@ impl Default for ManualModeConfig {
     }
 }
 
+/// Configuration for display and rendering settings
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DisplayConfig {
+    /// VSync mode: "Auto", "Enabled", "Adaptive", "Disabled", or "Mailbox"
+    /// - Auto: Use first available present mode (default behavior)
+    /// - Enabled: Traditional vsync (Fifo) - waits for vertical blank, no tearing
+    /// - Adaptive: Adaptive vsync (FifoRelaxed) - vsync when above refresh rate, immediate when below
+    /// - Disabled: No vsync (Immediate) - lowest latency, potential tearing
+    /// - Mailbox: Triple-buffered vsync - no tearing, lowest latency with vsync
+    pub vsync_mode: String,
+
+    /// Target FPS when vsync is disabled (prevents unbounded frame rates)
+    pub target_fps: u32,
+}
+
+impl Default for DisplayConfig {
+    fn default() -> Self {
+        Self {
+            vsync_mode: "Enabled".to_string(), // Default to traditional vsync
+            target_fps: 60, // Cap at 60 FPS when vsync disabled
+        }
+    }
+}
+
+impl DisplayConfig {
+    /// Convert string vsync_mode to wgpu::PresentMode, with fallback logic
+    pub fn to_present_mode(&self, available_modes: &[wgpu::PresentMode]) -> wgpu::PresentMode {
+        let preferred = match self.vsync_mode.as_str() {
+            "Enabled" => wgpu::PresentMode::Fifo,
+            "Adaptive" => wgpu::PresentMode::FifoRelaxed,
+            "Disabled" => wgpu::PresentMode::Immediate,
+            "Mailbox" => wgpu::PresentMode::Mailbox,
+            "Auto" | _ => {
+                // Auto mode: prefer Fifo, but accept whatever is available
+                return available_modes.first().copied().unwrap_or(wgpu::PresentMode::Fifo);
+            }
+        };
+
+        // Check if preferred mode is available
+        if available_modes.contains(&preferred) {
+            preferred
+        } else {
+            // Fallback to Fifo (guaranteed to be available), or first available
+            if available_modes.contains(&wgpu::PresentMode::Fifo) {
+                println!(
+                    "Warning: Preferred vsync mode '{}' not available, falling back to Fifo",
+                    self.vsync_mode
+                );
+                wgpu::PresentMode::Fifo
+            } else {
+                println!(
+                    "Warning: Preferred vsync mode '{}' not available, using first available mode",
+                    self.vsync_mode
+                );
+                available_modes.first().copied().unwrap_or(wgpu::PresentMode::Fifo)
+            }
+        }
+    }
+}
+
 impl KeyboardShortcuts {
     /// Convert a key string to a KeyCode
     pub fn to_key_code(&self, key_str: &str) -> Option<KeyCode> {
@@ -164,6 +225,7 @@ impl KeyboardShortcuts {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AppConfig {
     /// Main model to use for transcription
     pub model: String,
@@ -195,6 +257,8 @@ pub struct AppConfig {
     pub portal_config: PortalConfig,
     /// Manual transcription mode configuration
     pub manual_mode_config: ManualModeConfig,
+    /// Display and rendering configuration
+    pub display_config: DisplayConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -226,11 +290,11 @@ impl Default for VadConfigSerde {
     fn default() -> Self {
         Self {
             threshold: 0.2,                // Silero uses probability threshold (0.0-1.0)
-            hangbefore_frames: 1,          // Wait for this many frames before confirming speech
-            hangover_frames: 15, // Wait for this many frames of silence before ending segment
-            hop_samples: 160,    // 10ms hop for overlapping windows
+            hangbefore_frames: 3,          // Wait 30ms (3 frames) before confirming speech
+            hangover_frames: 15,           // Wait 150ms (15 frames) of silence before ending segment
+            hop_samples: 160,              // 10ms hop for overlapping windows
             max_buffer_duration_sec: 30.0, // Maximum buffer size in seconds
-            max_segment_count: 20, // Maximum number of segments to keep
+            max_segment_count: 20,         // Maximum number of segments to keep
         }
     }
 }
@@ -290,6 +354,7 @@ impl Default for AppConfig {
             keyboard_shortcuts: KeyboardShortcuts::default(),
             portal_config: PortalConfig::default(),
             manual_mode_config: ManualModeConfig::default(),
+            display_config: DisplayConfig::default(),
         }
     }
 }
