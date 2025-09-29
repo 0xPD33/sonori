@@ -290,8 +290,8 @@ impl Default for VadConfigSerde {
     fn default() -> Self {
         Self {
             threshold: 0.2,                // Silero uses probability threshold (0.0-1.0)
-            hangbefore_frames: 3,          // Wait 30ms (3 frames) before confirming speech
-            hangover_frames: 15,           // Wait 150ms (15 frames) of silence before ending segment
+            hangbefore_frames: 1,          // Wait 10ms (1 frame) before confirming speech
+            hangover_frames: 12,           // Wait 120ms (12 frames) of silence before ending segment
             hop_samples: 160,              // 10ms hop for overlapping windows
             max_buffer_duration_sec: 30.0, // Maximum buffer size in seconds
             max_segment_count: 20,         // Maximum number of segments to keep

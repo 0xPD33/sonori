@@ -50,8 +50,8 @@ impl Default for VadConfig {
             threshold: 0.2,
             frame_size: 512,             // 32ms window at 16kHz
             sample_rate: 16000,          // 16kHz (supported by Silero VAD)
-            hangbefore_frames: 1,        // Frames before confirming speech
-            hangover_frames: 15,         // Frames after speech before silence
+            hangbefore_frames: 1,        // 10ms before confirming speech
+            hangover_frames: 12,         // 120ms after speech before silence
             hop_samples: 160,            // 10ms hop for overlapping windows
             max_buffer_duration: 480000, // 30 seconds at 16kHz
             max_segment_count: 20,       // Maximum segments to keep in memory
@@ -450,6 +450,8 @@ impl SileroVad {
         }
 
         // Adjust times for the current buffer window - doing calculations only once
+        // Use asymmetric padding: add context before speech (for onset detection),
+        // but not after (hangover_frames already provides adequate tail buffer)
         let adjusted_start = (start_time - self.time_offset - context_duration).max(0.0);
         let adjusted_end = (end_time - self.time_offset).max(0.0);
 
@@ -506,9 +508,9 @@ impl SileroVad {
             self.buffer.drain(0..drain);
         }
 
-        // Only process partial frames if they are at least 1/4 of a frame
-        // This reduces CPU impact while still capturing significant speech
-        let partial_threshold = frame_size / 4;
+        // Process partial frames if they are at least 1/8 of a frame (64 samples = 4ms)
+        // This ensures we capture trailing audio without excessive CPU overhead
+        let partial_threshold = frame_size / 8;
 
         if !self.buffer.is_empty() && self.buffer.len() >= partial_threshold {
             frame.clear();
