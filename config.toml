@@ -15,7 +15,7 @@ repetition_penalty = 1.25
 [vad_config]
 threshold = 0.2
 hangbefore_frames = 1
-hangover_frames = 10
+hangover_frames = 12
 hop_samples = 160
 max_buffer_duration_sec = 30.0
 max_segment_count = 20
@@ -41,3 +41,7 @@ manual_buffer_size = 960000
 auto_restart_sessions = false
 clear_on_new_session = true
 processing_timeout_secs = 30
+
+[display_config]
+vsync_mode = "Enabled"
+target_fps = 60
