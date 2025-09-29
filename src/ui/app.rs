@@ -130,6 +130,7 @@ impl ApplicationHandler for WindowApp {
                 *self.transcription_mode_ref.lock(),
                 self.manual_session_sender.clone(),
                 self.transcription_mode_ref.clone(),
+                &self.config.display_config,
             );
 
             if let Some(audio_data) = &self.audio_data {
@@ -298,6 +299,7 @@ fn create_window(
     transcription_mode_ref: Arc<
         parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>,
     >,
+    display_config: &crate::config::DisplayConfig,
 ) -> WindowState {
     // Use spectrogram size plus text area height and gap
     let fixed_size = PhysicalSize::new(
@@ -344,5 +346,6 @@ fn create_window(
         transcription_mode,
         manual_session_sender,
         transcription_mode_ref,
+        display_config,
     )
 }

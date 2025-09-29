@@ -54,6 +54,10 @@ pub struct WindowState {
     transcription_mode_ref:
         Arc<parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>>,
     last_known_mode: crate::real_time_transcriber::TranscriptionMode,
+    // Frame rate limiting
+    last_frame_time: Option<std::time::Instant>,
+    target_frame_duration: std::time::Duration,
+    present_mode: wgpu::PresentMode,
 }
 
 impl WindowState {
@@ -68,6 +72,7 @@ impl WindowState {
         transcription_mode_ref: Arc<
             parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>,
         >,
+        display_config: &crate::config::DisplayConfig,
     ) -> Self {
         let window: Arc<dyn Window> = Arc::from(window);
 
@@ -117,12 +122,19 @@ impl WindowState {
             .next()
             .unwrap_or(surface_caps.formats[0]);
 
+        // Select present mode based on display configuration
+        let present_mode = display_config.to_present_mode(&surface_caps.present_modes);
+        println!(
+            "Selected present mode: {:?} (vsync_mode: {})",
+            present_mode, display_config.vsync_mode
+        );
+
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
             width: fixed_width,
             height: fixed_height,
-            present_mode: surface_caps.present_modes[0],
+            present_mode,
             alpha_mode: wgpu::CompositeAlphaMode::PreMultiplied,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
@@ -199,6 +211,10 @@ impl WindowState {
         );
         let last_known_mode = transcription_mode;
 
+        // Calculate target frame duration from display config
+        let target_frame_duration =
+            std::time::Duration::from_secs_f64(1.0 / display_config.target_fps as f64);
+
         Self {
             window,
             surface,
@@ -230,6 +246,11 @@ impl WindowState {
             recording,
             transcription_mode_ref,
             last_known_mode,
+
+            // Frame rate limiting
+            last_frame_time: None,
+            target_frame_duration,
+            present_mode,
         }
     }
 
@@ -269,6 +290,19 @@ impl WindowState {
     }
 
     pub fn draw(&mut self, _width: u32) {
+        // Frame rate limiting for Immediate present mode (no vsync)
+        if self.present_mode == wgpu::PresentMode::Immediate {
+            if let Some(last_time) = self.last_frame_time {
+                let elapsed = last_time.elapsed();
+                if elapsed < self.target_frame_duration {
+                    // Not enough time has passed, skip this frame
+                    // Still request redraw for next opportunity
+                    self.window.request_redraw();
+                    return;
+                }
+            }
+        }
+
         // Check if transcription mode has changed
         let current_mode = *self.transcription_mode_ref.lock();
         if current_mode != self.last_known_mode {
@@ -469,6 +503,11 @@ impl WindowState {
         // Submit all rendering commands
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
+
+        // Update frame time for frame rate limiting
+        if self.present_mode == wgpu::PresentMode::Immediate {
+            self.last_frame_time = Some(std::time::Instant::now());
+        }
 
         // ALWAYS request redraw to keep animation loop going
         // This ensures spectrogram decay animation continues when paused
