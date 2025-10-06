@@ -384,6 +384,9 @@ impl RealTimeTranscriber {
         let transcript_history = self.transcript_history.clone();
         let audio_visualization_data = self.audio_visualization_data.clone();
         let audio_processor_ref = self.audio_processor_ref.clone();
+        let app_config = read_app_config();
+        let manual_mode_config = app_config.manual_mode_config.clone();
+        let sample_rate = app_config.sample_rate;
 
         tokio::spawn(async move {
             while running.load(Ordering::Relaxed) {
@@ -405,12 +408,12 @@ impl RealTimeTranscriber {
                                         }
 
                                         // Create new session
-                                        let max_duration = read_app_config().manual_mode_config.max_recording_duration_secs;
+                                        let max_duration = manual_mode_config.max_recording_duration_secs;
                                         let new_session = ManualSession::new(max_duration);
                                         let session_id = new_session.session_id.clone();
 
                                         // Clear transcript if configured to do so
-                                        if read_app_config().manual_mode_config.clear_on_new_session {
+                                        if manual_mode_config.clear_on_new_session {
                                             let mut transcript_history_lock = transcript_history.write();
                                             transcript_history_lock.clear();
 
@@ -452,8 +455,8 @@ impl RealTimeTranscriber {
                                         // Now trigger transcription without holding the lock
                                         if let Some(session_id) = session_id_opt {
                                             if let Some(audio_processor) = &audio_processor_ref {
-                                                let sample_rate = read_app_config().sample_rate;
-                                                match audio_processor.trigger_manual_transcription(sample_rate).await {
+                                                let sr = sample_rate;
+                                                match audio_processor.trigger_manual_transcription(sr).await {
                                                     Ok(()) => {
                                                         println!("Manual session {} transcription triggered successfully", session_id);
                                                     }
@@ -529,9 +532,9 @@ impl RealTimeTranscriber {
                                             // If session was recording, trigger transcription before canceling
                                             if should_transcribe {
                                                 if let Some(audio_processor) = &audio_processor_ref {
-                                                    let sample_rate = read_app_config().sample_rate;
                                                     tokio::spawn({
                                                         let audio_processor = audio_processor.clone();
+                                                        let sample_rate = sample_rate;
                                                         async move {
                                                             if let Err(e) = audio_processor.trigger_manual_transcription(sample_rate).await {
                                                                 eprintln!("Failed to process final manual session during mode switch: {}", e);

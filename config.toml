@@ -15,7 +15,7 @@ repetition_penalty = 1.25
 [vad_config]
 threshold = 0.2
 hangbefore_frames = 1
-hangover_frames = 12
+hangover_frames = 20
 hop_samples = 160
 max_buffer_duration_sec = 30.0
 max_segment_count = 20

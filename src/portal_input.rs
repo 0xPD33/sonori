@@ -1,10 +1,12 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use ashpd::desktop::remote_desktop::{DeviceType, KeyState, RemoteDesktop};
 use ashpd::desktop::screencast::{CursorMode, Screencast, SourceType};
 use ashpd::desktop::PersistMode;
 use ashpd::desktop::Session;
 use ashpd::zbus;
 use xkbcommon::xkb::keysyms;
+
+use crate::portal_tokens::PortalTokens;
 
 /// Manages an XDG Desktop Portal RemoteDesktop session to inject keystrokes
 pub struct PortalInput {
@@ -15,40 +17,41 @@ pub struct PortalInput {
 }
 
 impl PortalInput {
-    /// Create a new portal input session, optionally starting a screencast (commonly required)
-    pub async fn new(start_screencast: bool) -> Result<Self> {
+    /// Create a new portal input session, preferring keyboard-only access and
+    /// falling back to a screencast request on compositors that require it.
+    pub async fn new() -> Result<Self> {
         let connection = zbus::Connection::session().await?;
-        let rd = RemoteDesktop::new().await?;
 
-        // Many backends require a screencast session to enable input control
-        if start_screencast {
-            let screencast = Screencast::new().await?;
-            // Create a session and pick the entire monitor (no persist)
-            let session = screencast.create_session().await?;
-            screencast
-                .select_sources(
-                    &session,
-                    CursorMode::Hidden,
-                    SourceType::Monitor.into(),
-                    false,
-                    None,
-                    PersistMode::DoNot,
-                )
-                .await?;
-            // Start with a dummy window identifier (use None for no parent window)
-            let _streams = screencast.start(&session, None).await?;
+        match Self::try_new_internal(connection.clone(), false).await {
+            Ok(instance) => Ok(instance),
+            Err(first_err) => {
+                eprintln!(
+                    "Portal keyboard session without screencast failed ({}), retrying with screencast",
+                    first_err
+                );
+                Self::try_new_internal(connection, true)
+                    .await
+                    .context(
+                        "Failed to establish portal keyboard control even with screencast fallback",
+                    )
+            }
         }
+    }
 
-        // Create RemoteDesktop session and request keyboard control
-        let rd_session = rd.create_session().await?;
-        rd.select_devices(
-            &rd_session,
-            DeviceType::Keyboard.into(),
-            None,
-            PersistMode::DoNot,
-        )
-        .await?;
-        rd.start(&rd_session, None).await?;
+    async fn try_new_internal(
+        connection: zbus::Connection,
+        start_screencast: bool,
+    ) -> Result<Self> {
+        let rd = RemoteDesktop::new().await?;
+        let mut tokens = PortalTokens::load();
+        let (rd_session, tokens_updated) =
+            Self::configure_remote_desktop(&rd, start_screencast, &mut tokens).await?;
+
+        if tokens_updated {
+            if let Err(e) = tokens.save() {
+                eprintln!("Failed to persist portal restore tokens: {}", e);
+            }
+        }
 
         Ok(Self {
             connection,
@@ -56,6 +59,61 @@ impl PortalInput {
             rd_session,
             screencast_active: start_screencast,
         })
+    }
+
+    async fn configure_remote_desktop(
+        rd: &RemoteDesktop<'static>,
+        start_screencast: bool,
+        tokens: &mut PortalTokens,
+    ) -> Result<(Session<'static, RemoteDesktop<'static>>, bool)> {
+        let mut tokens_updated = false;
+        let rd_session = rd.create_session().await?;
+
+        let keyboard_restore = tokens.remote_keyboard.as_deref();
+        rd.select_devices(
+            &rd_session,
+            DeviceType::Keyboard.into(),
+            keyboard_restore,
+            PersistMode::ExplicitlyRevoked,
+        )
+        .await?
+        .response()?;
+
+        if start_screencast {
+            let screencast = Screencast::new().await?;
+            let screencast_restore = tokens.remote_screencast.as_deref();
+            screencast
+                .select_sources(
+                    &rd_session,
+                    CursorMode::Hidden,
+                    SourceType::Monitor.into(),
+                    false,
+                    screencast_restore,
+                    PersistMode::ExplicitlyRevoked,
+                )
+                .await?
+                .response()?;
+            let streams = screencast.start(&rd_session, None).await?.response()?;
+            if let Some(token) = streams.restore_token() {
+                tokens_updated |= tokens
+                    .remote_screencast
+                    .replace(token.to_string())
+                    .as_deref()
+                    != Some(token);
+            } else if tokens.remote_screencast.take().is_some() {
+                tokens_updated = true;
+            }
+        }
+
+        let started = rd.start(&rd_session, None).await?.response()?;
+        if let Some(token) = started.restore_token() {
+            tokens_updated |=
+                tokens.remote_keyboard.replace(token.to_string()).as_deref() != Some(token);
+        } else if tokens.remote_keyboard.take().is_some() {
+            tokens_updated = true;
+        }
+
+        Ok((rd_session, tokens_updated))
     }
 
     /// Send Ctrl+V via keysym to paste from clipboard

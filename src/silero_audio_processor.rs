@@ -51,7 +51,7 @@ impl Default for VadConfig {
             frame_size: 512,             // 32ms window at 16kHz
             sample_rate: 16000,          // 16kHz (supported by Silero VAD)
             hangbefore_frames: 1,        // 10ms before confirming speech
-            hangover_frames: 12,         // 120ms after speech before silence
+            hangover_frames: 20,         // 200ms after speech before silence
             hop_samples: 160,            // 10ms hop for overlapping windows
             max_buffer_duration: 480000, // 30 seconds at 16kHz
             max_segment_count: 20,       // Maximum segments to keep in memory

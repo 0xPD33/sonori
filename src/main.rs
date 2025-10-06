@@ -9,6 +9,7 @@ mod copy;
 mod download;
 mod global_shortcuts;
 mod portal_input;
+mod portal_tokens;
 mod real_time_transcriber;
 mod silero_audio_processor;
 mod stats_reporter;
@@ -419,7 +420,7 @@ async fn run_gui_mode(
     if app_config.portal_config.enable_xdg_portal {
         tokio::spawn(async move {
             // Attempt to start screencast + remote desktop session
-            let portal = crate::portal_input::PortalInput::new(true).await;
+            let portal = crate::portal_input::PortalInput::new().await;
             let portal = match portal {
                 Ok(p) => p,
                 Err(e) => {

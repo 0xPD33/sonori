@@ -122,7 +122,7 @@ impl Default for DisplayConfig {
     fn default() -> Self {
         Self {
             vsync_mode: "Enabled".to_string(), // Default to traditional vsync
-            target_fps: 60, // Cap at 60 FPS when vsync disabled
+            target_fps: 60,                    // Cap at 60 FPS when vsync disabled
         }
     }
 }
@@ -137,7 +137,10 @@ impl DisplayConfig {
             "Mailbox" => wgpu::PresentMode::Mailbox,
             "Auto" | _ => {
                 // Auto mode: prefer Fifo, but accept whatever is available
-                return available_modes.first().copied().unwrap_or(wgpu::PresentMode::Fifo);
+                return available_modes
+                    .first()
+                    .copied()
+                    .unwrap_or(wgpu::PresentMode::Fifo);
             }
         };
 
@@ -157,7 +160,10 @@ impl DisplayConfig {
                     "Warning: Preferred vsync mode '{}' not available, using first available mode",
                     self.vsync_mode
                 );
-                available_modes.first().copied().unwrap_or(wgpu::PresentMode::Fifo)
+                available_modes
+                    .first()
+                    .copied()
+                    .unwrap_or(wgpu::PresentMode::Fifo)
             }
         }
     }
@@ -291,10 +297,10 @@ impl Default for VadConfigSerde {
         Self {
             threshold: 0.2,                // Silero uses probability threshold (0.0-1.0)
             hangbefore_frames: 1,          // Wait 10ms (1 frame) before confirming speech
-            hangover_frames: 12,           // Wait 120ms (12 frames) of silence before ending segment
-            hop_samples: 160,              // 10ms hop for overlapping windows
+            hangover_frames: 20, // Wait 200ms (20 frames) of silence before ending segment
+            hop_samples: 160,    // 10ms hop for overlapping windows
             max_buffer_duration_sec: 30.0, // Maximum buffer size in seconds
-            max_segment_count: 20,         // Maximum number of segments to keep
+            max_segment_count: 20, // Maximum number of segments to keep
         }
     }
 }

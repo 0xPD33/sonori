@@ -1,4 +1,5 @@
 use parking_lot::{Mutex, RwLock};
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -25,6 +26,8 @@ pub struct AudioProcessor {
     // Manual mode fields
     transcription_mode: Arc<Mutex<TranscriptionMode>>,
     manual_audio_buffer: Arc<Mutex<Vec<f32>>>,
+
+    sample_rate: usize,
 }
 
 impl AudioProcessor {
@@ -55,6 +58,7 @@ impl AudioProcessor {
             transcription_stats,
             transcription_mode,
             manual_audio_buffer,
+            sample_rate: app_config.sample_rate,
         }
     }
 
@@ -71,10 +75,13 @@ impl AudioProcessor {
         let transcription_mode = self.transcription_mode.clone();
         let manual_audio_buffer = self.manual_audio_buffer.clone();
         let transcription_stats = self.transcription_stats.clone();
+        let sample_rate = self.sample_rate;
 
         // Create thread-local buffer
         let mut audio_buffer = Vec::with_capacity(buffer_size);
         let max_vis_samples = config.max_vis_samples;
+        let preroll_max_samples = ((sample_rate * 150) / 1000).max(buffer_size);
+        let mut preroll_buffer: VecDeque<f32> = VecDeque::with_capacity(preroll_max_samples);
 
         // Start audio processing task
         tokio::spawn(async move {
@@ -86,11 +93,12 @@ impl AudioProcessor {
                 let is_recording = recording.load(Ordering::Relaxed);
 
                 if !is_recording {
-                    // When paused, decay spectrogram to zero instead of clearing immediately
+                    // When paused, decay spectrogram to zero instead of clearing immediately.
+                    // Only keep the tight 60 Hz loop while there is data to animate.
+                    let mut sleep_duration = Duration::from_millis(100);
                     {
                         let mut audio_data = audio_visualization_data.write(); // Blocking write to ensure decay happens
                         if !audio_data.samples.is_empty() {
-                            println!("Decaying spectrogram: {} samples", audio_data.samples.len());
                             // Gradually decay samples toward zero for smooth fade-out effect
                             for sample in &mut audio_data.samples {
                                 *sample *= 0.95; // Exponential decay factor
@@ -106,14 +114,16 @@ impl AudioProcessor {
                             if max_amplitude < 0.001 {
                                 // Samples have decayed enough, clear them
                                 audio_data.samples.clear();
-                                println!("Spectrogram decay completed - samples cleared");
+                            } else {
+                                // Keep animating while decay is visible
+                                sleep_duration = Duration::from_millis(16);
                             }
                         }
                         audio_data.is_speaking = false; // No longer speaking when paused
                     } // Release lock here
 
-                    // Continue the fade-out animation at ~60fps
-                    tokio::time::sleep(Duration::from_millis(16)).await;
+                    preroll_buffer.clear();
+                    tokio::time::sleep(sleep_duration).await;
                     continue;
                 }
 
@@ -123,6 +133,13 @@ impl AudioProcessor {
                         // Reuse buffer by clearing and extending
                         audio_buffer.clear();
                         audio_buffer.extend_from_slice(&samples);
+
+                        // Maintain rolling history for leading context
+                        preroll_buffer.extend(samples.iter().copied());
+                        if preroll_buffer.len() > preroll_max_samples {
+                            let excess = preroll_buffer.len() - preroll_max_samples;
+                            preroll_buffer.drain(0..excess);
+                        }
 
                         // Route to appropriate processing based on current mode
                         let current_mode = *transcription_mode.lock();
@@ -137,6 +154,9 @@ impl AudioProcessor {
                                     &transcription_stats,
                                     max_vis_samples,
                                     &mut latest_is_speaking,
+                                    &mut preroll_buffer,
+                                    preroll_max_samples,
+                                    sample_rate,
                                 )
                                 .await;
                             }
@@ -176,6 +196,9 @@ impl AudioProcessor {
         transcription_stats: &Arc<Mutex<TranscriptionStats>>,
         max_vis_samples: usize,
         latest_is_speaking: &mut bool,
+        preroll_buffer: &mut VecDeque<f32>,
+        preroll_max_samples: usize,
+        sample_rate: usize,
     ) {
         let (segments_result, vad_speaking) = {
             let mut processor = audio_processor.lock();
@@ -185,6 +208,7 @@ impl AudioProcessor {
         };
 
         let new_samples: Vec<f32> = audio_buffer.iter().take(max_vis_samples).copied().collect();
+        let was_speaking = *latest_is_speaking;
 
         let mut reset_history = false;
         {
@@ -223,7 +247,20 @@ impl AudioProcessor {
                 }
 
                 let total = segments.len();
-                for (idx, segment) in segments.into_iter().enumerate() {
+                let mut prepend_preroll = !was_speaking;
+                for (idx, mut segment) in segments.into_iter().enumerate() {
+                    if prepend_preroll && !preroll_buffer.is_empty() {
+                        let mut combined =
+                            Vec::with_capacity(preroll_buffer.len() + segment.samples.len());
+                        combined.extend(preroll_buffer.iter().copied());
+                        combined.extend_from_slice(&segment.samples);
+
+                        let preroll_duration = preroll_buffer.len() as f64 / sample_rate as f64;
+                        segment.samples = combined;
+                        segment.start_time = (segment.start_time - preroll_duration).max(0.0);
+                        prepend_preroll = false;
+                    }
+
                     if let Err(e) = segment_tx.send(segment).await {
                         eprintln!("Failed to send audio segment: {}", e);
                         let dropped = (total - idx) as u64;
@@ -243,6 +280,11 @@ impl AudioProcessor {
                         }
                         break;
                     }
+                }
+
+                if preroll_buffer.len() > preroll_max_samples {
+                    let excess = preroll_buffer.len() - preroll_max_samples;
+                    preroll_buffer.drain(0..excess);
                 }
             }
             Err(e) => {
