@@ -144,4 +144,61 @@ impl PortalInput {
             .await?;
         Ok(())
     }
+
+    /// Send Ctrl+Shift+V via keysym to paste from clipboard (for terminals)
+    pub async fn paste_via_ctrl_shift_v(&self) -> Result<()> {
+        use tokio::time::{sleep, Duration};
+
+        // Press Control
+        self.rd
+            .notify_keyboard_keysym(
+                &self.rd_session,
+                keysyms::KEY_Control_L as i32,
+                KeyState::Pressed,
+            )
+            .await?;
+        sleep(Duration::from_millis(10)).await;
+
+        // Press Shift
+        self.rd
+            .notify_keyboard_keysym(
+                &self.rd_session,
+                keysyms::KEY_Shift_L as i32,
+                KeyState::Pressed,
+            )
+            .await?;
+        sleep(Duration::from_millis(10)).await;
+
+        // Press 'v'
+        self.rd
+            .notify_keyboard_keysym(&self.rd_session, keysyms::KEY_v as i32, KeyState::Pressed)
+            .await?;
+        sleep(Duration::from_millis(50)).await;
+
+        // Release 'v'
+        self.rd
+            .notify_keyboard_keysym(&self.rd_session, keysyms::KEY_v as i32, KeyState::Released)
+            .await?;
+        sleep(Duration::from_millis(10)).await;
+
+        // Release Shift
+        self.rd
+            .notify_keyboard_keysym(
+                &self.rd_session,
+                keysyms::KEY_Shift_L as i32,
+                KeyState::Released,
+            )
+            .await?;
+        sleep(Duration::from_millis(10)).await;
+
+        // Release Control
+        self.rd
+            .notify_keyboard_keysym(
+                &self.rd_session,
+                keysyms::KEY_Control_L as i32,
+                KeyState::Released,
+            )
+            .await?;
+        Ok(())
+    }
 }

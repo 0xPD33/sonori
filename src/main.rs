@@ -418,6 +418,7 @@ async fn run_gui_mode(
 
     // Portal paste worker: establish a portal session and paste on demand (only if enabled)
     if app_config.portal_config.enable_xdg_portal {
+        let paste_shortcut = app_config.portal_config.paste_shortcut.clone();
         tokio::spawn(async move {
             // Attempt to start screencast + remote desktop session
             let portal = crate::portal_input::PortalInput::new().await;
@@ -428,15 +429,26 @@ async fn run_gui_mode(
                     return;
                 }
             };
-            // Drain the channel and paste using portal Ctrl+V after wl-copy
+
+            // Drain the channel and paste using configured shortcut
             loop {
                 match portal_rx.recv_timeout(Duration::from_millis(500)) {
                     Ok(text) => {
                         // Copy to clipboard (using our simplified wayland connection)
                         let _ = crate::copy::WlCopy::copy_to_clipboard(&text);
 
-                        // Trigger paste via portal
-                        if let Err(e) = portal.paste_via_ctrl_v().await {
+                        // Wait a bit for clipboard to be ready
+                        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+                        // Use configured paste shortcut
+                        let result = if paste_shortcut == "ctrl_v" {
+                            portal.paste_via_ctrl_v().await
+                        } else {
+                            // Default to ctrl_shift_v (works in terminals, mostly harmless elsewhere)
+                            portal.paste_via_ctrl_shift_v().await
+                        };
+
+                        if let Err(e) = result {
                             eprintln!("Portal paste failed: {}", e);
                         }
                     }

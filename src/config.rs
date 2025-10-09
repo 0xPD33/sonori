@@ -47,6 +47,8 @@ pub struct PortalConfig {
     pub manual_toggle_accelerator: String,
     /// Application ID used to register with xdg-desktop-portal (stable name)
     pub application_id: String,
+    /// Paste shortcut to use: "ctrl_shift_v" (default, works in terminals) or "ctrl_v"
+    pub paste_shortcut: String,
 }
 
 /// Configuration for manual transcription mode
@@ -86,6 +88,7 @@ impl Default for PortalConfig {
             enable_global_shortcuts: true,
             manual_toggle_accelerator: "<Super>Tab".to_string(),
             application_id: "dev.paddy.sonori".to_string(),
+            paste_shortcut: "ctrl_shift_v".to_string(), // Default: Ctrl+Shift+V (works in terminals)
         }
     }
 }
