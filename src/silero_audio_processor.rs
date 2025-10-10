@@ -42,6 +42,12 @@ pub struct VadConfig {
     pub max_buffer_duration: usize,
     /// Maximum number of segments to process at once
     pub max_segment_count: usize,
+    /// Number of non-speech frames to tolerate in PossibleSpeech before giving up
+    pub silence_tolerance_frames: usize,
+    /// Lower threshold for speech continuation (hysteresis)
+    pub speech_end_threshold: f32,
+    /// Exponential moving average smoothing factor (0.0-1.0, higher = more smoothing)
+    pub speech_prob_smoothing: f32,
 }
 
 impl Default for VadConfig {
@@ -50,11 +56,14 @@ impl Default for VadConfig {
             threshold: 0.2,
             frame_size: 512,             // 32ms window at 16kHz
             sample_rate: 16000,          // 16kHz (supported by Silero VAD)
-            hangbefore_frames: 1,        // 10ms before confirming speech
+            hangbefore_frames: 3,        // 30ms before confirming speech (noise robustness)
             hangover_frames: 20,         // 200ms after speech before silence
             hop_samples: 160,            // 10ms hop for overlapping windows
             max_buffer_duration: 480000, // 30 seconds at 16kHz
             max_segment_count: 20,       // Maximum segments to keep in memory
+            silence_tolerance_frames: 5, // 50ms tolerance in PossibleSpeech (5 frames @ 10ms)
+            speech_end_threshold: 0.15,  // Lower threshold for speech continuation (hysteresis)
+            speech_prob_smoothing: 0.3,  // EMA smoothing factor (production standard)
         }
     }
 }
@@ -107,6 +116,7 @@ pub struct SileroVad {
     current_time: f64,
     time_offset: f64,
     speech_start_time: Option<f64>,
+    smoothed_prob: f32,
     sample_buffer: Vec<f32>,
     frame_buffer: Array2<f32>,
     sample_rate_f64: f64,
@@ -162,6 +172,7 @@ impl SileroVad {
             current_time: 0.0,
             time_offset: 0.0,
             speech_start_time: None,
+            smoothed_prob: 0.0,
             sample_buffer,
             frame_buffer,
             sample_rate_f64,
@@ -184,6 +195,7 @@ impl SileroVad {
         self.current_time = 0.0;
         self.time_offset = 0.0;
         self.speech_start_time = None;
+        self.smoothed_prob = 0.0;
         self.sample_buffer.clear();
         self.frame_counter = 0;
         self.samples_since_trim = 0;
@@ -234,10 +246,15 @@ impl SileroVad {
 
     /// Process a frame of audio samples and update VAD state
     pub fn process_frame(&mut self, frame: &[f32], hop_len: usize) -> Result<VadState, ort::Error> {
-        let speech_prob = self.calc_speech_prob(frame)?;
+        let raw_prob = self.calc_speech_prob(frame)?;
 
-        // Update VAD state first, before changing time or buffer
-        self.update_vad_state(speech_prob);
+        // Apply exponential moving average smoothing (production standard)
+        let alpha = self.config.speech_prob_smoothing;
+        self.smoothed_prob = alpha * raw_prob + (1.0 - alpha) * self.smoothed_prob;
+
+        // Asymmetric smoothing: use raw probability for fast onset detection,
+        // smoothed probability for noise-robust continuation
+        self.update_vad_state(raw_prob, self.smoothed_prob);
 
         let effective_hop = if self.sample_buffer.is_empty() {
             frame.len()
@@ -318,16 +335,35 @@ impl SileroVad {
     }
 
     /// Update the VAD state based on speech probability
-    fn update_vad_state(&mut self, speech_prob: f32) {
+    ///
+    /// Asymmetric smoothing: raw_prob for fast onset detection, smoothed_prob for noise robustness
+    fn update_vad_state(&mut self, raw_prob: f32, smoothed_prob: f32) {
         let threshold = self.config.threshold;
-        let is_speech = speech_prob > threshold;
+        let speech_end_threshold = self.config.speech_end_threshold;
+
+        // Asymmetric smoothing strategy:
+        // - Silence → PossibleSpeech: Use raw_prob for fast onset detection
+        // - All other states: Use smoothed_prob for noise robustness
+        let detection_prob = if self.current_state == VadState::Silence {
+            raw_prob  // Fast onset detection
+        } else {
+            smoothed_prob  // Noise-robust continuation
+        };
+
+        // Dual-threshold logic for hysteresis:
+        // - is_starting_speech: Use higher threshold (0.2) to detect initial speech
+        // - is_continuing_speech: Use lower threshold (0.15) to maintain ongoing speech
+        let is_starting_speech = detection_prob > threshold;
+        let is_continuing_speech = detection_prob > speech_end_threshold;
 
         let hangbefore_frames = self.config.hangbefore_frames;
         let hangover_frames = self.config.hangover_frames;
+        let silence_tolerance_frames = self.config.silence_tolerance_frames;
 
         match self.current_state {
             VadState::Silence => {
-                if is_speech {
+                // Entering speech requires exceeding the higher threshold
+                if is_starting_speech {
                     self.current_state = VadState::PossibleSpeech;
                     self.frames_in_state = 1;
                     if cfg!(debug_assertions) {
@@ -336,7 +372,8 @@ impl SileroVad {
                 }
             }
             VadState::PossibleSpeech => {
-                if is_speech {
+                // Confirming speech requires consistently exceeding the higher threshold
+                if is_starting_speech {
                     self.frames_in_state += 1;
                     self.silence_frames = 0;
 
@@ -362,12 +399,21 @@ impl SileroVad {
                             println!("PossibleSpeech → Speech (start: {:.2}s)", start_time);
                         }
                     }
+                } else if is_continuing_speech {
+                    // In the "dead zone" (between end and start thresholds)
+                    // Reset silence counter but don't advance speech confirmation
+                    self.silence_frames = 0;
+                    if cfg!(debug_assertions) {
+                        println!(
+                            "PossibleSpeech → In dead zone (prob: {:.3}, continuing but not confirming)",
+                            detection_prob
+                        );
+                    }
                 } else {
-                    // Add tolerance for noise fluctuations
+                    // Below continuation threshold - count as silence
                     self.silence_frames += 1;
-                    let silence_tolerance: usize = 2;
 
-                    if self.silence_frames >= silence_tolerance {
+                    if self.silence_frames >= silence_tolerance_frames {
                         self.current_state = VadState::Silence;
                         self.frames_in_state = 0;
                         self.silence_frames = 0;
@@ -377,13 +423,14 @@ impl SileroVad {
                     } else if cfg!(debug_assertions) {
                         println!(
                             "PossibleSpeech → Still in possible speech (silence: {}/{})",
-                            self.silence_frames, silence_tolerance
+                            self.silence_frames, silence_tolerance_frames
                         );
                     }
                 }
             }
             VadState::Speech => {
-                if !is_speech {
+                // Use lower threshold to decide when to potentially end speech
+                if !is_continuing_speech {
                     self.current_state = VadState::PossibleSilence;
                     self.frames_in_state = 1;
                     if cfg!(debug_assertions) {
@@ -392,7 +439,8 @@ impl SileroVad {
                 }
             }
             VadState::PossibleSilence => {
-                if !is_speech {
+                // Use lower threshold for all decisions in this state
+                if !is_continuing_speech {
                     self.frames_in_state += 1;
                     if self.frames_in_state >= hangover_frames {
                         self.current_state = VadState::Silence;
@@ -406,6 +454,7 @@ impl SileroVad {
                         self.finalize_speech_segment();
                     }
                 } else {
+                    // Back above continuation threshold - return to speech
                     self.current_state = VadState::Speech;
                     self.frames_in_state = 0;
                     if cfg!(debug_assertions) {
@@ -438,7 +487,7 @@ impl SileroVad {
     /// Extract speech segment from the sample history
     fn extract_speech_segment(&mut self, start_time: f64, end_time: f64) -> Vec<f32> {
         // Precompute constants once
-        let context_duration = 0.03; // 30ms context
+        let context_duration = 0.1; // 100ms pre-roll buffer (industry standard)
         let context_samples = (context_duration * self.sample_rate_f64) as usize;
 
         // Check if we're potentially losing the beginning of speech due to buffer limits

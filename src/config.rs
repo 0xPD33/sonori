@@ -293,17 +293,26 @@ pub struct VadConfigSerde {
     pub max_buffer_duration_sec: f32,
     /// Maximum number of segments to keep
     pub max_segment_count: usize,
+    /// Number of non-speech frames to tolerate in PossibleSpeech before giving up
+    pub silence_tolerance_frames: usize,
+    /// Lower threshold for speech continuation (hysteresis)
+    pub speech_end_threshold: f32,
+    /// Exponential moving average smoothing factor (0.0-1.0)
+    pub speech_prob_smoothing: f32,
 }
 
 impl Default for VadConfigSerde {
     fn default() -> Self {
         Self {
             threshold: 0.2,                // Silero uses probability threshold (0.0-1.0)
-            hangbefore_frames: 1,          // Wait 10ms (1 frame) before confirming speech
+            hangbefore_frames: 3,          // Wait 30ms (3 frames) before confirming speech
             hangover_frames: 20, // Wait 200ms (20 frames) of silence before ending segment
             hop_samples: 160,    // 10ms hop for overlapping windows
             max_buffer_duration_sec: 30.0, // Maximum buffer size in seconds
             max_segment_count: 20, // Maximum number of segments to keep
+            silence_tolerance_frames: 5, // 50ms tolerance in PossibleSpeech (5 frames @ 10ms)
+            speech_end_threshold: 0.15, // Lower threshold for speech continuation (hysteresis)
+            speech_prob_smoothing: 0.3, // EMA smoothing factor (production standard)
         }
     }
 }
@@ -323,6 +332,9 @@ impl SileroVadConfig {
             hop_samples: vad_config.hop_samples,
             max_buffer_duration: (vad_config.max_buffer_duration_sec * sample_rate as f32) as usize,
             max_segment_count: vad_config.max_segment_count,
+            silence_tolerance_frames: vad_config.silence_tolerance_frames,
+            speech_end_threshold: vad_config.speech_end_threshold,
+            speech_prob_smoothing: vad_config.speech_prob_smoothing,
         }
     }
 }
@@ -338,6 +350,9 @@ impl From<(VadConfigSerde, usize, usize)> for SileroVadConfig {
             hop_samples: config.hop_samples,
             max_buffer_duration: (config.max_buffer_duration_sec * sample_rate as f32) as usize,
             max_segment_count: config.max_segment_count,
+            silence_tolerance_frames: config.silence_tolerance_frames,
+            speech_end_threshold: config.speech_end_threshold,
+            speech_prob_smoothing: config.speech_prob_smoothing,
         }
     }
 }
