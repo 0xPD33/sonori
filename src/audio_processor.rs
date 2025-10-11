@@ -26,6 +26,7 @@ pub struct AudioProcessor {
     // Manual mode fields
     transcription_mode: Arc<Mutex<TranscriptionMode>>,
     manual_audio_buffer: Arc<Mutex<Vec<f32>>>,
+    manual_buffer_max_size: usize,
 
     sample_rate: usize,
 }
@@ -42,9 +43,8 @@ impl AudioProcessor {
         transcription_stats: Arc<Mutex<TranscriptionStats>>,
         app_config: AppConfig,
     ) -> Self {
-        let manual_audio_buffer = Arc::new(Mutex::new(Vec::with_capacity(
-            app_config.manual_mode_config.manual_buffer_size,
-        )));
+        let manual_buffer_max_size = app_config.manual_mode_config.manual_buffer_size;
+        let manual_audio_buffer = Arc::new(Mutex::new(Vec::with_capacity(manual_buffer_max_size)));
 
         Self {
             running,
@@ -58,6 +58,7 @@ impl AudioProcessor {
             transcription_stats,
             transcription_mode,
             manual_audio_buffer,
+            manual_buffer_max_size,
             sample_rate: app_config.sample_rate,
         }
     }
@@ -74,6 +75,7 @@ impl AudioProcessor {
         let buffer_size = self.buffer_size;
         let transcription_mode = self.transcription_mode.clone();
         let manual_audio_buffer = self.manual_audio_buffer.clone();
+        let manual_buffer_max_size = self.manual_buffer_max_size;
         let transcription_stats = self.transcription_stats.clone();
         let sample_rate = self.sample_rate;
 
@@ -166,6 +168,8 @@ impl AudioProcessor {
                                     &manual_audio_buffer,
                                     &audio_visualization_data,
                                     max_vis_samples,
+                                    manual_buffer_max_size,
+                                    &recording,
                                 )
                                 .await;
                             }
@@ -299,6 +303,8 @@ impl AudioProcessor {
         manual_audio_buffer: &Arc<Mutex<Vec<f32>>>,
         audio_visualization_data: &Arc<RwLock<AudioVisualizationData>>,
         max_vis_samples: usize,
+        manual_buffer_max_size: usize,
+        recording: &Arc<AtomicBool>,
     ) {
         // Update visualization data
         if let Some(mut audio_data) = audio_visualization_data.try_write() {
@@ -311,8 +317,27 @@ impl AudioProcessor {
             audio_data.is_speaking = true;
         }
 
-        // Accumulate audio in manual buffer
-        if let Some(mut manual_buffer) = manual_audio_buffer.try_lock() {
+        // Accumulate audio in manual buffer with overflow protection
+        // Use lock() instead of try_lock() to guarantee no audio samples are dropped
+        let mut manual_buffer = manual_audio_buffer.lock();
+        let current_size = manual_buffer.len();
+        let new_size = current_size + audio_buffer.len();
+
+        // Check if adding this audio would exceed the buffer limit
+        if new_size > manual_buffer_max_size {
+            eprintln!(
+                "Manual buffer overflow: current={}, new={}, max={}. Auto-stopping recording.",
+                current_size, new_size, manual_buffer_max_size
+            );
+            // Stop recording to prevent buffer overflow
+            recording.store(false, Ordering::Relaxed);
+
+            // Add as much as we can without exceeding the limit
+            let space_remaining = manual_buffer_max_size.saturating_sub(current_size);
+            if space_remaining > 0 {
+                manual_buffer.extend_from_slice(&audio_buffer[..space_remaining]);
+            }
+        } else {
             manual_buffer.extend_from_slice(audio_buffer);
         }
     }
@@ -327,20 +352,59 @@ impl AudioProcessor {
             if manual_buffer.is_empty() {
                 return Ok(()); // Nothing to process
             }
-            let audio = manual_buffer.clone();
-            manual_buffer.clear();
-            audio
+            // Use mem::take instead of clone to avoid copying the entire buffer
+            std::mem::take(&mut *manual_buffer)
         };
 
+        let original_duration = accumulated_audio.len() as f64 / sample_rate as f64;
         println!(
-            "Processing accumulated manual audio: {} samples",
-            accumulated_audio.len()
+            "Processing accumulated manual audio: {} samples ({:.2}s)",
+            accumulated_audio.len(),
+            original_duration
         );
 
-        // Create a single large audio segment for the entire manual session
-        let duration_secs = accumulated_audio.len() as f64 / sample_rate as f64;
+        // Apply VAD-based silence removal to improve transcription quality
+        let speech_only_audio = {
+            let mut vad = self.audio_processor.lock();
+            match vad.process_audio(&accumulated_audio) {
+                Ok(speech_segments) => {
+                    if speech_segments.is_empty() {
+                        println!("No speech detected in manual recording");
+                        return Ok(()); // Nothing to transcribe
+                    }
+
+                    // Concatenate all speech segments, removing silence
+                    let total_speech_samples: usize = speech_segments.iter()
+                        .map(|seg| seg.samples.len())
+                        .sum();
+
+                    let mut concatenated = Vec::with_capacity(total_speech_samples);
+                    for segment in speech_segments {
+                        concatenated.extend_from_slice(&segment.samples);
+                    }
+
+                    let speech_duration = concatenated.len() as f64 / sample_rate as f64;
+                    let silence_removed = original_duration - speech_duration;
+                    println!(
+                        "VAD preprocessing: {:.2}s speech, {:.2}s silence removed ({:.1}% reduction)",
+                        speech_duration,
+                        silence_removed,
+                        (silence_removed / original_duration) * 100.0
+                    );
+
+                    concatenated
+                }
+                Err(e) => {
+                    eprintln!("VAD preprocessing failed: {}, using original audio", e);
+                    accumulated_audio // Fallback to original audio if VAD fails
+                }
+            }
+        };
+
+        // Create a single audio segment for transcription
+        let duration_secs = speech_only_audio.len() as f64 / sample_rate as f64;
         let segment = AudioSegment {
-            samples: accumulated_audio,
+            samples: speech_only_audio,
             start_time: 0.0,
             end_time: duration_secs,
         };

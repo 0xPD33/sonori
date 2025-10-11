@@ -101,8 +101,8 @@ pub enum ManualSessionCommand {
 
 /// Main transcription coordinator that integrates all components
 pub struct RealTimeTranscriber {
-    // Audio capture
-    audio_capture: AudioCapture,
+    // Audio capture (wrapped in Arc<Mutex> for sharing with command processor)
+    audio_capture: Arc<Mutex<AudioCapture>>,
 
     // Audio processing
     tx: mpsc::Sender<Vec<f32>>,
@@ -265,7 +265,7 @@ impl RealTimeTranscriber {
         let current_manual_session = Arc::new(Mutex::new(None));
 
         Ok(Self {
-            audio_capture: AudioCapture::new(),
+            audio_capture: Arc::new(Mutex::new(AudioCapture::new())),
             tx,
             rx: Some(rx),
             transcript_tx,
@@ -310,7 +310,7 @@ impl RealTimeTranscriber {
         self.running.store(true, Ordering::Relaxed);
 
         // Start audio capture
-        self.audio_capture.start(
+        self.audio_capture.lock().start(
             self.tx.clone(),
             self.running.clone(),
             self.recording.clone(),
@@ -384,6 +384,7 @@ impl RealTimeTranscriber {
         let transcript_history = self.transcript_history.clone();
         let audio_visualization_data = self.audio_visualization_data.clone();
         let audio_processor_ref = self.audio_processor_ref.clone();
+        let audio_capture = self.audio_capture.clone(); // Share audio capture for stream control
         let app_config = read_app_config();
         let manual_mode_config = app_config.manual_mode_config.clone();
         let sample_rate = app_config.sample_rate;
@@ -424,6 +425,12 @@ impl RealTimeTranscriber {
 
                                         *session_lock = Some(new_session);
                                         recording.store(true, Ordering::Relaxed);
+
+                                        // Start the audio capture stream
+                                        if let Err(e) = audio_capture.lock().start_recording() {
+                                            eprintln!("Warning: Failed to start audio recording: {}", e);
+                                        }
+
                                         println!("Started manual recording session: {}", session_id);
                                     } else {
                                         eprintln!("Cannot start manual session when not in manual mode");
@@ -440,6 +447,12 @@ impl RealTimeTranscriber {
                                                     session.is_recording = false;
                                                     session.is_processing = true;
                                                     recording.store(false, Ordering::Relaxed);
+
+                                                    // Stop the audio capture stream
+                                                    if let Err(e) = audio_capture.lock().stop_recording() {
+                                                        eprintln!("Warning: Failed to stop audio recording: {}", e);
+                                                    }
+
                                                     println!("Stopped manual recording session: {}", session.session_id);
                                                     Some(session.session_id.clone())
                                                 } else {
@@ -454,24 +467,41 @@ impl RealTimeTranscriber {
 
                                         // Now trigger transcription without holding the lock
                                         if let Some(session_id) = session_id_opt {
-                                            if let Some(audio_processor) = &audio_processor_ref {
+                                            let transcription_success = if let Some(audio_processor) = &audio_processor_ref {
                                                 let sr = sample_rate;
                                                 match audio_processor.trigger_manual_transcription(sr).await {
                                                     Ok(()) => {
                                                         println!("Manual session {} transcription triggered successfully", session_id);
+                                                        true
                                                     }
                                                     Err(e) => {
                                                         eprintln!("Failed to trigger manual transcription for session {}: {}", session_id, e);
+                                                        // Mark session as not processing so user can retry
+                                                        let mut session_lock = current_manual_session.lock();
+                                                        if let Some(session) = session_lock.as_mut() {
+                                                            session.is_processing = false;
+                                                        }
+                                                        false
                                                     }
                                                 }
                                             } else {
                                                 eprintln!("Audio processor reference not available for manual transcription");
-                                            }
+                                                // Mark session as not processing so user can retry
+                                                let mut session_lock = current_manual_session.lock();
+                                                if let Some(session) = session_lock.as_mut() {
+                                                    session.is_processing = false;
+                                                }
+                                                false
+                                            };
 
-                                            // Complete the session (mark as done and clear it)
-                                            let mut session_lock = current_manual_session.lock();
-                                            println!("Manual session {} completed and cleared", session_id);
-                                            *session_lock = None; // Clear the session so new ones can start
+                                            // Only clear the session if transcription was successful
+                                            if transcription_success {
+                                                let mut session_lock = current_manual_session.lock();
+                                                println!("Manual session {} completed and cleared", session_id);
+                                                *session_lock = None; // Clear the session so new ones can start
+                                            } else {
+                                                eprintln!("Manual session {} retained for retry due to transcription failure", session_id);
+                                            }
                                         }
                                     } else {
                                         eprintln!("Cannot stop manual session when not in manual mode");
@@ -485,6 +515,11 @@ impl RealTimeTranscriber {
                                             println!("Cancelled manual session: {}", session.session_id);
                                             *session_lock = None;
                                             recording.store(false, Ordering::Relaxed);
+
+                                            // Stop the audio capture stream
+                                            if let Err(e) = audio_capture.lock().stop_recording() {
+                                                eprintln!("Warning: Failed to stop audio recording: {}", e);
+                                            }
                                         } else {
                                             eprintln!("No active session to cancel");
                                         }
@@ -545,6 +580,11 @@ impl RealTimeTranscriber {
                                             }
 
                                             recording.store(false, Ordering::Relaxed); // Ensure recording is stopped
+
+                                            // Stop the audio capture stream
+                                            if let Err(e) = audio_capture.lock().stop_recording() {
+                                                eprintln!("Warning: Failed to stop audio recording: {}", e);
+                                            }
 
                                             // Clear manual audio buffer
                                             if let Some(audio_processor) = &audio_processor_ref {
@@ -614,7 +654,7 @@ impl RealTimeTranscriber {
         self.recording.store(false, Ordering::Relaxed);
 
         // Stop the audio stream to save CPU when not recording
-        if let Err(e) = self.audio_capture.stop_recording() {
+        if let Err(e) = self.audio_capture.lock().stop_recording() {
             eprintln!("Warning: Failed to stop audio recording: {}", e);
         }
 
@@ -628,7 +668,7 @@ impl RealTimeTranscriber {
     pub async fn resume(&mut self) -> Result<(), anyhow::Error> {
         self.recording.store(true, Ordering::Relaxed);
 
-        if let Err(e) = self.audio_capture.resume() {
+        if let Err(e) = self.audio_capture.lock().resume() {
             eprintln!("Failed to resume audio capture: {}", e);
             // Even if resume fails, we proceed since state is now "recording"
         }
@@ -647,7 +687,7 @@ impl RealTimeTranscriber {
         self.recording.store(false, Ordering::Relaxed);
 
         // Stop audio capture
-        self.audio_capture.stop();
+        self.audio_capture.lock().stop();
 
         // Wait for the audio processor to finish
         if let Some(handle) = self.audio_handle.take() {
@@ -686,12 +726,12 @@ impl RealTimeTranscriber {
         // ASYNC: Control audio stream in background task to avoid blocking
         if was_recording {
             // We were recording, now stopping - stop the stream to save CPU
-            if let Err(e) = self.audio_capture.stop_recording() {
+            if let Err(e) = self.audio_capture.lock().stop_recording() {
                 eprintln!("Warning: Failed to stop audio recording: {}", e);
             }
         } else {
             // We were stopped, now recording - start the stream
-            if let Err(e) = self.audio_capture.start_recording() {
+            if let Err(e) = self.audio_capture.lock().start_recording() {
                 eprintln!("Warning: Failed to start audio recording: {}", e);
             }
         }
@@ -822,6 +862,11 @@ impl RealTimeTranscriber {
         // Set recording flag to true to start audio capture
         self.recording.store(true, Ordering::Relaxed);
 
+        // Start the audio capture stream
+        if let Err(e) = self.audio_capture.lock().start_recording() {
+            eprintln!("Warning: Failed to start audio recording: {}", e);
+        }
+
         println!("Started manual transcription session: {}", session_id);
         Ok(session_id)
     }
@@ -851,6 +896,11 @@ impl RealTimeTranscriber {
 
         // Stop recording audio
         self.recording.store(false, Ordering::Relaxed);
+
+        // Stop the audio capture stream
+        if let Err(e) = self.audio_capture.lock().stop_recording() {
+            eprintln!("Warning: Failed to stop audio recording: {}", e);
+        }
 
         println!(
             "Stopped manual transcription session: {} - processing...",
@@ -887,6 +937,11 @@ impl RealTimeTranscriber {
 
         // Stop recording audio
         self.recording.store(false, Ordering::Relaxed);
+
+        // Stop the audio capture stream
+        if let Err(e) = self.audio_capture.lock().stop_recording() {
+            eprintln!("Warning: Failed to stop audio recording: {}", e);
+        }
 
         println!("Cancelled manual transcription session: {}", session_id);
         Ok(())

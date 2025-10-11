@@ -121,11 +121,39 @@ pub struct DisplayConfig {
     pub target_fps: u32,
 }
 
+/// Configuration for window visibility and system tray behavior
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WindowBehaviorConfig {
+    /// Whether to automatically hide the window when idle
+    pub hide_when_idle: bool,
+
+    /// Delay in milliseconds before auto-hiding after recording stops
+    pub auto_hide_delay_ms: u64,
+
+    /// Whether to start the application with the window hidden
+    pub start_hidden: bool,
+
+    /// Whether to show the application icon in the system tray
+    pub show_in_system_tray: bool,
+}
+
 impl Default for DisplayConfig {
     fn default() -> Self {
         Self {
             vsync_mode: "Enabled".to_string(), // Default to traditional vsync
             target_fps: 60,                    // Cap at 60 FPS when vsync disabled
+        }
+    }
+}
+
+impl Default for WindowBehaviorConfig {
+    fn default() -> Self {
+        Self {
+            hide_when_idle: false,        // Don't auto-hide by default
+            auto_hide_delay_ms: 2000,     // 2 seconds delay
+            start_hidden: false,          // Start visible by default
+            show_in_system_tray: true,    // Show tray icon by default
         }
     }
 }
@@ -268,6 +296,8 @@ pub struct AppConfig {
     pub manual_mode_config: ManualModeConfig,
     /// Display and rendering configuration
     pub display_config: DisplayConfig,
+    /// Window visibility and system tray configuration
+    pub window_behavior_config: WindowBehaviorConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -379,6 +409,7 @@ impl Default for AppConfig {
             portal_config: PortalConfig::default(),
             manual_mode_config: ManualModeConfig::default(),
             display_config: DisplayConfig::default(),
+            window_behavior_config: WindowBehaviorConfig::default(),
         }
     }
 }

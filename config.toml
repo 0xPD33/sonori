@@ -47,3 +47,9 @@ processing_timeout_secs = 30
 [display_config]
 vsync_mode = "Enabled"
 target_fps = 60
+
+[window_behavior_config]
+hide_when_idle = false
+auto_hide_delay_ms = 2000
+start_hidden = false
+show_in_system_tray = true

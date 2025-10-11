@@ -38,6 +38,8 @@ pub fn run() {
         transcription_mode_ref: Arc::new(parking_lot::Mutex::new(
             crate::real_time_transcriber::TranscriptionMode::RealTime,
         )),
+        tray_update_tx: None,
+        tray_command_rx: None,
     };
     event_loop.run_app(&mut app).unwrap();
 }
@@ -53,6 +55,8 @@ pub fn run_with_audio_data(
     transcription_mode_ref: Arc<
         parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>,
     >,
+    tray_update_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::system_tray::TrayUpdate>>,
+    tray_command_rx: Option<tokio::sync::mpsc::UnboundedReceiver<crate::system_tray::TrayCommand>>,
 ) {
     let event_loop = EventLoop::new().unwrap();
     let mut app = WindowApp {
@@ -64,6 +68,8 @@ pub fn run_with_audio_data(
         config,
         manual_session_sender,
         transcription_mode_ref,
+        tray_update_tx,
+        tray_command_rx,
     };
 
     event_loop.run_app(&mut app).unwrap();
@@ -80,6 +86,9 @@ pub struct WindowApp {
         Option<tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>>,
     pub transcription_mode_ref:
         Arc<parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>>,
+    pub tray_update_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::system_tray::TrayUpdate>>,
+    pub tray_command_rx:
+        Option<tokio::sync::mpsc::UnboundedReceiver<crate::system_tray::TrayCommand>>,
 }
 
 impl ApplicationHandler for WindowApp {
@@ -101,6 +110,74 @@ impl ApplicationHandler for WindowApp {
                 println!("Event loop idle but running flag is false - exiting event loop");
                 event_loop.exit();
                 return;
+            }
+        }
+
+        // Process tray commands if available
+        if let Some(tray_rx) = &mut self.tray_command_rx {
+            while let Ok(command) = tray_rx.try_recv() {
+                match command {
+                    crate::system_tray::TrayCommand::ToggleWindow => {
+                        // Toggle window visibility for all windows
+                        for window in self.windows.values_mut() {
+                            window.toggle_window_visibility();
+                            // Update tray about visibility change
+                            if let Some(tray_tx) = &self.tray_update_tx {
+                                let _ = tray_tx.send(crate::system_tray::TrayUpdate::WindowVisible(
+                                    window.is_visible,
+                                ));
+                            }
+                        }
+                    }
+                    crate::system_tray::TrayCommand::ShowWindow => {
+                        for window in self.windows.values_mut() {
+                            window.show_window();
+                            if let Some(tray_tx) = &self.tray_update_tx {
+                                let _ = tray_tx.send(crate::system_tray::TrayUpdate::WindowVisible(true));
+                            }
+                        }
+                    }
+                    crate::system_tray::TrayCommand::HideWindow => {
+                        for window in self.windows.values_mut() {
+                            window.hide_window();
+                            if let Some(tray_tx) = &self.tray_update_tx {
+                                let _ = tray_tx.send(crate::system_tray::TrayUpdate::WindowVisible(false));
+                            }
+                        }
+                    }
+                    crate::system_tray::TrayCommand::ToggleRecording => {
+                        // Toggle recording in real-time mode
+                        for window in self.windows.values_mut() {
+                            window.toggle_recording();
+                        }
+                    }
+                    crate::system_tray::TrayCommand::ToggleManualSession => {
+                        // Toggle manual session in manual mode
+                        for window in self.windows.values_mut() {
+                            window.toggle_manual_session();
+                        }
+                    }
+                    crate::system_tray::TrayCommand::Quit => {
+                        println!("Quit requested from system tray");
+                        if let Some(running) = &self.running {
+                            running.store(false, std::sync::atomic::Ordering::Relaxed);
+                        }
+                        event_loop.exit();
+                    }
+                }
+            }
+        }
+
+        // Check for auto-hide based on window configuration
+        let hide_when_idle = self.config.window_behavior_config.hide_when_idle;
+        let auto_hide_delay = self.config.window_behavior_config.auto_hide_delay_ms;
+
+        for window in self.windows.values_mut() {
+            if window.should_auto_hide(hide_when_idle, auto_hide_delay) {
+                window.hide_window();
+                if let Some(tray_tx) = &self.tray_update_tx {
+                    let _ = tray_tx.send(crate::system_tray::TrayUpdate::WindowVisible(false));
+                }
             }
         }
     }
@@ -135,6 +212,15 @@ impl ApplicationHandler for WindowApp {
 
             if let Some(audio_data) = &self.audio_data {
                 window_state.set_audio_data(audio_data.clone());
+            }
+
+            // Apply start_hidden configuration
+            if self.config.window_behavior_config.start_hidden {
+                window_state.hide_window();
+                // Update tray about initial visibility
+                if let Some(tray_tx) = &self.tray_update_tx {
+                    let _ = tray_tx.send(crate::system_tray::TrayUpdate::WindowVisible(false));
+                }
             }
 
             let window_id = window_state.window.id();

@@ -8,6 +8,7 @@ pub mod portal_tokens;
 pub mod real_time_transcriber;
 pub mod silero_audio_processor;
 pub mod stats_reporter;
+pub mod system_tray;
 pub mod transcribe;
 pub mod transcription_processor;
 pub mod transcription_stats;
