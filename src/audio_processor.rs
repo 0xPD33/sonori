@@ -374,9 +374,8 @@ impl AudioProcessor {
                     }
 
                     // Concatenate all speech segments, removing silence
-                    let total_speech_samples: usize = speech_segments.iter()
-                        .map(|seg| seg.samples.len())
-                        .sum();
+                    let total_speech_samples: usize =
+                        speech_segments.iter().map(|seg| seg.samples.len()).sum();
 
                     let mut concatenated = Vec::with_capacity(total_speech_samples);
                     for segment in speech_segments {

@@ -476,30 +476,32 @@ async fn run_gui_mode(
     let transcription_mode_ref = transcriber.get_transcription_mode_ref();
 
     // System tray: start if enabled in configuration
-    let (tray_update_tx, tray_command_rx) =
-        if app_config.window_behavior_config.show_in_system_tray {
-            let is_window_visible = Arc::new(AtomicBool::new(!app_config.window_behavior_config.start_hidden));
+    let (tray_update_tx, tray_command_rx) = if app_config.window_behavior_config.show_in_system_tray
+    {
+        let is_window_visible = Arc::new(AtomicBool::new(
+            !app_config.window_behavior_config.start_hidden,
+        ));
 
-            match system_tray::run_system_tray(
-                recording.clone(),
-                is_window_visible.clone(),
-                transcription_mode_ref.clone(),
-                running.clone(),
-            )
-            .await
-            {
-                Ok((update_tx, command_rx)) => {
-                    println!("System tray initialized successfully");
-                    (Some(update_tx), Some(command_rx))
-                }
-                Err(e) => {
-                    eprintln!("Failed to initialize system tray: {}", e);
-                    (None, None)
-                }
+        match system_tray::run_system_tray(
+            recording.clone(),
+            is_window_visible.clone(),
+            transcription_mode_ref.clone(),
+            running.clone(),
+        )
+        .await
+        {
+            Ok((update_tx, command_rx)) => {
+                println!("System tray initialized successfully");
+                (Some(update_tx), Some(command_rx))
             }
-        } else {
-            (None, None)
-        };
+            Err(e) => {
+                eprintln!("Failed to initialize system tray: {}", e);
+                (None, None)
+            }
+        }
+    } else {
+        (None, None)
+    };
 
     // Global shortcuts: register Super+Tab (or configured) to toggle manual session
     if app_config.portal_config.enable_global_shortcuts {

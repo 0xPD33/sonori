@@ -91,6 +91,15 @@ pub struct WindowApp {
         Option<tokio::sync::mpsc::UnboundedReceiver<crate::system_tray::TrayCommand>>,
 }
 
+impl WindowApp {
+    fn notify_tray_about_recording(&self) {
+        if let (Some(recording_flag), Some(tray_tx)) = (&self.recording, &self.tray_update_tx) {
+            let is_recording = recording_flag.load(Ordering::Relaxed);
+            let _ = tray_tx.send(crate::system_tray::TrayUpdate::Recording(is_recording));
+        }
+    }
+}
+
 impl ApplicationHandler for WindowApp {
     fn resumed(&mut self, event_loop: &dyn ActiveEventLoop) {
         // Check running flag on resume and exit if shutting down
@@ -115,6 +124,7 @@ impl ApplicationHandler for WindowApp {
 
         // Process tray commands if available
         if let Some(tray_rx) = &mut self.tray_command_rx {
+            let mut notify_recording = false;
             while let Ok(command) = tray_rx.try_recv() {
                 match command {
                     crate::system_tray::TrayCommand::ToggleWindow => {
@@ -123,9 +133,10 @@ impl ApplicationHandler for WindowApp {
                             window.toggle_window_visibility();
                             // Update tray about visibility change
                             if let Some(tray_tx) = &self.tray_update_tx {
-                                let _ = tray_tx.send(crate::system_tray::TrayUpdate::WindowVisible(
-                                    window.is_visible,
-                                ));
+                                let _ =
+                                    tray_tx.send(crate::system_tray::TrayUpdate::WindowVisible(
+                                        window.is_visible,
+                                    ));
                             }
                         }
                     }
@@ -133,7 +144,8 @@ impl ApplicationHandler for WindowApp {
                         for window in self.windows.values_mut() {
                             window.show_window();
                             if let Some(tray_tx) = &self.tray_update_tx {
-                                let _ = tray_tx.send(crate::system_tray::TrayUpdate::WindowVisible(true));
+                                let _ = tray_tx
+                                    .send(crate::system_tray::TrayUpdate::WindowVisible(true));
                             }
                         }
                     }
@@ -141,7 +153,8 @@ impl ApplicationHandler for WindowApp {
                         for window in self.windows.values_mut() {
                             window.hide_window();
                             if let Some(tray_tx) = &self.tray_update_tx {
-                                let _ = tray_tx.send(crate::system_tray::TrayUpdate::WindowVisible(false));
+                                let _ = tray_tx
+                                    .send(crate::system_tray::TrayUpdate::WindowVisible(false));
                             }
                         }
                     }
@@ -150,12 +163,14 @@ impl ApplicationHandler for WindowApp {
                         for window in self.windows.values_mut() {
                             window.toggle_recording();
                         }
+                        notify_recording = true;
                     }
                     crate::system_tray::TrayCommand::ToggleManualSession => {
                         // Toggle manual session in manual mode
                         for window in self.windows.values_mut() {
                             window.toggle_manual_session();
                         }
+                        notify_recording = true;
                     }
                     crate::system_tray::TrayCommand::Quit => {
                         println!("Quit requested from system tray");
@@ -165,6 +180,9 @@ impl ApplicationHandler for WindowApp {
                         event_loop.exit();
                     }
                 }
+            }
+            if notify_recording {
+                self.notify_tray_about_recording();
             }
         }
 
@@ -298,6 +316,7 @@ impl ApplicationHandler for WindowApp {
                         {
                             println!("Space pressed in real-time mode, toggling recording");
                             window.toggle_recording();
+                            self.notify_tray_about_recording();
                         } else {
                             println!("Space pressed in manual mode, ignoring (use Tab instead)");
                         }
@@ -329,6 +348,7 @@ impl ApplicationHandler for WindowApp {
 
         // Handle other window events
         if let Some(window) = self.windows.get_mut(&window_id) {
+            let mut should_notify_recording = false;
             match event {
                 WindowEvent::CloseRequested => {
                     println!("Window close requested");
@@ -361,11 +381,16 @@ impl ApplicationHandler for WindowApp {
                         position,
                         Some(event_loop),
                     );
+                    should_notify_recording = true;
                 }
                 WindowEvent::PointerLeft { .. } => {
                     window.handle_cursor_leave();
                 }
                 _ => {}
+            }
+
+            if should_notify_recording {
+                self.notify_tray_about_recording();
             }
         }
     }

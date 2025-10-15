@@ -29,11 +29,9 @@ impl PortalInput {
                     "Portal keyboard session without screencast failed ({}), retrying with screencast",
                     first_err
                 );
-                Self::try_new_internal(connection, true)
-                    .await
-                    .context(
-                        "Failed to establish portal keyboard control even with screencast fallback",
-                    )
+                Self::try_new_internal(connection, true).await.context(
+                    "Failed to establish portal keyboard control even with screencast fallback",
+                )
             }
         }
     }

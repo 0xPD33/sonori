@@ -345,9 +345,9 @@ impl SileroVad {
         // - Silence → PossibleSpeech: Use raw_prob for fast onset detection
         // - All other states: Use smoothed_prob for noise robustness
         let detection_prob = if self.current_state == VadState::Silence {
-            raw_prob  // Fast onset detection
+            raw_prob // Fast onset detection
         } else {
-            smoothed_prob  // Noise-robust continuation
+            smoothed_prob // Noise-robust continuation
         };
 
         // Dual-threshold logic for hysteresis:

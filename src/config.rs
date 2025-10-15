@@ -150,10 +150,10 @@ impl Default for DisplayConfig {
 impl Default for WindowBehaviorConfig {
     fn default() -> Self {
         Self {
-            hide_when_idle: false,        // Don't auto-hide by default
-            auto_hide_delay_ms: 2000,     // 2 seconds delay
-            start_hidden: false,          // Start visible by default
-            show_in_system_tray: true,    // Show tray icon by default
+            hide_when_idle: false,     // Don't auto-hide by default
+            auto_hide_delay_ms: 2000,  // 2 seconds delay
+            start_hidden: false,       // Start visible by default
+            show_in_system_tray: true, // Show tray icon by default
         }
     }
 }
@@ -394,10 +394,10 @@ impl Default for AppConfig {
             language: "en".to_string(),
             compute_type: "INT8".to_string(),
             device: "CPU".to_string(),
-            log_stats_enabled: true,
+            log_stats_enabled: false,
             buffer_size: 1024,
             sample_rate: 16000,
-            transcription_mode: "realtime".to_string(), // Default to realtime for backward compatibility
+            transcription_mode: "realtime".to_string(),
             whisper_options: WhisperOptionsSerde {
                 beam_size: 5,
                 patience: 1.0,
