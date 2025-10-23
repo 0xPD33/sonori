@@ -113,6 +113,11 @@ impl ApplicationHandler for WindowApp {
     }
 
     fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
+        // Poll tokio runtime to allow async tasks to progress
+        tokio::task::spawn(async {
+            tokio::task::yield_now().await;
+        });
+
         // Periodic check when event loop is idle - ensures shutdown happens even without events
         if let Some(running) = &self.running {
             if !running.load(std::sync::atomic::Ordering::Relaxed) {
@@ -275,13 +280,13 @@ impl ApplicationHandler for WindowApp {
                     },
                 ..
             } => {
-                // Get ctrl state before borrowing window
+                // Get modifier states before borrowing window
                 let ctrl_pressed = self.current_modifiers.state().control_key();
+                let _super_pressed = self.current_modifiers.state().super_key();
+                let _alt_pressed = self.current_modifiers.state().alt_key();
+                let _shift_pressed = self.current_modifiers.state().shift_key();
 
                 if let Some(window) = self.windows.get_mut(&window_id) {
-                    // Debug key press
-                    println!("Key pressed: {:?}", key_code);
-
                     // Get keyboard shortcuts from config
                     let shortcuts = &self.config.keyboard_shortcuts;
 
@@ -314,21 +319,16 @@ impl ApplicationHandler for WindowApp {
                         let current_mode = *self.transcription_mode_ref.lock();
                         if current_mode == crate::real_time_transcriber::TranscriptionMode::RealTime
                         {
-                            println!("Space pressed in real-time mode, toggling recording");
                             window.toggle_recording();
                             self.notify_tray_about_recording();
-                        } else {
-                            println!("Space pressed in manual mode, ignoring (use Tab instead)");
                         }
                     }
-                    // Check for Tab key in manual mode (manual session start/stop)
+                    // TEMPORARY: Restore Tab handler for debugging (works when window focused)
+                    // TODO: Once global shortcut (Super+Tab) works unfocused, remove this
                     else if key_code == KeyCode::Tab {
                         let current_mode = *self.transcription_mode_ref.lock();
                         if current_mode == crate::real_time_transcriber::TranscriptionMode::Manual {
-                            println!("Tab pressed in manual mode, toggling manual session");
                             window.toggle_manual_session();
-                        } else {
-                            println!("Tab pressed in real-time mode, ignoring (use Space instead)");
                         }
                     }
                     // Check for exit application shortcut
@@ -422,13 +422,9 @@ fn create_window(
     // Set the fixed size in the window attributes
     let w = w.with_surface_size(logical_size);
 
-    // Determine keyboard interactivity mode: request exclusive keyboard when in manual mode
-    let keyboard_mode =
-        if transcription_mode == crate::real_time_transcriber::TranscriptionMode::Manual {
-            KeyboardInteractivity::Exclusive
-        } else {
-            KeyboardInteractivity::OnDemand
-        };
+    // TEMPORARY: Use OnDemand to restore Tab key functionality while debugging portal
+    // TODO: Switch to None once portal works (None prevents window from stealing keys)
+    let keyboard_mode = KeyboardInteractivity::OnDemand;
 
     let w = if ev.is_wayland() {
         // For Wayland, we need to specify the output (monitor)

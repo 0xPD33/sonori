@@ -699,9 +699,13 @@ impl WindowState {
             // ASYNC: Send command without blocking UI thread
             tokio::spawn(async move {
                 let command = if is_currently_recording {
-                    crate::real_time_transcriber::ManualSessionCommand::StopSession
+                    crate::real_time_transcriber::ManualSessionCommand::StopSession {
+                        responder: None,
+                    }
                 } else {
-                    crate::real_time_transcriber::ManualSessionCommand::StartSession
+                    crate::real_time_transcriber::ManualSessionCommand::StartSession {
+                        responder: None,
+                    }
                 };
 
                 if let Err(e) = sender.send(command).await {

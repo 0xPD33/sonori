@@ -65,7 +65,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Set stable portal App ID env var early for consistent identity across launches
     let app_id_str = app_config.portal_config.application_id.clone();
-    std::env::set_var("XDG_DESKTOP_PORTAL_APP_ID", &app_id_str);
+    if std::env::var_os("XDG_DESKTOP_PORTAL_APPLICATION_ID").is_none() {
+        std::env::set_var("XDG_DESKTOP_PORTAL_APPLICATION_ID", &app_id_str);
+    }
 
     // Override transcription mode from CLI arguments
     let transcription_mode = if args.manual {
@@ -241,7 +243,7 @@ async fn run_manual_cli(mut transcriber: RealTimeTranscriber) -> anyhow::Result<
 
                         if is_currently_recording {
                             // Currently recording, stop the session
-                            match transcriber.stop_manual_session() {
+                            match transcriber.stop_manual_session().await {
                                 Ok(()) => {
                                     session_status = "Processing";
                                     println!("Manual session stopped and processing...");
@@ -252,7 +254,7 @@ async fn run_manual_cli(mut transcriber: RealTimeTranscriber) -> anyhow::Result<
                             }
                         } else {
                             // Not recording, start a new session
-                            match transcriber.start_manual_session() {
+                            match transcriber.start_manual_session().await {
                                 Ok(session_id) => {
                                     session_status = "Recording";
                                     println!("Started new manual session: {}", session_id);
@@ -509,16 +511,20 @@ async fn run_gui_mode(
         let manual_tx = manual_session_sender.clone();
         let mode_ref = transcription_mode_ref.clone();
         let recording_ref = recording.clone();
+        // Pass "running" flag (TRUE=app running, FALSE=shutting down)
+        // GlobalShortcutsManager will check !flag to detect shutdown
+        let shutdown = running.clone();
         tokio::spawn(async move {
             if let Err(e) = crate::global_shortcuts::run_listener(
                 &accelerator,
                 manual_tx,
                 mode_ref,
                 recording_ref,
+                shutdown,
             )
             .await
             {
-                eprintln!("Global shortcuts disabled: {}", e);
+                eprintln!("Global shortcuts failed: {}", e);
             }
         });
     }

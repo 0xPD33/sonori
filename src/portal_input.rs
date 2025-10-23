@@ -140,6 +140,7 @@ impl PortalInput {
                 KeyState::Released,
             )
             .await?;
+
         Ok(())
     }
 
@@ -197,6 +198,7 @@ impl PortalInput {
                 KeyState::Released,
             )
             .await?;
+
         Ok(())
     }
 }
