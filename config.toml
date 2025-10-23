@@ -32,7 +32,7 @@ exit_application = "Escape"
 [portal_config]
 enable_xdg_portal = true
 enable_global_shortcuts = true
-manual_toggle_accelerator = "<Super>Tab"
+manual_toggle_accelerator = "<Super>backslash"
 application_id = "dev.paddy.sonori"
 # Paste shortcut: "ctrl_shift_v" (default, works in terminals) or "ctrl_v" (standard apps)
 paste_shortcut = "ctrl_shift_v"

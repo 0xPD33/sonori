@@ -1049,6 +1049,26 @@ impl ButtonManager {
                     }
                 }
             }
+            ButtonType::Pause => {
+                // Assign pause or play texture based on current recording state
+                let is_recording = self
+                    .recording
+                    .as_ref()
+                    .map(|rec| rec.load(Ordering::Relaxed))
+                    .unwrap_or(false);
+
+                let texture = if is_recording {
+                    self.pause_texture.clone()
+                } else {
+                    self.play_texture.clone()
+                };
+
+                if let Some(tex) = texture {
+                    if let Some(button) = self.buttons.get_mut(&ButtonType::Pause) {
+                        button.texture = Some(tex);
+                    }
+                }
+            }
             // Other textures are already handled by the existing load_textures method
             _ => {}
         }

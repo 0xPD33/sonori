@@ -656,11 +656,16 @@ impl RealTimeTranscriber {
                                         (TranscriptionMode::RealTime, TranscriptionMode::Manual) => {
                                             recording.store(false, Ordering::Relaxed);
 
+                                            // Stop the audio capture stream to ensure clean state
+                                            if let Err(e) = audio_capture.lock().stop_recording() {
+                                                eprintln!("Warning: Failed to stop audio recording during mode switch: {}", e);
+                                            }
+
                                             // Clear visualization to show we're now in manual mode
                                             let mut audio_data = audio_visualization_data.write();
                                             audio_data.is_speaking = false;
                                         }
-                                        // Switching FROM Manual TO RealTime - cancel any manual session
+                                        // Switching FROM Manual TO RealTime - cancel any manual session and start realtime recording
                                         (TranscriptionMode::Manual, TranscriptionMode::RealTime) => {
                                             // Promote any active session into processing state
                                             let session_id_opt = Self::move_session_to_processing(
@@ -668,42 +673,47 @@ impl RealTimeTranscriber {
                                                 &processing_manual_session,
                                             );
 
-                                            recording.store(false, Ordering::Relaxed); // Ensure recording is stopped
-
-                                            // Stop the audio capture stream
-                                            if let Err(e) = audio_capture.lock().stop_recording() {
-                                                eprintln!("Warning: Failed to stop audio recording: {}", e);
+                                            if let Some(audio_processor) = &audio_processor_ref {
+                                                if let Some(session_id) = session_id_opt {
+                                                    let audio_processor = audio_processor.clone();
+                                                    let processing_manual_session = processing_manual_session.clone();
+                                                    tokio::spawn(async move {
+                                                        if let Err(e) =
+                                                            audio_processor.trigger_manual_transcription(sample_rate).await
+                                                        {
+                                                            eprintln!(
+                                                                "Failed to process final manual session during mode switch: {}",
+                                                                e
+                                                            );
+                                                            Self::mark_processing_session_failed(
+                                                                &processing_manual_session,
+                                                                &session_id,
+                                                            );
+                                                        } else if Self::clear_processing_session_if_matches(
+                                                            &processing_manual_session,
+                                                            &session_id,
+                                                        ) {
+                                                            // Session completed during mode switch
+                                                        }
+                                                    });
+                                                }
                                             }
-
-                        if let Some(audio_processor) = &audio_processor_ref {
-                            if let Some(session_id) = session_id_opt {
-                                let audio_processor = audio_processor.clone();
-                                let processing_manual_session = processing_manual_session.clone();
-                                tokio::spawn(async move {
-                                    if let Err(e) =
-                                        audio_processor.trigger_manual_transcription(sample_rate).await
-                                    {
-                                        eprintln!(
-                                            "Failed to process final manual session during mode switch: {}",
-                                            e
-                                        );
-                                        Self::mark_processing_session_failed(
-                                            &processing_manual_session,
-                                            &session_id,
-                                        );
-                                    } else if Self::clear_processing_session_if_matches(
-                                        &processing_manual_session,
-                                        &session_id,
-                                    ) {
-                                        // Session completed during mode switch
-                                    }
-                                });
-                            }
-                        }
 
                                             // Clear manual audio buffer
                                             if let Some(audio_processor) = &audio_processor_ref {
                                                 audio_processor.clear_manual_buffer();
+                                            }
+
+                                            // RealTime mode should start recording by default
+                                            // First ensure clean state by stopping any existing stream
+                                            if let Err(e) = audio_capture.lock().stop_recording() {
+                                                eprintln!("Warning: Failed to stop audio recording during mode switch: {}", e);
+                                            }
+
+                                            // Now start recording in RealTime mode
+                                            recording.store(true, Ordering::Relaxed);
+                                            if let Err(e) = audio_capture.lock().start_recording() {
+                                                eprintln!("Warning: Failed to start audio recording for RealTime mode: {}", e);
                                             }
                                         }
                                         // Same mode - no action needed
