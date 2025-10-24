@@ -1,5 +1,5 @@
 // Re-export common types and functions for easier imports
-pub use crate::config::{AppConfig, VadConfigSerde, WhisperOptionsSerde};
+pub use crate::config::{AppConfig, VadConfigSerde};
 pub use crate::download::download_file;
 pub use crate::silero_audio_processor::{AudioSegment, SileroVad, VadConfig, VadState};
 pub use crate::ui::common::AudioVisualizationData;

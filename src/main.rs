@@ -2,29 +2,22 @@ use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-mod audio_capture;
-mod audio_processor;
-mod config;
-mod copy;
-mod download;
+// Use library modules (the binary should not redeclare modules)
+use sonori::config::{read_app_config, AppConfig};
+use sonori::copy;
+use sonori::download;
+use sonori::portal_input;
+use sonori::real_time_transcriber::{RealTimeTranscriber, TranscriptionMode};
+use sonori::sound_player::SoundPlayer;
+use sonori::system_tray;
+use sonori::ui;
+
+// Binary-specific modules (not in library)
 mod global_shortcuts;
-mod portal_input;
-mod portal_tokens;
-mod real_time_transcriber;
-mod silero_audio_processor;
-mod stats_reporter;
-mod system_tray;
-mod transcribe;
-mod transcription_processor;
-mod transcription_stats;
-mod ui;
 
 use ashpd::register_host_app;
 use ashpd::AppID;
 use clap::{Parser, ValueEnum};
-use config::read_app_config;
-use download::ModelType;
-use real_time_transcriber::{RealTimeTranscriber, TranscriptionMode};
 use std::sync::mpsc as std_mpsc;
 use std::thread;
 use std::time::Duration;
@@ -78,11 +71,11 @@ async fn main() -> anyhow::Result<()> {
             TranscriptionModeArg::Realtime => TranscriptionMode::RealTime,
         }
     } else {
-        TranscriptionMode::from(app_config.transcription_mode.as_str())
+        TranscriptionMode::from(app_config.general_config.transcription_mode.as_str())
     };
 
     // Update config with CLI override
-    app_config.transcription_mode = match transcription_mode {
+    app_config.general_config.transcription_mode = match transcription_mode {
         TranscriptionMode::Manual => "manual".to_string(),
         TranscriptionMode::RealTime => "realtime".to_string(),
     };
@@ -90,12 +83,29 @@ async fn main() -> anyhow::Result<()> {
     println!("Transcription mode: {:?}", transcription_mode);
 
     println!("Initializing models...");
-    let (whisper_model_path, _silero_model_path) =
-        download::init_all_models(Some(&app_config.model)).await?;
+    let (whisper_model_path, _silero_model_path) = download::init_all_models(
+        Some(&app_config.general_config.model),
+        app_config.backend_config.backend,
+        &app_config.backend_config.quantization_level,
+    )
+    .await?;
 
     println!("Whisper model ready at: {:?}", whisper_model_path);
 
-    let mut transcriber = RealTimeTranscriber::new(whisper_model_path, app_config.clone())?;
+    // Initialize sound player
+    let sound_player = match SoundPlayer::new(&app_config.sound_config) {
+        Ok(player) => {
+            println!("Sound player initialized successfully");
+            Some(player)
+        }
+        Err(e) => {
+            eprintln!("Failed to initialize sound player: {}", e);
+            None
+        }
+    };
+
+    let mut transcriber =
+        RealTimeTranscriber::new(whisper_model_path, app_config.clone(), sound_player)?;
 
     transcriber.start()?;
 
@@ -350,7 +360,7 @@ async fn run_manual_cli(mut transcriber: RealTimeTranscriber) -> anyhow::Result<
 
 async fn run_gui_mode(
     transcriber: RealTimeTranscriber,
-    app_config: config::AppConfig,
+    app_config: AppConfig,
 ) -> anyhow::Result<()> {
     // Set up shutdown channels and monitoring task
     let (_shutdown_tx, shutdown_rx) = tokio::sync::mpsc::channel::<()>(2);
@@ -424,7 +434,7 @@ async fn run_gui_mode(
         let paste_shortcut = app_config.portal_config.paste_shortcut.clone();
         tokio::spawn(async move {
             // Attempt to start screencast + remote desktop session
-            let portal = crate::portal_input::PortalInput::new().await;
+            let portal = portal_input::PortalInput::new().await;
             let portal = match portal {
                 Ok(p) => p,
                 Err(e) => {
@@ -438,7 +448,7 @@ async fn run_gui_mode(
                 match portal_rx.recv_timeout(Duration::from_millis(500)) {
                     Ok(text) => {
                         // Copy to clipboard (using our simplified wayland connection)
-                        let _ = crate::copy::WlCopy::copy_to_clipboard(&text);
+                        let _ = copy::WlCopy::copy_to_clipboard(&text);
 
                         // Wait a bit for clipboard to be ready
                         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
@@ -464,7 +474,7 @@ async fn run_gui_mode(
         thread::spawn(move || loop {
             match clipboard_rx.recv_timeout(Duration::from_millis(500)) {
                 Ok(text) => {
-                    let _ = crate::copy::WlCopy::copy_to_clipboard(&text);
+                    let _ = copy::WlCopy::copy_to_clipboard(&text);
                 }
                 Err(std_mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std_mpsc::RecvTimeoutError::Disconnected) => break,
