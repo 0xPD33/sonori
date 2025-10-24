@@ -85,10 +85,10 @@ pub struct PortalConfig {
 /// Configuration for manual transcription mode
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManualModeConfig {
-    /// Maximum recording duration in seconds (default: 60)
+    /// Maximum recording duration in seconds (default: 120)
     pub max_recording_duration_secs: u32,
 
-    /// Audio buffer size for manual sessions (default: 16000 * 60 = 1 min at 16kHz)
+    /// Audio buffer size for manual sessions (default: 16000 * 120 = 2 min at 16kHz)
     pub manual_buffer_size: usize,
 
     /// Whether to auto-start a new session after completing one
@@ -127,8 +127,8 @@ impl Default for PortalConfig {
 impl Default for ManualModeConfig {
     fn default() -> Self {
         Self {
-            max_recording_duration_secs: 60,
-            manual_buffer_size: 16000 * 60, // 1 minute at 16kHz
+            max_recording_duration_secs: 120,
+            manual_buffer_size: 16000 * 120, // 2 minutes at 16kHz
             auto_restart_sessions: false,
             clear_on_new_session: true,
             processing_timeout_secs: 30,
@@ -455,15 +455,15 @@ pub struct VadConfigSerde {
 impl Default for VadConfigSerde {
     fn default() -> Self {
         Self {
-            threshold: 0.2,                // Silero uses probability threshold (0.0-1.0)
-            hangbefore_frames: 3,          // Wait 30ms (3 frames) before confirming speech
-            hangover_frames: 20, // Wait 200ms (20 frames) of silence before ending segment
-            hop_samples: 160,    // 10ms hop for overlapping windows
+            threshold: 0.15,               // Lower threshold to detect quieter speech
+            hangbefore_frames: 5,          // Increased to 50ms - capture more lead-in audio
+            hangover_frames: 30,           // Increased to 300ms - keep more trailing audio
+            hop_samples: 160,              // 10ms hop for overlapping windows
             max_buffer_duration_sec: 30.0, // Maximum buffer size in seconds
-            max_segment_count: 20, // Maximum number of segments to keep
-            silence_tolerance_frames: 5, // 50ms tolerance in PossibleSpeech (5 frames @ 10ms)
-            speech_end_threshold: 0.15, // Lower threshold for speech continuation (hysteresis)
-            speech_prob_smoothing: 0.3, // EMA smoothing factor (production standard)
+            max_segment_count: 20,         // Maximum number of segments to keep
+            silence_tolerance_frames: 8,   // Increased to 80ms - tolerate more pauses
+            speech_end_threshold: 0.1,     // Lower threshold for continuation
+            speech_prob_smoothing: 0.3,    // EMA smoothing factor (production standard)
         }
     }
 }

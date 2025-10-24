@@ -4,7 +4,7 @@
 # These are the most important settings you'll likely want to change
 
 [general_config]
-model = "base.en"                     # Whisper model size (tiny, base, small, medium, large)
+model = "small"               # Whisper model size (tiny, base, small, medium, large, large-v2, large-v3, large-v3-turbo)
 language = "en"                        # Transcription language (use "auto" for auto-detect)
 transcription_mode = "realtime"        # "realtime" for live transcription, "manual" for push-to-talk
 
@@ -16,7 +16,7 @@ transcription_mode = "realtime"        # "realtime" for live transcription, "man
 [backend_config]
 backend = "whisper_cpp"                # Options: "ctranslate2", "whisper_cpp", "parakeet"
 threads = 8                           # Number of CPU threads (default: min(num_cpus, 4))
-gpu_enabled = false                   # Enable GPU acceleration (CUDA/Metal/Vulkan)
+gpu_enabled = true                    # Enable GPU acceleration (CUDA/Metal/Vulkan)
 quantization_level = "medium"         # Precision: "high" (full), "medium" (q8_0), "low" (q5_1)
 
 # =============================================================================
@@ -30,12 +30,15 @@ buffer_size = 1024                    # Audio buffer size (fundamental processin
 max_vis_samples = 1024                # Samples to display in audio visualization
 
 [vad_config]
-threshold = 0.2                       # Speech detection sensitivity (0.0-1.0, higher = less sensitive)
-hangbefore_frames = 1                 # Frames to wait before confirming speech start
-hangover_frames = 20                  # Frames to wait after speech ends before cutting
+threshold = 0.15                      # Speech detection sensitivity (0.0-1.0, lower = more sensitive)
+speech_end_threshold = 0.1            # Lower threshold for speech continuation (hysteresis)
+hangbefore_frames = 5                 # Frames to wait before confirming speech start (50ms)
+hangover_frames = 30                  # Frames to wait after speech ends before cutting (300ms)
+silence_tolerance_frames = 8          # Frames of silence to tolerate during speech (80ms)
 hop_samples = 160                     # Samples to advance between frames (10ms at 16kHz)
 max_buffer_duration_sec = 30.0        # Maximum audio buffer size in seconds
 max_segment_count = 20                # Maximum number of speech segments to keep
+speech_prob_smoothing = 0.3           # Exponential moving average smoothing factor
 
 [sound_config]
 enabled = true                        # Enable sound feedback
@@ -103,8 +106,8 @@ paste_shortcut = "ctrl_shift_v"       # Paste method: "ctrl_shift_v" (terminals)
 # Settings specific to manual/push-to-talk transcription mode
 
 [manual_mode_config]
-max_recording_duration_secs = 60      # Maximum recording time per session
-manual_buffer_size = 960000           # Audio buffer size for manual sessions
+max_recording_duration_secs = 120     # Maximum recording time per session (2 minutes)
+manual_buffer_size = 1920000          # Audio buffer size for manual sessions (2 min at 16kHz)
 auto_restart_sessions = false         # Auto-start new session after completing one
 clear_on_new_session = true           # Clear transcript when starting new session
 processing_timeout_secs = 30          # Timeout for transcription processing
