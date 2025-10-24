@@ -4,7 +4,7 @@ This document provides a comprehensive overview of the Sonori real-time speech t
 
 ## System Overview
 
-Sonori is a high-performance, real-time speech transcription application built in Rust. It provides a transparent overlay displaying live transcriptions using OpenAI's Whisper models, with GPU-accelerated rendering and Wayland layer shell integration for seamless system integration on Linux.
+Sonori is a high-performance, real-time speech transcription application built in Rust. It provides a transparent overlay displaying live transcriptions using multiple AI backends (CTranslate2, Whisper.cpp, with GPU acceleration support), with GPU-accelerated rendering and Wayland layer shell integration for seamless system integration on Linux.
 
 ## Core Architecture
 
@@ -13,18 +13,26 @@ Sonori is a high-performance, real-time speech transcription application built i
 The application follows a **modular, multi-threaded pipeline architecture** with clear separation of concerns:
 
 ```
-Audio Input → VAD Processing → Speech Transcription → GPU Rendering → System Integration
-     ↓            ↓                 ↓                  ↓              ↓
-PortAudio → Silero VAD → CTranslate2 Whisper → WGPU UI → Wayland/XDG Portal
+Audio Input → VAD Processing → Speech Transcription (Multi-Backend) → GPU Rendering → System Integration
+     ↓            ↓                 ↓                                    ↓              ↓
+PortAudio → Silero VAD → Backend Abstraction (CT2/WhisperCpp) → WGPU UI → Wayland/XDG Portal
+                               ↓                                ↓
+                          GPU Acceleration              Sound Feedback
+                        (CUDA/Vulkan)                 System Tray
 ```
 
 ### Primary Components
 
-1. **Audio Capture Layer** - PortAudio-based real-time audio input
+1. **Audio Capture Layer** - PortAudio-based real-time audio input with CPAL fallback
 2. **Voice Activity Detection** - Silero VAD with ONNX Runtime inference
-3. **Speech Transcription** - Whisper models via CTranslate2 optimization, supporting both real-time streaming and manual batch modes
+3. **Multi-Backend Transcription** - Unified backend abstraction supporting:
+   - CTranslate2 (CUDA/CPU, default)
+   - Whisper.cpp (Vulkan/OpenBLAS/CPU)
+   - Parakeet (planned)
+   - Supporting both real-time streaming and manual batch modes
 4. **Custom GPU UI** - WGPU-based rendering with custom WGSL shaders, including mode-specific button layouts
-5. **System Integration** - Wayland layer shell for transparent overlays, plus optional XDG Desktop Portal for global shortcuts and input injection
+5. **Sound Feedback System** - CPAL-based audio playback for state transitions (record start/stop, session complete, etc.)
+6. **System Integration** - Wayland layer shell for transparent overlays, system tray (StatusNotifierItem), and optional XDG Desktop Portal for global shortcuts and input injection
 
 ### Transcription Modes
 
@@ -41,8 +49,13 @@ Modes can be toggled at runtime via UI button or CLI flags (`--mode manual`). Th
 
 - **`real_time_transcriber.rs`** - Main application coordinator implementing the Facade pattern, managing transcription modes and manual session state
 - **`main.rs`** - Entry point with CLI/GUI mode selection, Tokio runtime setup, and mode-specific initialization
-- **`config.rs`** - TOML-based hierarchical configuration management, including mode-specific settings like [manual_mode_config] and [portal_config]
-- **`download.rs`** - Automatic model downloading and conversion from Hugging Face
+- **`config.rs`** - TOML-based hierarchical configuration management, including mode-specific settings like [manual_mode_config], [portal_config], [backend_config], [display_config], [window_behavior_config], and [sound_config]
+- **`download.rs`** - Automatic model downloading and conversion from Hugging Face; supports CTranslate2 and Whisper.cpp model formats
+- **`backend/mod.rs`** - Backend abstraction layer with trait definitions, `BackendType` enum, and `QuantizationLevel` mapping
+- **`backend/factory.rs`** - Factory pattern for backend instantiation based on config
+- **`backend/ctranslate2.rs`** - CTranslate2 backend implementation (CUDA/CPU with INT8/FLOAT16 quantization)
+- **`backend/whisper_cpp.rs`** - Whisper.cpp backend implementation (Vulkan/OpenBLAS/CPU with q8_0/q5_1 quantization)
+- **`backend/traits.rs`** - Shared backend trait definitions and error handling
 
 ### Audio Processing Pipeline
 
@@ -62,13 +75,110 @@ Modes can be toggled at runtime via UI button or CLI flags (`--mode manual`). Th
 - **`ui/buttons.rs`** - Interactive buttons with mode-specific layouts (e.g., RecordToggle, Accept for manual mode)
 - **`ui/*.wgsl`** - Custom GPU shaders for UI components
 
+### Sound Feedback System
+
+- **`sound_player.rs`** - CPAL-based audio playback with threading and volume control
+- **`sound_generator.rs`** - Sine tone and sweep generation for audio feedback (5 sound types)
+
 ### System Integration
 
-- **`portal_input.rs`** - XDG Desktop Portal integration for remote desktop and keyboard input injection (e.g., automatic Ctrl+V pasting)
-- **`global_shortcuts.rs`** - Global shortcut registration via XDG Desktop Portal (e.g., Super+Tab to toggle manual sessions)
+- **`portal_input.rs`** - XDG Desktop Portal integration for remote desktop and keyboard input injection (e.g., automatic Ctrl+V pasting); handles session lifecycle and token persistence
+- **`portal_tokens.rs`** - Portal session token persistence and restoration across runs
+- **`global_shortcuts.rs`** - Global shortcut registration via XDG Desktop Portal (e.g., Super+backslash to toggle manual sessions); handles accelerator normalization and signal management
+- **`system_tray.rs`** - StatusNotifierItem D-Bus integration for system tray presence; supports window control, recording toggle, session management, and status display
 - **`copy.rs`** - Wayland clipboard operations using wl-copy
 - **`stats_reporter.rs`** - Performance monitoring and telemetry collection
 - **`transcription_stats.rs`** - Transcription quality metrics and analysis
+
+## Backend System Architecture
+
+### Multi-Backend Abstraction
+
+Sonori uses an enum-based dispatch pattern for zero-cost abstraction across multiple transcription backends:
+
+#### Backend Types
+- **CTranslate2** (default) - Fast CPU/GPU inference using CTranslate2 optimization of Whisper models
+  - GPU: CUDA support
+  - Quantization: INT8 (default), FLOAT16, FLOAT32
+  - Model format: Directory with model.bin, config.json, tokenizer.json
+  - Max segment: 60 seconds
+
+- **Whisper.cpp** - Lightweight, portable inference using whisper.cpp bindings
+  - GPU: Vulkan support, CPU optimization with OpenBLAS
+  - Quantization: q8_0 (default), q5_1, f32
+  - Model format: Single .bin GGML file
+  - Max segment: 30 seconds
+
+- **Parakeet** (planned) - NVIDIA Parakeet RNNT models for improved accuracy
+  - GPU: CUDA/GPU support via ONNX Runtime
+  - Quantization: INT8, full precision
+  - Model format: ONNX model files
+
+#### Quantization Level Mapping
+The unified `QuantizationLevel` enum maps to backend-specific implementations:
+- **High** - Full precision (CT2: FLOAT32/FLOAT16, WhisperCpp: f32)
+- **Medium** (default) - Balanced (CT2: INT8, WhisperCpp: q8_0)
+- **Low** - Compact (CT2: INT8, WhisperCpp: q5_1)
+
+#### Backend Factory Pattern
+The factory (`backend/factory.rs`) instantiates the correct backend based on config:
+1. Read `backend_config.backend` from config.toml
+2. Load appropriate model file(s)
+3. Initialize with thread count, GPU settings, and quantization
+4. Return trait object for unified interface
+
+#### Backend Configuration
+Unified `BackendConfig` structure provides:
+- `backend`: Backend selection (enum)
+- `threads`: CPU thread count (default: min(4, num_cpus))
+- `gpu_enabled`: GPU acceleration toggle (default: false for compatibility)
+- `quantization_level`: Model precision trade-off
+
+Backend-specific options are maintained in separate config structs:
+- `ct2_options`: beam_size, patience, repetition_penalty
+- `whisper_cpp_options`: beam_size, patience, temperature, thresholds, etc.
+
+### Model Management
+
+#### Automatic Download & Conversion
+`download.rs` handles backend-specific model acquisition:
+
+**CTranslate2**:
+- Downloads HuggingFace Whisper models
+- Converts using `ct2-transformers-converter` (requires Python/PyTorch)
+- Stores in `~/.cache/sonori/models/{model}-ct2/`
+- Supports model aliases for distilled variants
+
+**Whisper.cpp**:
+- Downloads pre-quantized GGML models from Hugging Face
+- Automatic quantization level selection
+- Stores in `~/.cache/sonori/models/ggml-{model}{quantization}.bin`
+- Validates file integrity before use
+
+#### Model Name Resolution
+Intelligent mapping of simple model names to backend-appropriate formats:
+- `"small"` → CTranslate2: `"distil-whisper/distil-small.en"` (faster)
+- `"small"` → Whisper.cpp: `"small"` or `"small-q8_0"` (quantized)
+
+### GPU Acceleration
+
+#### CTranslate2 GPU Path
+- CUDA device selection via `gpu_enabled` flag
+- Automatic device detection if available
+- Falls back to CPU if GPU unavailable
+- Thread pool uses GPU for matrix operations
+
+#### Whisper.cpp GPU Path
+- Vulkan support via whisper-rs bindings
+- OpenBLAS CPU acceleration as fallback
+- GPU context initialization and session setup
+- Automatic fallback on shader compilation errors
+
+#### Performance Considerations
+- GPU warm-up on first transcription (~1-2s)
+- CPU more efficient for <100ms audio
+- GPU better for >500ms segments
+- Quantization trades accuracy for speed/memory
 
 ## Threading Model
 
@@ -320,7 +430,7 @@ The architecture supports various performance scaling approaches:
 - **Compositor Support** - Limited Wayland compositor compatibility  
 - **Model Performance** - CUDA support currently broken
 - **Transcription Quality** - Occasional word truncation at segment boundaries
-- **Manual Mode** - Long sessions (>60s) may require chunking; no built-in speaker diarization
+- **Manual Mode** - Long sessions (>120s) may require chunking; no built-in speaker diarization
 
 ## Conclusion
 

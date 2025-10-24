@@ -58,6 +58,27 @@ For NixOS users, use `nix develop`. For other distributions, refer to dependency
 - Use efficient shader variants for different rendering modes
 - Implement multi-pass rendering with layered alpha blending
 
+### Multi-Backend Architecture Patterns
+- Implement backends as trait objects conforming to `TranscriptionBackend` enum dispatch
+- Use factory pattern (`backend/factory.rs`) for backend instantiation based on config
+- Support quantization level mapping from unified enum to backend-specific formats
+- Handle backend-specific model formats (CT2 directories vs Whisper.cpp .bin files)
+- Implement graceful fallback when backend initialization fails
+- Provide clear error messages for missing GPU drivers or models
+- Test backend-agnostic code paths with multiple backends
+- Document quantization trade-offs for accuracy vs speed/memory
+
+### Sound System Patterns
+- Use CPAL for cross-platform audio output (fallback to PortAudio if needed)
+- Implement sound generation with configurable parameters (frequency, duration, amplitude)
+- Use envelope functions (ADSR) for natural sound transitions
+- Spawn dedicated thread for audio playback to avoid blocking main/audio threads
+- Store generated samples in Arc for thread-safe sharing
+- Implement volume control with atomic operations (lock-free)
+- Provide enable/disable toggle via AtomicBool for real-time control
+- Queue sounds via bounded channel to prevent audio thread starvation
+- Handle audio device unavailability gracefully (silent fallback)
+
 ### Configuration Management
 - Use TOML-based hierarchical configuration with runtime updates
 - Implement hot-reloading of configuration files
