@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 portaudio = "0.8.0"
+cpal = "0.15"
 ct2rs = { version = "0.9.6", features = ["whisper"] }
 ndarray = "0.16.1"
 reqwest = { version = "0.12.14", features = ["stream", "json"] }
@@ -28,6 +29,8 @@ xkbcommon = { version = "0.7", features = ["wayland"] }
 ort = { version = "2.0.0-rc.10", features = ["ndarray"] }
 image = "0.25.5"
 chrono = "0.4.35"
+num_cpus = "1.16"
+whisper-rs = { version = "0.15.1", features = ["openblas"] }
 
 [features]
 # Enable runtime CPU feature detection
