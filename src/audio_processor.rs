@@ -324,10 +324,15 @@ impl AudioProcessor {
 
         // Check if adding this audio would exceed the buffer limit
         if new_size > manual_buffer_max_size {
+            let sample_rate = 16000;
+            let current_duration = current_size as f64 / sample_rate as f64;
+            let max_duration = manual_buffer_max_size as f64 / sample_rate as f64;
+
             eprintln!(
-                "Manual buffer overflow: current={}, new={}, max={}. Auto-stopping recording.",
-                current_size, new_size, manual_buffer_max_size
+                "Manual buffer full ({:.1}s / {:.1}s). Recording stopped.",
+                current_duration, max_duration
             );
+
             // Stop recording to prevent buffer overflow
             recording.store(false, Ordering::Relaxed);
 
@@ -357,44 +362,41 @@ impl AudioProcessor {
 
         let original_duration = accumulated_audio.len() as f64 / sample_rate as f64;
         println!(
-            "Processing accumulated manual audio: {} samples ({:.2}s)",
+            "Processing manual audio: {} samples ({:.2}s)",
             accumulated_audio.len(),
             original_duration
         );
 
-        // Apply VAD-based silence removal to improve transcription quality
+        // Apply VAD preprocessing to remove silence, but use original audio as fallback
         let speech_only_audio = {
             let mut vad = self.audio_processor.lock();
             match vad.process_audio(&accumulated_audio) {
                 Ok(speech_segments) => {
                     if speech_segments.is_empty() {
-                        println!("No speech detected in manual recording");
-                        return Ok(()); // Nothing to transcribe
+                        println!("VAD found no speech, using original audio");
+                        accumulated_audio // Use original instead of discarding
+                    } else {
+                        // Concatenate speech segments
+                        let total_samples: usize =
+                            speech_segments.iter().map(|seg| seg.samples.len()).sum();
+                        let mut concatenated = Vec::with_capacity(total_samples);
+                        for segment in speech_segments {
+                            concatenated.extend_from_slice(&segment.samples);
+                        }
+
+                        let speech_duration = concatenated.len() as f64 / sample_rate as f64;
+                        let silence_removed = original_duration - speech_duration;
+                        println!(
+                            "VAD: kept {:.2}s speech, removed {:.2}s silence",
+                            speech_duration, silence_removed
+                        );
+
+                        concatenated
                     }
-
-                    // Concatenate all speech segments, removing silence
-                    let total_speech_samples: usize =
-                        speech_segments.iter().map(|seg| seg.samples.len()).sum();
-
-                    let mut concatenated = Vec::with_capacity(total_speech_samples);
-                    for segment in speech_segments {
-                        concatenated.extend_from_slice(&segment.samples);
-                    }
-
-                    let speech_duration = concatenated.len() as f64 / sample_rate as f64;
-                    let silence_removed = original_duration - speech_duration;
-                    println!(
-                        "VAD preprocessing: {:.2}s speech, {:.2}s silence removed ({:.1}% reduction)",
-                        speech_duration,
-                        silence_removed,
-                        (silence_removed / original_duration) * 100.0
-                    );
-
-                    concatenated
                 }
                 Err(e) => {
-                    eprintln!("VAD preprocessing failed: {}, using original audio", e);
-                    accumulated_audio // Fallback to original audio if VAD fails
+                    eprintln!("VAD failed: {}, using original audio", e);
+                    accumulated_audio // Fallback on error
                 }
             }
         };
