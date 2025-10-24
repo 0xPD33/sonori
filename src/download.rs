@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tokio::io::AsyncWriteExt;
 
+use crate::backend::QuantizationLevel;
+
 /// Default Whisper model to download if none specified
 const DEFAULT_WHISPER_MODEL: &str = "openai/whisper-base.en";
 
@@ -333,13 +335,171 @@ pub async fn init_model_by_type(
     }
 }
 
+/// Normalize model name based on backend type
+///
+/// This allows users to specify simple model names (e.g., "base.en", "small")
+/// that work across different backends:
+/// - CT2: Maps to distil-whisper models for better performance
+/// - WhisperCpp: Uses standard OpenAI Whisper models
+///
+/// # Arguments
+/// * `model_name` - User-specified model name
+/// * `backend_type` - Which backend is being used
+///
+/// # Returns
+/// Normalized model name appropriate for the backend
+fn normalize_model_name(model_name: &str, backend_type: crate::backend::BackendType) -> String {
+    // If model already has an organization prefix, use as-is
+    if model_name.contains('/') {
+        return model_name.to_string();
+    }
+
+    match backend_type {
+        crate::backend::BackendType::CTranslate2 => {
+            // Map simple names intelligently:
+            // - Small models (tiny, base): Use standard OpenAI (already fast enough)
+            // - Larger models (small+): Use distil-whisper (need speed optimization)
+            let ct2_mapping = match model_name {
+                "tiny" | "tiny.en" => "openai/whisper-tiny.en",
+                "base" | "base.en" => "openai/whisper-base.en",
+                "small" | "small.en" => "distil-whisper/distil-small.en",
+                "medium" | "medium.en" => "distil-whisper/distil-medium.en",
+                "large" | "large-v1" | "large-v2" | "large-v3" => "distil-whisper/distil-large-v3",
+                // If it's already a full model name, use as-is
+                other => other,
+            };
+
+            ct2_mapping.to_string()
+        }
+        crate::backend::BackendType::WhisperCpp => {
+            // WhisperCpp uses standard OpenAI model names as-is
+            // Just strip any "distil-" prefix if present
+            model_name.strip_prefix("distil-").unwrap_or(model_name).to_string()
+        }
+        crate::backend::BackendType::Parakeet => {
+            // Parakeet will use standard model names
+            model_name.to_string()
+        }
+    }
+}
+
 /// Initialize all required models (Whisper and Silero)
-pub async fn init_all_models(whisper_model_name: Option<&str>) -> Result<(PathBuf, PathBuf)> {
+///
+/// # Arguments
+/// * `whisper_model_name` - Name of the whisper model to use
+/// * `backend_type` - Which backend to use (determines model format)
+/// * `quantization` - Quantization level (for whisper.cpp models)
+///
+/// # Returns
+/// Tuple of (whisper_model_path, silero_model_path)
+pub async fn init_all_models(
+    whisper_model_name: Option<&str>,
+    backend_type: crate::backend::BackendType,
+    quantization: &QuantizationLevel,
+) -> Result<(PathBuf, PathBuf)> {
     // Initialize Silero VAD model
     let silero_model_path = init_silero_model().await?;
 
-    // Initialize Whisper model
-    let whisper_model_path = init_model(whisper_model_name).await?;
+    // Normalize model name based on backend
+    let original_model = whisper_model_name.unwrap_or("base.en");
+    let normalized_model = normalize_model_name(original_model, backend_type);
+
+    // Show model mapping if it changed
+    if original_model != normalized_model {
+        println!(
+            "Model mapping for {} backend: '{}' → '{}'",
+            backend_type, original_model, normalized_model
+        );
+    }
+
+    // Initialize Whisper model based on backend type
+    let whisper_model_path = match backend_type {
+        crate::backend::BackendType::CTranslate2 => {
+            // CT2: Download and convert model to CT2 format
+            init_model(Some(&normalized_model)).await?
+        }
+        crate::backend::BackendType::WhisperCpp => {
+            // WhisperCpp: Get expected GGML model path
+            // The factory will handle auto-download if the file doesn't exist
+            get_whisper_cpp_model_path(&normalized_model, quantization)?
+        }
+        crate::backend::BackendType::Parakeet => {
+            return Err(anyhow::anyhow!("Parakeet backend not yet implemented"));
+        }
+    };
 
     Ok((whisper_model_path, silero_model_path))
+}
+
+/// Download a whisper.cpp GGML model file
+///
+/// # Arguments
+/// * `model_name` - Base model name (e.g., "base.en", "small", "medium")
+/// * `quantization` - Quantization level to determine file variant
+///
+/// # Returns
+/// Path to the downloaded model file
+pub async fn download_whisper_cpp_model(
+    model_name: &str,
+    quantization: &QuantizationLevel,
+) -> Result<PathBuf> {
+    let models_dir = get_models_dir()?;
+
+    // Determine quantization suffix for filename
+    // Available for whisper.cpp: full precision (no suffix), q8_0, q5_1
+    let quant_suffix = match quantization {
+        QuantizationLevel::High => "",        // Full precision (148MB for base.en)
+        QuantizationLevel::Medium => "-q8_0", // Q8_0 quantization (82MB for base.en)
+        QuantizationLevel::Low => "-q5_1",    // Q5_1 quantization (60MB for base.en)
+    };
+
+    // Build filename: ggml-{model}{quant}.bin
+    let filename = format!("ggml-{}{}.bin", model_name, quant_suffix);
+    let output_path = models_dir.join(&filename);
+
+    // Check if already exists
+    if output_path.exists() {
+        println!("whisper.cpp model already exists at: {:?}", output_path);
+        return Ok(output_path);
+    }
+
+    // Download from HuggingFace ggerganov/whisper.cpp repository
+    let url = format!(
+        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{}",
+        filename
+    );
+
+    println!("Downloading whisper.cpp model: {}", filename);
+    println!("  From: {}", url);
+    println!("  To: {:?}", output_path);
+
+    download_file(&url, &output_path).await?;
+
+    println!("whisper.cpp model downloaded successfully!");
+    Ok(output_path)
+}
+
+/// Get the expected path for a whisper.cpp model
+///
+/// # Arguments
+/// * `model_name` - Base model name (e.g., "base.en", "small")
+/// * `quantization` - Quantization level
+///
+/// # Returns
+/// Expected path to the GGML model file
+pub fn get_whisper_cpp_model_path(
+    model_name: &str,
+    quantization: &QuantizationLevel,
+) -> Result<PathBuf> {
+    let models_dir = get_models_dir()?;
+
+    // Available for whisper.cpp: full precision (no suffix), q8_0, q5_1
+    let quant_suffix = match quantization {
+        QuantizationLevel::High => "",        // Full precision
+        QuantizationLevel::Medium => "-q8_0", // Q8_0 quantization
+        QuantizationLevel::Low => "-q5_1",    // Q5_1 quantization
+    };
+
+    let filename = format!("ggml-{}{}.bin", model_name, quant_suffix);
+    Ok(models_dir.join(filename))
 }

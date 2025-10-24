@@ -215,6 +215,5 @@ async fn register_with_watcher(conn: &Connection) -> Result<()> {
         )
         .await?;
 
-    println!("Registered with StatusNotifierWatcher");
     Ok(())
 }

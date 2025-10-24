@@ -306,10 +306,6 @@ impl SileroVad {
 
         if let Some(start_time) = self.speech_start_time {
             if start_time < new_time_offset {
-                if cfg!(debug_assertions) {
-                    println!("Speech crosses buffer at {:.2}s", new_time_offset);
-                }
-
                 // Create a segment for the part being trimmed
                 let segment = AudioSegment {
                     samples: self.extract_speech_segment(start_time, new_time_offset),
@@ -366,9 +362,6 @@ impl SileroVad {
                 if is_starting_speech {
                     self.current_state = VadState::PossibleSpeech;
                     self.frames_in_state = 1;
-                    if cfg!(debug_assertions) {
-                        println!("Silence → PossibleSpeech");
-                    }
                 }
             }
             VadState::PossibleSpeech => {
@@ -394,21 +387,11 @@ impl SileroVad {
                         self.speech_start_time = Some(start_time);
                         self.current_state = VadState::Speech;
                         self.frames_in_state = 0;
-
-                        if cfg!(debug_assertions) {
-                            println!("PossibleSpeech → Speech (start: {:.2}s)", start_time);
-                        }
                     }
                 } else if is_continuing_speech {
                     // In the "dead zone" (between end and start thresholds)
                     // Reset silence counter but don't advance speech confirmation
                     self.silence_frames = 0;
-                    if cfg!(debug_assertions) {
-                        println!(
-                            "PossibleSpeech → In dead zone (prob: {:.3}, continuing but not confirming)",
-                            detection_prob
-                        );
-                    }
                 } else {
                     // Below continuation threshold - count as silence
                     self.silence_frames += 1;
@@ -417,14 +400,6 @@ impl SileroVad {
                         self.current_state = VadState::Silence;
                         self.frames_in_state = 0;
                         self.silence_frames = 0;
-                        if cfg!(debug_assertions) {
-                            println!("PossibleSpeech → Silence (after tolerance)");
-                        }
-                    } else if cfg!(debug_assertions) {
-                        println!(
-                            "PossibleSpeech → Still in possible speech (silence: {}/{})",
-                            self.silence_frames, silence_tolerance_frames
-                        );
                     }
                 }
             }
@@ -433,9 +408,6 @@ impl SileroVad {
                 if !is_continuing_speech {
                     self.current_state = VadState::PossibleSilence;
                     self.frames_in_state = 1;
-                    if cfg!(debug_assertions) {
-                        println!("Speech → PossibleSilence");
-                    }
                 }
             }
             VadState::PossibleSilence => {
@@ -446,10 +418,6 @@ impl SileroVad {
                         self.current_state = VadState::Silence;
                         self.frames_in_state = 0;
 
-                        if cfg!(debug_assertions) {
-                            println!("PossibleSilence → Silence (end: {:.2}s)", self.current_time);
-                        }
-
                         // Finalize the speech segment if we have one
                         self.finalize_speech_segment();
                     }
@@ -457,9 +425,6 @@ impl SileroVad {
                     // Back above continuation threshold - return to speech
                     self.current_state = VadState::Speech;
                     self.frames_in_state = 0;
-                    if cfg!(debug_assertions) {
-                        println!("PossibleSilence → Speech");
-                    }
                 }
             }
         }
@@ -490,13 +455,6 @@ impl SileroVad {
         let context_duration = 0.1; // 100ms pre-roll buffer (industry standard)
         let context_samples = (context_duration * self.sample_rate_f64) as usize;
 
-        // Check if we're potentially losing the beginning of speech due to buffer limits
-        if start_time < self.time_offset && cfg!(debug_assertions) {
-            println!(
-                "Warning: Speech segment starts before buffer window: start={:.3}s, buffer_start={:.3}s",
-                start_time, self.time_offset
-            );
-        }
 
         // Adjust times for the current buffer window - doing calculations only once
         // Use asymmetric padding: add context before speech (for onset detection),
@@ -516,12 +474,6 @@ impl SileroVad {
 
         // Check for valid indices
         if start_idx >= end_idx || start_idx >= self.sample_buffer.len() {
-            if cfg!(debug_assertions) {
-                println!(
-                    "Invalid segment: {:.2}s-{:.2}s (offset: {:.2}s)",
-                    start_time, end_time, self.time_offset
-                );
-            }
             return Vec::new();
         }
 

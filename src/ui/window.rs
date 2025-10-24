@@ -127,10 +127,6 @@ impl WindowState {
 
         // Select present mode based on display configuration
         let present_mode = display_config.to_present_mode(&surface_caps.present_modes);
-        println!(
-            "Selected present mode: {:?} (vsync_mode: {})",
-            present_mode, display_config.vsync_mode
-        );
 
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -268,7 +264,6 @@ impl WindowState {
             self.last_activity_time = Some(std::time::Instant::now());
             self.window.set_visible(true);
             self.window.request_redraw();
-            println!("Window shown");
         }
     }
 
@@ -277,7 +272,6 @@ impl WindowState {
         if self.is_visible {
             self.is_visible = false;
             self.window.set_visible(false);
-            println!("Window hidden");
         }
     }
 
@@ -375,10 +369,6 @@ impl WindowState {
         // Check if transcription mode has changed
         let current_mode = *self.transcription_mode_ref.lock();
         if current_mode != self.last_known_mode {
-            println!(
-                "WindowState: Detected mode change from {:?} to {:?}",
-                self.last_known_mode, current_mode
-            );
             self.button_manager.set_transcription_mode(current_mode);
             self.last_known_mode = current_mode;
         }
@@ -666,18 +656,12 @@ impl WindowState {
             let was_recording = recording.load(Ordering::Relaxed);
             let new_state = !was_recording;
             recording.store(new_state, Ordering::Relaxed);
-            println!(
-                "Recording toggled to: {} (UI thread continues immediately)",
-                new_state
-            );
 
             // IMMEDIATE: Update button texture (local UI state, non-blocking)
             self.button_manager.update_record_toggle_button_texture();
 
             // The transcription systems will detect this change asynchronously
             // via their polling of the atomic flag - no blocking here
-        } else {
-            println!("Error: recording state is None");
         }
     }
 
@@ -689,10 +673,6 @@ impl WindowState {
             .map(|rec| rec.load(Ordering::Relaxed))
             .unwrap_or(false);
 
-        println!(
-            "Manual session toggle requested (current: {}) - UI continues immediately",
-            is_currently_recording
-        );
 
         if let Some(sender) = &self.event_handler.manual_session_sender {
             let sender = sender.clone();
@@ -710,8 +690,6 @@ impl WindowState {
 
                 if let Err(e) = sender.send(command).await {
                     eprintln!("Failed to send manual session command: {}", e);
-                } else {
-                    println!("Manual session command sent successfully (background)");
                 }
             });
         } else {

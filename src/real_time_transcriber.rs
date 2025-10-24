@@ -1,6 +1,5 @@
 use anyhow::Context;
 use chrono::Utc;
-use ct2rs::{ComputeType, Config, Device, Whisper, WhisperOptions};
 use parking_lot::{Mutex, RwLock};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,6 +10,7 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 // Use local modules
 use crate::audio_capture::AudioCapture;
 use crate::audio_processor::AudioProcessor;
+use crate::backend::{create_backend, TranscriptionBackend};
 use crate::config::{read_app_config, AppConfig};
 use crate::silero_audio_processor::{AudioSegment, SileroVad};
 use crate::stats_reporter::StatsReporter;
@@ -153,9 +153,8 @@ pub struct RealTimeTranscriber {
     recording: Arc<AtomicBool>,
 
     // Model and parameters
-    whisper: Arc<Mutex<Option<Whisper>>>,
+    backend: Arc<Mutex<Option<TranscriptionBackend>>>,
     language: String,
-    options: WhisperOptions,
 
     // Processing components
     audio_processor: Arc<Mutex<SileroVad>>,
@@ -187,6 +186,9 @@ pub struct RealTimeTranscriber {
     processing_manual_session: Arc<Mutex<Option<ManualProcessingSession>>>,
     manual_session_tx: mpsc::Sender<ManualSessionCommand>,
     manual_session_rx: Option<mpsc::Receiver<ManualSessionCommand>>,
+
+    // Sound effects
+    sound_player: Option<Arc<crate::sound_player::SoundPlayer>>,
 }
 
 impl RealTimeTranscriber {
@@ -195,10 +197,15 @@ impl RealTimeTranscriber {
     /// # Arguments
     /// * `model_path` - Path to the Whisper model file
     /// * `app_config` - Application configuration
+    /// * `sound_player` - Optional sound player for audio feedback
     ///
     /// # Returns
     /// Result containing the new instance or an error
-    pub fn new(model_path: PathBuf, app_config: AppConfig) -> Result<Self, anyhow::Error> {
+    pub fn new(
+        model_path: PathBuf,
+        app_config: AppConfig,
+        sound_player: Option<Arc<crate::sound_player::SoundPlayer>>,
+    ) -> Result<Self, anyhow::Error> {
         // Use bounded channels with larger capacities for better performance
         let (tx, rx) = mpsc::channel(400);
         let (transcript_tx, transcript_rx) = broadcast::channel(100);
@@ -224,7 +231,7 @@ impl RealTimeTranscriber {
         let running = Arc::new(AtomicBool::new(true));
         let recording = Arc::new(AtomicBool::new(false));
         let transcript_history = Arc::new(RwLock::new(String::new()));
-        let whisper = Arc::new(Mutex::new(None));
+        let backend = Arc::new(Mutex::new(None));
         let transcription_stats = Arc::new(Mutex::new(TranscriptionStats::new()));
 
         let audio_visualization_data = Arc::new(RwLock::new(AudioVisualizationData {
@@ -237,8 +244,8 @@ impl RealTimeTranscriber {
         let audio_processor = match SileroVad::new(
             (
                 app_config.vad_config.clone(),
-                app_config.buffer_size,
-                app_config.sample_rate,
+                app_config.audio_processor_config.buffer_size,
+                app_config.audio_processor_config.sample_rate,
             )
                 .into(),
             &silero_model_path,
@@ -253,51 +260,42 @@ impl RealTimeTranscriber {
             }
         };
 
-        let whisper_clone = whisper.clone();
+        let backend_clone = backend.clone();
         let model_path_clone = model_path.clone();
-        let options = app_config.whisper_options.to_whisper_options();
+        let backend_type = app_config.backend_config.backend.clone();
+        let backend_config = app_config.backend_config.clone();
 
         tokio::spawn(async move {
-            let mut config = Config::default();
-            let app_config = read_app_config(); // Read config once
-
-            // Always use CPU for inference
-            config.device = Device::CPU;
-            println!("INFO: Loading model on CPU.");
-
-            // Use configured compute type for CPU
-            let compute_type_str = app_config.compute_type.as_str();
-            config.compute_type = match compute_type_str {
-                "FLOAT16" => ComputeType::FLOAT16,
-                "INT8" => ComputeType::INT8,
-                _ => ComputeType::DEFAULT, // Safe fallback
-            };
-
-            // Configure CPU threads
-            let cpu_cores = std::thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(4);
-            config.num_threads_per_replica = (cpu_cores / 2).max(2).min(4);
-
             println!(
-                "Attempting to load Whisper model with config: Device={:?}, ComputeType={:?}, CPU threads={}",
-                config.device, config.compute_type, config.num_threads_per_replica
+                "INFO: Loading {} backend with model at {:?}",
+                backend_type, model_path_clone
+            );
+            println!(
+                "Backend config: threads={}, gpu_enabled={}, quantization={:?}",
+                backend_config.threads, backend_config.gpu_enabled, backend_config.quantization_level
             );
 
-            match Whisper::new(&model_path_clone, config) {
-                Ok(w) => {
-                    println!("Whisper model loaded successfully!");
-                    *whisper_clone.lock() = Some(w);
+            match create_backend(backend_type, &model_path_clone, &backend_config).await {
+                Ok(b) => {
+                    println!("{} backend loaded successfully!", backend_type);
+                    let capabilities = b.capabilities();
+                    println!(
+                        "Backend capabilities: name={}, max_audio_duration={:?}, streaming={}",
+                        capabilities.name,
+                        capabilities.max_audio_duration,
+                        capabilities.supports_streaming
+                    );
+                    *backend_clone.lock() = Some(b);
                 }
                 Err(e) => {
-                    eprintln!("ERROR: Failed to load Whisper model: {}", e);
+                    eprintln!("ERROR: Failed to load backend: {}", e);
                 }
             }
         });
 
         // Initialize transcription mode from config
         let transcription_mode = Arc::new(Mutex::new(TranscriptionMode::from(
-            app_config.transcription_mode.as_str(),
+            app_config.general_config.transcription_mode.as_str(),
         )));
         let current_manual_session = Arc::new(Mutex::new(None));
         let processing_manual_session = Arc::new(Mutex::new(None));
@@ -310,9 +308,8 @@ impl RealTimeTranscriber {
             transcript_rx,
             running,
             recording,
-            whisper,
-            language: app_config.language,
-            options,
+            backend,
+            language: app_config.general_config.language.clone(),
             audio_processor,
             transcript_history,
             audio_visualization_data,
@@ -332,6 +329,9 @@ impl RealTimeTranscriber {
             processing_manual_session,
             manual_session_tx,
             manual_session_rx: Some(manual_session_rx),
+
+            // Sound effects
+            sound_player,
         })
     }
 
@@ -364,9 +364,8 @@ impl RealTimeTranscriber {
 
         // Initialize transcription processor
         let transcription_processor = TranscriptionProcessor::new(
-            self.whisper.clone(),
+            self.backend.clone(),
             self.language.clone(),
-            self.options.clone(),
             self.running.clone(),
             self.transcription_done_tx.clone(),
             self.transcription_stats.clone(),
@@ -425,9 +424,10 @@ impl RealTimeTranscriber {
         let audio_visualization_data = self.audio_visualization_data.clone();
         let audio_processor_ref = self.audio_processor_ref.clone();
         let audio_capture = self.audio_capture.clone(); // Share audio capture for stream control
+        let sound_player = self.sound_player.clone(); // Clone sound player for audio feedback
         let app_config = read_app_config();
         let manual_mode_config = app_config.manual_mode_config.clone();
-        let sample_rate = app_config.sample_rate;
+        let sample_rate = app_config.audio_processor_config.sample_rate;
 
         tokio::spawn(async move {
             while running.load(Ordering::Relaxed) {
@@ -488,6 +488,11 @@ impl RealTimeTranscriber {
                                             eprintln!("Warning: Failed to start audio recording: {}", e);
                                         }
 
+                                        // Play session start sound
+                                        if let Some(player) = &sound_player {
+                                            player.play(crate::sound_generator::SoundType::SessionStart);
+                                        }
+
                                         if let Some(responder) = responder.take() {
                                             let _ = responder.send(Ok(session_id));
                                         }
@@ -546,6 +551,7 @@ impl RealTimeTranscriber {
                                                 let audio_processor = audio_processor.clone();
                                                 let processing_manual_session =
                                                     processing_manual_session.clone();
+                                                let sound_player_for_task = sound_player.clone();
                                                 tokio::spawn(async move {
                                                     if let Err(e) = audio_processor
                                                         .trigger_manual_transcription(sample_rate)
@@ -563,7 +569,10 @@ impl RealTimeTranscriber {
                                                         &processing_manual_session,
                                                         &session_id,
                                                     ) {
-                                                        // Session completed and cleared
+                                                        // Session completed successfully - play completion sound
+                                                        if let Some(player) = &sound_player_for_task {
+                                                            player.play(crate::sound_generator::SoundType::SessionComplete);
+                                                        }
                                                     }
                                                 });
                                                 if let Some(responder) = responder.take() {
@@ -620,6 +629,12 @@ impl RealTimeTranscriber {
                                             if let Err(e) = audio_capture.lock().stop_recording() {
                                                 eprintln!("Warning: Failed to stop audio recording: {}", e);
                                             }
+
+                                            // Play session cancel sound
+                                            if let Some(player) = &sound_player {
+                                                player.play(crate::sound_generator::SoundType::SessionCancel);
+                                            }
+
                                             if let Some(responder) = responder.take() {
                                                 let _ = responder.send(Ok(()));
                                             }
@@ -745,9 +760,7 @@ impl RealTimeTranscriber {
         if let Some(session) = session_lock.take() {
             let session_id = session.session_id.clone();
             let mut processing_lock = processing_manual_session.lock();
-            if let Some(_previous) = processing_lock.replace(ManualProcessingSession::new(session)) {
-                // Replacing previous session that was still processing
-            }
+            let _ = processing_lock.replace(ManualProcessingSession::new(session));
             Some(session_id)
         } else {
             None
@@ -884,7 +897,7 @@ impl RealTimeTranscriber {
         }
 
         // Clean up whisper model
-        *self.whisper.lock() = None;
+        *self.backend.lock() = None;
 
         println!("Transcriber shut down successfully.");
         Ok(())
@@ -902,6 +915,15 @@ impl RealTimeTranscriber {
             "Recording toggled atomically: {} -> {} (transcription threads will detect change)",
             was_recording, new_state
         );
+
+        // Play sound feedback
+        if let Some(sound_player) = &self.sound_player {
+            if new_state {
+                sound_player.play(crate::sound_generator::SoundType::RecordStart);
+            } else {
+                sound_player.play(crate::sound_generator::SoundType::RecordStop);
+            }
+        }
 
         // ASYNC: Control audio stream in background task to avoid blocking
         if was_recording {

@@ -53,13 +53,13 @@ impl AudioProcessor {
             audio_processor,
             audio_visualization_data,
             segment_tx,
-            buffer_size: app_config.buffer_size,
-            config: app_config.audio_processor_config,
+            buffer_size: app_config.audio_processor_config.buffer_size,
+            config: app_config.audio_processor_config.clone(),
             transcription_stats,
             transcription_mode,
             manual_audio_buffer,
             manual_buffer_max_size,
-            sample_rate: app_config.sample_rate,
+            sample_rate: app_config.audio_processor_config.sample_rate,
         }
     }
 
@@ -177,7 +177,6 @@ impl AudioProcessor {
                     }
                     Ok(None) => {
                         // Channel closed
-                        println!("Audio channel disconnected");
                         break;
                     }
                     Err(_) => {

@@ -282,9 +282,6 @@ impl ApplicationHandler for WindowApp {
             } => {
                 // Get modifier states before borrowing window
                 let ctrl_pressed = self.current_modifiers.state().control_key();
-                let _super_pressed = self.current_modifiers.state().super_key();
-                let _alt_pressed = self.current_modifiers.state().alt_key();
-                let _shift_pressed = self.current_modifiers.state().shift_key();
 
                 if let Some(window) = self.windows.get_mut(&window_id) {
                     // Get keyboard shortcuts from config

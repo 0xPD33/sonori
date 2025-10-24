@@ -8,20 +8,15 @@ use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration};
 use zbus::zvariant::OwnedValue;
 
-use crate::real_time_transcriber::{ManualSessionCommand, TranscriptionMode};
-
-/// Maximum number of reconnection attempts before giving up
-const MAX_RECONNECT_ATTEMPTS: u32 = 5;
-/// Delay between reconnection attempts
-const RECONNECT_DELAY: Duration = Duration::from_secs(2);
+use sonori::real_time_transcriber::{ManualSessionCommand, TranscriptionMode};
 
 /// Manages global shortcuts through the XDG Desktop Portal.
 ///
 /// This struct keeps the portal session alive and handles:
 /// - Session lifecycle management
+/// - Shortcut binding (one attempt only - respects user declining permission)
 /// - Shortcut activation with token extraction
 /// - Portal signal monitoring (Activated, Deactivated, ShortcutsChanged)
-/// - Automatic reconnection on failure
 /// - Clean shutdown
 pub struct GlobalShortcutsManager {
     accelerator: String,
@@ -49,38 +44,11 @@ impl GlobalShortcutsManager {
         }
     }
 
-    /// Run the global shortcuts listener with automatic reconnection
+    /// Run the global shortcuts listener
     pub async fn run(self) -> Result<()> {
-        let mut attempts = 0;
-
-        loop {
-            // shutdown flag is actually the "running" flag - when it's FALSE, we shutdown
-            if !self.shutdown.load(Ordering::Relaxed) {
-                break Ok(());
-            }
-
-            match self.run_session().await {
-                Ok(_) => {
-                    if !self.shutdown.load(Ordering::Relaxed) {
-                        break Ok(());
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Global shortcuts error: {:#}", e);
-                    attempts += 1;
-
-                    if attempts >= MAX_RECONNECT_ATTEMPTS {
-                        break Err(e);
-                    }
-
-                    if !self.shutdown.load(Ordering::Relaxed) {
-                        break Ok(());
-                    }
-
-                    sleep(RECONNECT_DELAY).await;
-                }
-            }
-        }
+        // Try once to bind shortcuts - no retries
+        // If the user declines the portal dialog, we shouldn't keep asking them
+        self.run_session().await
     }
 
     /// Run a single session with the portal
@@ -114,10 +82,14 @@ impl GlobalShortcutsManager {
         let shortcuts = response.shortcuts();
 
         if shortcuts.iter().find(|s| s.id() == "toggle_manual").is_none() {
+            // User likely declined the portal dialog or binding was rejected
             eprintln!(
-                "Warning: Shortcut '{}' was not bound by portal",
+                "Shortcut '{}' was not bound by portal - user may have declined permission",
                 normalized_accelerator
             );
+            return Err(anyhow::anyhow!(
+                "Shortcut binding was not approved by user or portal"
+            ));
         }
 
         // Listen to all portal signals

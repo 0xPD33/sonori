@@ -34,7 +34,7 @@ impl StatsReporter {
     pub fn start_periodic_reporting(&self) {
         // Get configuration options
         let app_config = read_app_config();
-        let log_stats_enabled = app_config.log_stats_enabled;
+        let log_stats_enabled = app_config.debug_config.log_stats_enabled;
 
         // Exit early if stats logging is not enabled
         if !log_stats_enabled {
@@ -95,7 +95,7 @@ impl StatsReporter {
     pub fn print_stats(&self) {
         // Get configuration options
         let app_config = read_app_config();
-        let log_stats_enabled = app_config.log_stats_enabled;
+        let log_stats_enabled = app_config.debug_config.log_stats_enabled;
 
         // Exit early if stats logging is not enabled
         if !log_stats_enabled {
