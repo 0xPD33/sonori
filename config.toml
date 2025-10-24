@@ -1,55 +1,149 @@
-model = "distil-whisper/distil-small.en"
-language = "en"
-compute_type = "INT8"
-device = "CPU"
-log_stats_enabled = false
-buffer_size = 1024
-sample_rate = 16000
-transcription_mode = "realtime"
+# =============================================================================
+# CORE TRANSCRIPTION SETTINGS
+# =============================================================================
+# These are the most important settings you'll likely want to change
 
-[whisper_options]
-beam_size = 5
-patience = 1.0
-repetition_penalty = 1.25
+[general_config]
+model = "base.en"                     # Whisper model size (tiny, base, small, medium, large)
+language = "en"                        # Transcription language (use "auto" for auto-detect)
+transcription_mode = "realtime"        # "realtime" for live transcription, "manual" for push-to-talk
 
-[vad_config]
-threshold = 0.2
-hangbefore_frames = 1
-hangover_frames = 20
-hop_samples = 160
-max_buffer_duration_sec = 30.0
-max_segment_count = 20
+# =============================================================================
+# BACKEND CONFIGURATION
+# =============================================================================
+# Choose the transcription engine and configure its performance
+
+[backend_config]
+backend = "whisper_cpp"                # Options: "ctranslate2", "whisper_cpp", "parakeet"
+threads = 8                           # Number of CPU threads (default: min(num_cpus, 4))
+gpu_enabled = false                   # Enable GPU acceleration (CUDA/Metal/Vulkan)
+quantization_level = "medium"         # Precision: "high" (full), "medium" (q8_0), "low" (q5_1)
+
+# =============================================================================
+# AUDIO PROCESSING
+# =============================================================================
+# Configure how audio is captured and processed
 
 [audio_processor_config]
-max_vis_samples = 1024
+sample_rate = 16000                   # Audio sample rate in Hz (must be 8000 or 16000 for VAD)
+buffer_size = 1024                    # Audio buffer size (fundamental processing block size)
+max_vis_samples = 1024                # Samples to display in audio visualization
+
+[vad_config]
+threshold = 0.2                       # Speech detection sensitivity (0.0-1.0, higher = less sensitive)
+hangbefore_frames = 1                 # Frames to wait before confirming speech start
+hangover_frames = 20                  # Frames to wait after speech ends before cutting
+hop_samples = 160                     # Samples to advance between frames (10ms at 16kHz)
+max_buffer_duration_sec = 30.0        # Maximum audio buffer size in seconds
+max_segment_count = 20                # Maximum number of speech segments to keep
+
+[sound_config]
+enabled = true                        # Enable sound feedback
+volume = 0.5                         # Sound volume (0.0-1.0)
+
+# =============================================================================
+# BACKEND-SPECIFIC OPTIONS
+# =============================================================================
+# Advanced transcription parameters for each backend
+
+# CTranslate2 options (used when backend = "ctranslate2")
+[ctranslate2_options]
+beam_size = 5                         # Beam search width (1-10, higher = more accurate but slower)
+patience = 1.0                        # Beam search patience factor
+repetition_penalty = 1.25             # Penalty for repeated tokens
+
+# Whisper.cpp options (used when backend = "whisper_cpp")
+[whisper_cpp_options]
+beam_size = 5                         # Beam search width (1 = greedy/fastest, 5 = more accurate)
+patience = 1.0                        # Beam search patience factor
+temperature = 0.0                     # Sampling temperature (0.0 = deterministic, higher = more creative)
+suppress_blank = true                 # Suppress blank outputs at beginning
+no_context = true                     # Use past transcription as context for better accuracy
+max_tokens = 0                        # Maximum tokens per segment (0 = auto)
+entropy_thold = 2.4                   # Entropy threshold for fallback sampling
+logprob_thold = -1.0                  # Log probability threshold for speech detection
+no_speech_thold = 0.6                 # No-speech probability threshold
+
+# =============================================================================
+# USER INTERFACE & CONTROLS
+# =============================================================================
+# Configure keyboard shortcuts and interaction
 
 [keyboard_shortcuts]
-copy_transcript = "KeyC"
-reset_transcript = "KeyR"
-toggle_recording = "Space"
-exit_application = "Escape"
-
-[portal_config]
-enable_xdg_portal = true
-enable_global_shortcuts = true
-manual_toggle_accelerator = "<Super>backslash"
-application_id = "dev.paddy.sonori"
-# Paste shortcut: "ctrl_shift_v" (default, works in terminals) or "ctrl_v" (standard apps)
-paste_shortcut = "ctrl_shift_v"
-
-[manual_mode_config]
-max_recording_duration_secs = 60
-manual_buffer_size = 960000
-auto_restart_sessions = false
-clear_on_new_session = true
-processing_timeout_secs = 30
+copy_transcript = "KeyC"              # Copy transcript to clipboard (Ctrl+C)
+reset_transcript = "KeyR"             # Clear transcript (Ctrl+R)
+toggle_recording = "Space"            # Start/stop recording (Space)
+exit_application = "Escape"           # Quit application (Escape)
 
 [display_config]
-vsync_mode = "Enabled"
-target_fps = 60
+vsync_mode = "Enabled"                # VSync: "Auto", "Enabled", "Adaptive", "Disabled", "Mailbox"
+target_fps = 60                       # Target FPS when vsync is disabled
 
 [window_behavior_config]
-hide_when_idle = false
-auto_hide_delay_ms = 2000
-start_hidden = false
-show_in_system_tray = true
+hide_when_idle = false                # Auto-hide window when not recording
+auto_hide_delay_ms = 2000             # Delay before auto-hiding (milliseconds)
+start_hidden = false                  # Start application with window hidden
+show_in_system_tray = true            # Show icon in system tray
+
+# =============================================================================
+# SYSTEM INTEGRATION
+# =============================================================================
+# Configure desktop environment integration and global shortcuts
+
+[portal_config]
+enable_xdg_portal = true              # Enable XDG Desktop Portal for input injection
+enable_global_shortcuts = true        # Enable global shortcuts via desktop portal
+manual_toggle_accelerator = "<Super>backslash"  # Global hotkey for manual mode toggle
+application_id = "dev.paddy.sonori"   # Application ID for desktop portal registration
+paste_shortcut = "ctrl_shift_v"       # Paste method: "ctrl_shift_v" (terminals) or "ctrl_v" (apps)
+
+# =============================================================================
+# MANUAL TRANSCRIPTION MODE
+# =============================================================================
+# Settings specific to manual/push-to-talk transcription mode
+
+[manual_mode_config]
+max_recording_duration_secs = 60      # Maximum recording time per session
+manual_buffer_size = 960000           # Audio buffer size for manual sessions
+auto_restart_sessions = false         # Auto-start new session after completing one
+clear_on_new_session = true           # Clear transcript when starting new session
+processing_timeout_secs = 30          # Timeout for transcription processing
+
+# =============================================================================
+# DEBUGGING & DEVELOPMENT
+# =============================================================================
+# Advanced options for debugging and performance monitoring
+
+[debug_config]
+log_stats_enabled = false             # Enable detailed performance logging
+
+# =============================================================================
+# EXAMPLE CONFIGURATIONS
+# =============================================================================
+# Uncomment and modify these presets for common use cases:
+
+# Fast, lightweight setup (whisper.cpp + base model):
+# backend = "whisper_cpp"
+# model = "base.en"
+# quantization_level = "medium"  # Downloads ~140MB ggml-base.en-q8_0.bin
+
+# High accuracy setup (CT2 + large model):
+# backend = "ctranslate2"
+# model = "large-v3"  # Automatically uses distil-whisper/distil-large-v3
+# quantization_level = "medium"
+
+# =============================================================================
+# MODEL INFORMATION
+# =============================================================================
+# Available models: tiny, tiny.en, base, base.en, small, small.en, medium, large-v1, large-v2, large-v3
+#
+# Intelligent mapping for CTranslate2:
+#   - tiny, base → openai/whisper-* (standard OpenAI models, already fast)
+#   - small, medium, large → distil-whisper/* (distilled models for speed optimization)
+#   Examples:
+#     "base.en" → "openai/whisper-base.en"
+#     "small.en" → "distil-whisper/distil-small.en"
+#     "medium" → "distil-whisper/distil-medium.en"
+#
+# Whisper.cpp always uses standard OpenAI models (e.g., "base.en" → "base.en")
+# You can also specify full model paths to bypass mapping: "distil-whisper/distil-small.en"

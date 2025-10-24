@@ -1,4 +1,4 @@
-// use crate::audio_processor::VadConfig;
+use crate::backend::{BackendConfig, BackendType};
 use crate::silero_audio_processor::VadConfig as SileroVadConfig;
 use ct2rs::WhisperOptions;
 use serde::{Deserialize, Serialize};
@@ -7,7 +7,14 @@ use winit::keyboard::KeyCode;
 /// Audio processor configuration parameters for general audio processing
 /// This is separate from the VAD-specific settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AudioProcessorConfig {
+    /// Audio sample rate in Hz (must be 8000 or 16000 for Silero VAD)
+    /// This value is used throughout the application for audio processing
+    pub sample_rate: usize,
+    /// The global buffer size used throughout the application
+    /// This is the fundamental audio processing block size in samples
+    pub buffer_size: usize,
     /// Maximum number of samples to store for visualization
     /// Controls the detail level of the audio waveform display
     pub max_vis_samples: usize,
@@ -16,7 +23,31 @@ pub struct AudioProcessorConfig {
 impl Default for AudioProcessorConfig {
     fn default() -> Self {
         Self {
+            sample_rate: 16000,
+            buffer_size: 1024,
             max_vis_samples: 1024, // Number of samples to display in visualization
+        }
+    }
+}
+
+/// Configuration for general core settings
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GeneralConfig {
+    /// Main model to use for transcription
+    pub model: String,
+    /// Language for transcription
+    pub language: String,
+    /// Transcription mode: "realtime" or "manual"
+    pub transcription_mode: String,
+}
+
+impl Default for GeneralConfig {
+    fn default() -> Self {
+        Self {
+            model: "small.en".to_string(),
+            language: "en".to_string(),
+            transcription_mode: "realtime".to_string(),
         }
     }
 }
@@ -101,6 +132,41 @@ impl Default for ManualModeConfig {
             auto_restart_sessions: false,
             clear_on_new_session: true,
             processing_timeout_secs: 30,
+        }
+    }
+}
+
+/// Configuration for debugging and development
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DebugConfig {
+    /// Whether to log statistics
+    pub log_stats_enabled: bool,
+}
+
+/// Configuration for sound settings
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SoundConfig {
+    /// Enable sound feedback
+    pub enabled: bool,
+    /// Sound volume (0.0-1.0)
+    pub volume: f32,
+}
+
+impl Default for DebugConfig {
+    fn default() -> Self {
+        Self {
+            log_stats_enabled: false,
+        }
+    }
+}
+
+impl Default for SoundConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            volume: 0.5,
         }
     }
 }
@@ -264,47 +330,102 @@ impl KeyboardShortcuts {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
-    /// Main model to use for transcription
-    pub model: String,
-    /// Language for transcription
-    pub language: String,
-    /// Compute type for model inference
-    pub compute_type: String,
-    /// Device for model inference
-    pub device: String,
-    /// Whether to log statistics
-    pub log_stats_enabled: bool,
-    /// The global buffer size used throughout the application
-    /// This is the fundamental audio processing block size in samples
-    pub buffer_size: usize,
-    /// Audio sample rate in Hz (must be 8000 or 16000 for Silero VAD)
-    /// This value is used throughout the application for audio processing
-    pub sample_rate: usize,
-    /// Transcription mode: "realtime" or "manual"
-    pub transcription_mode: String,
-    /// Whisper model configuration
-    pub whisper_options: WhisperOptionsSerde,
+    /// General core configuration
+    pub general_config: GeneralConfig,
+
+    /// Backend configuration (includes backend selection)
+    pub backend_config: BackendConfig,
+
+    /// Audio processing configuration
+    pub audio_processor_config: AudioProcessorConfig,
+
     /// Voice Activity Detection configuration
     pub vad_config: VadConfigSerde,
-    /// Audio processor configuration
-    pub audio_processor_config: AudioProcessorConfig,
+
+    /// CTranslate2-specific options
+    pub ctranslate2_options: CT2Options,
+
+    /// Whisper.cpp-specific options
+    pub whisper_cpp_options: WhisperCppOptions,
+
     /// Keyboard shortcuts configuration
     pub keyboard_shortcuts: KeyboardShortcuts,
+
     /// XDG Desktop Portal configuration
     pub portal_config: PortalConfig,
+
     /// Manual transcription mode configuration
     pub manual_mode_config: ManualModeConfig,
+
     /// Display and rendering configuration
     pub display_config: DisplayConfig,
+
     /// Window visibility and system tray configuration
     pub window_behavior_config: WindowBehaviorConfig,
+
+    /// Sound effects configuration
+    pub sound_config: SoundConfig,
+
+    /// Debug and development configuration
+    pub debug_config: DebugConfig,
+
+    /// Deprecated legacy field - use backend_config instead
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compute_type: Option<String>,
+
+    /// Deprecated legacy field - use backend_config instead
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
 }
 
+/// CTranslate2-specific transcription options
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WhisperOptionsSerde {
+#[serde(default)]
+pub struct CT2Options {
     pub beam_size: usize,
     pub patience: f32,
     pub repetition_penalty: f32,
+}
+
+impl Default for CT2Options {
+    fn default() -> Self {
+        Self {
+            beam_size: 5,
+            patience: 1.0,
+            repetition_penalty: 1.25,
+        }
+    }
+}
+
+/// Whisper.cpp-specific transcription options
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WhisperCppOptions {
+    pub beam_size: usize,
+    pub patience: f32,
+    pub temperature: f32,
+    pub suppress_blank: bool,
+    pub no_context: bool,
+    pub max_tokens: i32,
+    pub entropy_thold: f32,
+    pub logprob_thold: f32,
+    pub no_speech_thold: f32,
+}
+
+impl Default for WhisperCppOptions {
+    fn default() -> Self {
+        Self {
+            beam_size: 5,         // Beam search (better accuracy with OpenBLAS)
+            patience: 1.0,
+            temperature: 0.0,     // Deterministic
+            suppress_blank: true, // Skip blank segments
+            no_context: false,    // Use context for better accuracy
+            max_tokens: 0,        // No limit
+            entropy_thold: 2.4,   // Default whisper.cpp value
+            logprob_thold: -1.0,  // Default whisper.cpp value
+            no_speech_thold: 0.6, // Default whisper.cpp value
+        }
+    }
 }
 
 /// Configuration for Voice Activity Detection
@@ -390,31 +511,49 @@ impl From<(VadConfigSerde, usize, usize)> for SileroVadConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            model: "openai/whisper-base.en".to_string(),
-            language: "en".to_string(),
-            compute_type: "INT8".to_string(),
-            device: "CPU".to_string(),
-            log_stats_enabled: false,
-            buffer_size: 1024,
-            sample_rate: 16000,
-            transcription_mode: "realtime".to_string(),
-            whisper_options: WhisperOptionsSerde {
-                beam_size: 5,
-                patience: 1.0,
-                repetition_penalty: 1.25,
-            },
-            vad_config: VadConfigSerde::default(),
+            general_config: GeneralConfig::default(),
+            backend_config: BackendConfig::default(),
             audio_processor_config: AudioProcessorConfig::default(),
+            vad_config: VadConfigSerde::default(),
+            ctranslate2_options: CT2Options::default(),
+            whisper_cpp_options: WhisperCppOptions::default(),
             keyboard_shortcuts: KeyboardShortcuts::default(),
             portal_config: PortalConfig::default(),
             manual_mode_config: ManualModeConfig::default(),
             display_config: DisplayConfig::default(),
             window_behavior_config: WindowBehaviorConfig::default(),
+            sound_config: SoundConfig::default(),
+            debug_config: DebugConfig::default(),
+            compute_type: None,
+            device: None,
         }
     }
 }
 
-impl WhisperOptionsSerde {
+impl AppConfig {
+    /// Migrate legacy compute_type/device fields to new backend_config
+    pub fn migrate_legacy_config(&mut self) {
+        if let (Some(compute_type), Some(device)) = (&self.compute_type, &self.device) {
+            let is_default_config = self.backend_config.threads == num_cpus::get().min(4)
+                && !self.backend_config.gpu_enabled;
+
+            if is_default_config {
+                println!(
+                    "Migrating legacy config fields (compute_type={}, device={}) to backend_config",
+                    compute_type, device
+                );
+
+                self.backend_config =
+                    crate::backend::ctranslate2::migrate_legacy_config(compute_type, device, None);
+                self.compute_type = None;
+                self.device = None;
+            }
+        }
+    }
+}
+
+impl CT2Options {
+    /// Convert to ct2rs::WhisperOptions
     pub fn to_whisper_options(&self) -> WhisperOptions {
         WhisperOptions {
             beam_size: self.beam_size,
@@ -428,8 +567,12 @@ impl WhisperOptionsSerde {
 /// Helper function to read the application configuration
 pub fn read_app_config() -> AppConfig {
     match std::fs::read_to_string("config.toml") {
-        Ok(config_str) => match toml::from_str(&config_str) {
-            Ok(config) => config,
+        Ok(config_str) => match toml::from_str::<AppConfig>(&config_str) {
+            Ok(mut config) => {
+                // Migrate legacy configuration if needed
+                config.migrate_legacy_config();
+                config
+            }
             Err(e) => {
                 println!(
                     "Failed to parse config.toml: {}. Using default configuration.",
