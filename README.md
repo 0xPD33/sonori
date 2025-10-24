@@ -1,6 +1,6 @@
 # Sonori
 
-A lightweight, transparent overlay application that displays real-time transcriptions of your speech using Whisper AI models on Linux.
+A lightweight, transparent overlay application that displays real-time transcriptions of your speech using multiple AI backends on Linux.
 
 The application is currently in very early development and might be unstable, buggy and/or crash.
 
@@ -10,7 +10,8 @@ Contributions are welcome. There are no guidelines yet. Just check the planned f
 
 ### Current
 
-- **Real-Time Transcription**: Transcribes your speech in real-time using OpenAI's Whisper models
+- **Multi-Backend Support**: Choose between CTranslate2, Whisper.cpp, and other transcription backends
+- **Real-Time Transcription**: Transcribes your speech in real-time using configurable AI models
 - **Manual Transcription Mode**: Accumulate audio in sessions for on-demand batch transcription (toggle with --manual or UI button)
 - **Voice Activity Detection**: Uses Silero VAD for accurate speech detection
 - **Transparent Overlay**: Non-intrusive overlay that sits at the bottom of your screen
@@ -20,8 +21,9 @@ Contributions are welcome. There are no guidelines yet. Just check the planned f
 - **Auto-Start Recording**: Begins recording as soon as the application launches
 - **Scroll Controls**: Navigate through longer transcripts
 - **CLI Mode**: Run without GUI in terminal mode using `--cli` flag for headless usage
-- **Configurable**: Configure the model, language, transcription mode, and other settings like keyboard shortcuts in the config file (config.toml)
-- **Automatic Model Download**: Both Whisper and Silero VAD models are downloaded automatically with automatic CTranslate2 conversion
+- **Sound Feedback**: Optional audio cues for recording state changes
+- **Configurable**: Configure the backend, model, language, transcription mode, and other settings in the config file (config.toml)
+- **Automatic Model Download**: Models are downloaded automatically based on selected backend
 - **Performance Monitoring**: Optional statistics logging for transcription performance analysis
 - **Global Shortcuts**: Optional XDG Desktop Portal integration for system-wide hotkeys (e.g., Super+Tab to toggle manual sessions)
 - **Portal Input**: Optional automatic pasting via XDG Desktop Portal for seamless text injection
@@ -33,8 +35,9 @@ Contributions are welcome. There are no guidelines yet. Just check the planned f
 - **Better UI**: A better UI with a focus on more usability
 - **VSYNC**: Add VSYNC support for optionally reducing rendered frames
 - **Input field detection**: Automatically detect input fields and transcribe text into them (might be a bit tricky to implement)
-- **CUDA support**: Add support for CUDA to speed up inference on supported GPUs
-- **Other backends**: I want to add other optional backends like Whisper.cpp or even an API (which would greatly increase speed/accuracy at the cost of some latency and maybe your privacy)
+- **Cloud API Support**: Integration with cloud providers (Deepgram, OpenAI) for higher accuracy and speed
+- **Additional Backends**: Support for NVIDIA Parakeet and other specialized models
+- **CUDA/GPU Support**: Enhanced GPU acceleration across all backends
 
 ### NOT Planned
 
@@ -83,22 +86,24 @@ while in the root directory of the repository. The flake includes all necessary 
 
 ### Required Models
 
-Sonori needs two types of models to function properly:
+Sonori needs models to function properly, depending on the selected backend:
 
-1. **Whisper Model** - Configured in the `config.toml` file and downloaded automatically on first run
-2. **Silero VAD Model** - Also downloaded automatically on first run
+1. **Transcription Model** - Downloaded automatically based on backend selection:
+   - **CTranslate2**: Hugging Face models converted to CTranslate2 format
+   - **Whisper.cpp**: GGML format models from whisper.cpp repository
+2. **Silero VAD Model** - Downloaded automatically on first run (shared across all backends)
 
-   Note: If you need to download the Silero model manually for any reason, you should head to the repo and download the model yourself:
-
+   Note: If you need to download the Silero model manually for any reason, you can get it from:
    https://github.com/snakers4/silero-vad/
-
-   And then place it in `~/.cache/sonori/models/`
+   And place it in `~/.cache/sonori/models/`
 
 ### Additional Requirements
 
-- **ONNX Runtime**: Required for the Silero VAD model.
-- **CTranslate2**: Used for Whisper model inference.
-- **Vulkan**: Required for WGPU rendering. Your system must have a working Vulkan installation.
+- **ONNX Runtime**: Required for the Silero VAD model
+- **CTranslate2**: Used for CTranslate2 backend inference
+- **whisper-rs**: Used for Whisper.cpp backend inference
+- **CPAL**: Required for sound feedback system
+- **Vulkan**: Required for WGPU rendering. Your system must have a working Vulkan installation
 
 ## Installation
 
@@ -151,6 +156,7 @@ For headless usage or terminal-based transcription:
 - `--cli`: Run in CLI mode without GUI
 - `--mode <realtime|manual>`: Set transcription mode (default: realtime)
 - `--manual`: Shorthand for `--mode manual` to start in manual transcription mode
+- `--backend <ctranslate2|whisper_cpp>`: Override transcription backend (default: ctranslate2)
 - `--help`: Show help information
 - `--version`: Display version information
 
@@ -161,19 +167,26 @@ Sonori uses a `config.toml` file in the same directory as the executable. If not
 Example configuration:
 
 ```toml
-model = "openai/whisper-base.en"  # Whisper model from Hugging Face
+# General settings
+model = "openai/whisper-base.en"  # Model name (format depends on backend)
 language = "en"                   # Language code for transcription
-compute_type = "INT8"             # Compute precision: INT8, FLOAT16
-device = "CPU"                    # Device type: CPU, CUDA (if available)
+transcription_mode = "realtime"   # Mode: "realtime" or "manual"
 log_stats_enabled = false         # Enable performance statistics logging
 buffer_size = 1024                # Audio buffer size (affects latency/performance)
 sample_rate = 16000               # Audio sample rate in Hz
-transcription_mode = "realtime"   # Mode: "realtime" or "manual"
 
-[whisper_options]
-beam_size = 5                     # Beam search width (higher = more accurate, slower)
-patience = 1.0                    # Search patience factor
-repetition_penalty = 1.25         # Penalty for repetitive transcriptions
+# Backend configuration
+backend = "ctranslate2"           # Backend: "ctranslate2" (default), "whisper_cpp"
+
+[backend_config]
+# CTranslate2 specific settings
+compute_type = "INT8"             # Compute precision: INT8, FLOAT16
+device = "CPU"                    # Device type: CPU, CUDA (if available)
+
+# Whisper.cpp specific settings (used when backend = "whisper_cpp")
+# use_gpu = false                 # Enable GPU acceleration (whisper.cpp)
+# n_threads = 4                   # Number of CPU threads (whisper_cpp)
+# quantization_level = "q4_0"     # Model quantization level (whisper.cpp)
 
 [vad_config]
 threshold = 0.2                   # Voice activity detection sensitivity (0.0-1.0)
@@ -184,6 +197,10 @@ max_segment_count = 20            # Maximum segments to keep in memory
 
 [audio_processor_config]
 max_vis_samples = 1024            # Maximum samples for audio visualization
+
+[sound_config]
+enabled = true                    # Enable sound feedback
+volume = 0.3                      # Volume for sound effects (0.0-1.0)
 
 [keyboard_shortcuts]
 copy_transcript = "KeyC"          # Copy transcription to clipboard (Ctrl+C)
@@ -196,6 +213,7 @@ enable_xdg_portal = true          # Enable XDG Desktop Portal for input injectio
 enable_global_shortcuts = true    # Enable global shortcuts via portal
 manual_toggle_accelerator = "<Super>Tab"  # Accelerator for toggling manual sessions
 application_id = "dev.paddy.sonori"       # App ID for portal integration
+paste_shortcut = "<Ctrl><Shift>V"        # Accelerator for pasting via portal
 
 [manual_mode_config]
 max_recording_duration_secs = 60  # Maximum duration per manual session in seconds
@@ -223,15 +241,39 @@ When specifying keys, use the key names from the [KeyCode enum in winit](https:/
 
 Note: The Ctrl modifier is automatically applied to copy_transcript and reset_transcript shortcuts.
 
+### Backend Selection
+
+Sonori supports multiple transcription backends, each with different strengths:
+
+#### CTranslate2 (Default)
+- **Models**: Hugging Face Whisper models (e.g., `openai/whisper-base.en`)
+- **Strengths**: Good balance of speed and accuracy, well-tested
+- **Use case**: General purpose, reliable transcription
+- **Model format**: CTranslate2 converted models
+
+#### Whisper.cpp
+- **Models**: GGML format models (e.g., `base.en`, `small.en`)
+- **Strengths**: Often faster, lighter weight, better CPU optimization
+- **Use case**: Performance-critical applications, lower resource usage
+- **Model format**: Single .bin GGML files
+
 ### Model Options
 
-Recommended Local Whisper models:
+#### CTranslate2 Backend
+Recommended models:
 
 - `openai/whisper-tiny.en` - Tiny model, English only (for low-end CPUs)
 - `openai/whisper-base.en` - Base model, English only (default, for low to mid-range CPUs)
 - `distil-whisper/distil-small.en` - Small model, English only (for mid to high-range CPUs)
 - `distil-whisper/distil-medium.en` - Medium model, English only (for high-end CPUs only)
-- any other bigger whisper model - probably too slow to run on CPU only in real-time
+
+#### Whisper.cpp Backend
+Recommended models:
+
+- `base.en` - Base model, English only
+- `small.en` - Small model, English only
+- `base` - Base model, multilingual
+- `small` - Small model, multilingual
 
 For non-English languages, use the multilingual models (without `.en` suffix) and set the appropriate language code in the configuration.
 
@@ -317,9 +359,11 @@ ct2-transformers-converter --model your-model --output_dir ~/.cache/whisper/your
 
 - [Rust](https://www.rust-lang.org/)
 - [CTranslate2](https://github.com/OpenNMT/CTranslate2) and [Faster Whisper](https://github.com/SYSTRAN/faster-whisper)
+- [whisper.cpp](https://github.com/ggerganov/whisper.cpp) and [whisper-rs](https://codeberg.org/tazz4843/whisper-rs)
 - [Onnx Runtime](https://github.com/microsoft/onnxruntime)
 - [OpenAI Whisper](https://github.com/openai/whisper)
 - [Silero VAD](https://github.com/snakers4/silero-vad)
+- [CPAL](https://github.com/RustAudio/cpal)
 - [Winit Fork](https://github.com/SergioRibera/winit)
 - [WGPU](https://github.com/gfx-rs/wgpu)
 
