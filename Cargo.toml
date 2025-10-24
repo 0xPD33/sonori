@@ -30,7 +30,7 @@ ort = { version = "2.0.0-rc.10", features = ["ndarray"] }
 image = "0.25.5"
 chrono = "0.4.35"
 num_cpus = "1.16"
-whisper-rs = { version = "0.15.1", features = ["openblas"] }
+whisper-rs = { version = "0.15.1", features = ["openblas", "vulkan"] }
 
 [features]
 # Enable runtime CPU feature detection

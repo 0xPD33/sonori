@@ -58,6 +58,8 @@
               ctranslate2
               sentencepiece
               openblas  # For whisper.cpp optimization
+              vulkan-headers  # For whisper.cpp Vulkan compilation
+              shaderc  # Provides glslc shader compiler for Vulkan
               rust-analyzer-unwrapped
               wtype
               vulkan-loader
