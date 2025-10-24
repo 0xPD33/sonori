@@ -86,12 +86,19 @@ fn extract_whisper_cpp_model_name(path: &Path) -> Result<String, TranscriptionEr
     // Remove "ggml-" prefix if present
     let name = filename.strip_prefix("ggml-").unwrap_or(filename);
 
-    // Remove quantization suffix if present (e.g., "-q5_1", "-q4_0")
-    let name = name
-        .split('-')
-        .next()
-        .or_else(|| name.split('.').next())
-        .unwrap_or(name);
+    // Remove quantization suffix if present (e.g., "-q5_1", "-q4_0", "-q8_0")
+    // But keep model names like "large-v3-turbo" intact
+    let name = if let Some(pos) = name.rfind("-q") {
+        // Check if what follows "-q" looks like a quantization (e.g., "5_1", "8_0")
+        let after_q = &name[pos + 2..];
+        if after_q.chars().next().map_or(false, |c| c.is_ascii_digit()) {
+            &name[..pos]
+        } else {
+            name
+        }
+    } else {
+        name
+    };
 
     Ok(name.to_string())
 }
