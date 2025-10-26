@@ -6,6 +6,7 @@ pub mod copy;
 pub mod download;
 pub mod portal_input;
 pub mod portal_tokens;
+pub mod post_processor;
 pub mod real_time_transcriber;
 pub mod silero_audio_processor;
 pub mod sound_generator;

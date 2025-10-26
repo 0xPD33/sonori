@@ -6,6 +6,7 @@ use tokio::sync::{broadcast, mpsc};
 
 use crate::backend::TranscriptionBackend;
 use crate::config::read_app_config;
+use crate::post_processor;
 use crate::silero_audio_processor::AudioSegment;
 use crate::transcription_stats::TranscriptionStats;
 
@@ -78,10 +79,10 @@ impl TranscriptionProcessor {
 
         let result = match backend_ref {
             crate::backend::TranscriptionBackend::CTranslate2(ct2_backend) => {
-                ct2_backend.transcribe(&segment.samples, language, &app_config.ctranslate2_options)
+                ct2_backend.transcribe(&segment.samples, language, &app_config.common_transcription_options, &app_config.ctranslate2_options, segment.sample_rate)
             }
             crate::backend::TranscriptionBackend::WhisperCpp(whisper_cpp_backend) => {
-                whisper_cpp_backend.transcribe(&segment.samples, language, &app_config.whisper_cpp_options)
+                whisper_cpp_backend.transcribe(&segment.samples, language, &app_config.common_transcription_options, &app_config.whisper_cpp_options, segment.sample_rate)
             }
             crate::backend::TranscriptionBackend::Parakeet => {
                 Err(crate::backend::TranscriptionError::BackendNotImplemented(
@@ -111,10 +112,17 @@ impl TranscriptionProcessor {
                         inference_secs / segment_duration
                     );
 
-                    println!("Transcription: '{}'", transcription);
+                    println!("Transcription (raw): '{}'", transcription);
                 }
 
-                transcription
+                // Apply post-processing
+                let processed_transcription = post_processor::post_process_text(transcription, &app_config.post_process_config);
+
+                if log_stats_enabled {
+                    println!("Transcription (processed): '{}'", processed_transcription);
+                }
+
+                processed_transcription
             }
             Err(e) => {
                 let total_duration = start_time.elapsed();
@@ -295,14 +303,11 @@ impl TranscriptionProcessor {
         // to avoid memory issues and improve processing reliability
         if duration > 30.0 {
             println!("Large manual segment detected, processing in chunks...");
-            // For manual segments, we need to estimate sample rate from the segment data
-            let estimated_sample_rate = (segment.samples.len() as f64 / duration) as usize;
             return Self::process_large_manual_segment(
                 backend,
                 segment,
                 language,
                 stats,
-                estimated_sample_rate,
             );
         }
 
@@ -324,8 +329,8 @@ impl TranscriptionProcessor {
         segment: &AudioSegment,
         language: &str,
         stats: &Arc<Mutex<TranscriptionStats>>,
-        sample_rate: usize,
     ) -> String {
+        let sample_rate = segment.sample_rate;
         let chunk_duration_samples = 30 * sample_rate; // 30 seconds per chunk
         let overlap_samples = 2 * sample_rate; // 2 seconds overlap to avoid cutting words
         let mut transcriptions = Vec::new();
@@ -343,6 +348,7 @@ impl TranscriptionProcessor {
                 samples: chunk_audio,
                 start_time: chunk_start_time,
                 end_time: chunk_end_time,
+                sample_rate,
             };
 
             println!(
