@@ -70,7 +70,7 @@ impl WhisperCppBackend {
     pub fn capabilities(&self) -> BackendCapabilities {
         BackendCapabilities {
             name: "whisper.cpp",
-            max_audio_duration: Some(30.0), // whisper.cpp handles up to 30s per segment
+            max_audio_duration: None, // No hard limit - processes audio of any length
             supported_languages: None,       // Supports all Whisper languages
             supports_streaming: false,       // Standard whisper.cpp doesn't stream
             gpu_available: self.config.gpu_enabled,
@@ -80,9 +80,11 @@ impl WhisperCppBackend {
     /// Transcribe audio samples
     ///
     /// # Arguments
-    /// * `samples` - Audio samples (f32, 16kHz, mono)
+    /// * `samples` - Audio samples (f32, mono)
     /// * `language` - Language code (e.g., "en", "es")
+    /// * `common_options` - Common transcription options (beam_size, patience)
     /// * `options` - Whisper.cpp-specific options
+    /// * `sample_rate` - Audio sample rate in Hz (from config)
     ///
     /// # Returns
     /// Transcribed text or error
@@ -90,16 +92,18 @@ impl WhisperCppBackend {
         &self,
         samples: &[f32],
         language: &str,
+        common_options: &crate::config::CommonTranscriptionOptions,
         options: &crate::config::WhisperCppOptions,
+        sample_rate: usize,
     ) -> Result<String, TranscriptionError> {
         // Lock the reusable state (eliminates per-transcription allocation overhead)
         let mut state = self.state.lock();
 
-        // Build FullParams based on beam size
-        let mut params = if options.beam_size > 1 {
+        // Build FullParams based on beam size from common options
+        let mut params = if common_options.beam_size > 1 {
             FullParams::new(SamplingStrategy::BeamSearch {
-                beam_size: options.beam_size as i32,
-                patience: options.patience,
+                beam_size: common_options.beam_size as i32,
+                patience: common_options.patience,
             })
         } else {
             // True greedy decoding (no best_of for speed)
@@ -127,9 +131,21 @@ impl WhisperCppBackend {
         params.set_logprob_thold(options.logprob_thold);
         params.set_no_speech_thold(options.no_speech_thold);
 
-        // Segment control - single_segment is faster for real-time, multiple for accuracy
-        params.set_single_segment(true);   // Single segment for real-time speed (like stream.cpp)
+        // Adaptive segmentation: Use single_segment for short audio (<30s), multi-segment for longer
+        // The Whisper model was trained on 30-second chunks, so longer audio benefits from chunking
+        const SEGMENT_THRESHOLD_SECONDS: usize = 30;
+        let audio_duration_secs = samples.len() / sample_rate;
+        let use_single_segment = audio_duration_secs < SEGMENT_THRESHOLD_SECONDS;
+
+        params.set_single_segment(use_single_segment);
         params.set_no_timestamps(false);   // We need timestamps for segment boundaries
+
+        if !use_single_segment {
+            println!(
+                "Using multi-segment transcription for {:.1}s audio (threshold: {}s)",
+                audio_duration_secs as f32, SEGMENT_THRESHOLD_SECONDS
+            );
+        }
 
         // Note: repetition_penalty not supported by whisper-rs
         // whisper.cpp has built-in repetition handling, so this is okay
@@ -196,13 +212,13 @@ mod tests {
         let config = BackendConfig::default();
         let caps = BackendCapabilities {
             name: "whisper.cpp",
-            max_audio_duration: Some(30.0),
+            max_audio_duration: None, // No hard limit
             supported_languages: None,
             supports_streaming: false,
             gpu_available: config.gpu_enabled,
         };
 
         assert_eq!(caps.name, "whisper.cpp");
-        assert_eq!(caps.max_audio_duration, Some(30.0));
+        assert_eq!(caps.max_audio_duration, None);
     }
 }

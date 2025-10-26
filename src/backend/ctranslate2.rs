@@ -83,9 +83,11 @@ impl CT2Backend {
     /// Transcribe audio samples
     ///
     /// # Arguments
-    /// * `samples` - Audio samples (f32, 16kHz, mono)
+    /// * `samples` - Audio samples (f32, mono)
     /// * `language` - Language code (e.g., "en", "es")
+    /// * `common_options` - Common transcription options (beam_size, patience)
     /// * `options` - CTranslate2-specific options
+    /// * `sample_rate` - Audio sample rate in Hz (from config, for API consistency)
     ///
     /// # Returns
     /// Transcribed text or error
@@ -93,10 +95,12 @@ impl CT2Backend {
         &self,
         samples: &[f32],
         language: &str,
+        common_options: &crate::config::CommonTranscriptionOptions,
         options: &crate::config::CT2Options,
+        _sample_rate: usize,
     ) -> Result<String, TranscriptionError> {
-        // Convert CT2Options to ct2rs::WhisperOptions
-        let ct2_options = options.to_whisper_options();
+        // Convert CT2Options to ct2rs::WhisperOptions, combining with common options
+        let ct2_options = options.to_whisper_options(common_options);
 
         // Call CT2 generate
         let result = self.whisper.generate(samples, Some(language), false, &ct2_options)?;

@@ -21,6 +21,7 @@ pub struct AudioSegment {
     pub samples: Vec<f32>,
     pub start_time: f64,
     pub end_time: f64,
+    pub sample_rate: usize,
 }
 
 /// Configuration for Voice Activity Detection
@@ -311,6 +312,7 @@ impl SileroVad {
                     samples: self.extract_speech_segment(start_time, new_time_offset),
                     start_time,
                     end_time: new_time_offset,
+                    sample_rate: self.config.sample_rate,
                 };
 
                 if !segment.samples.is_empty() {
@@ -437,6 +439,7 @@ impl SileroVad {
                 samples: self.extract_speech_segment(start_time, self.current_time),
                 start_time,
                 end_time: self.current_time,
+                sample_rate: self.config.sample_rate,
             };
 
             if !segment.samples.is_empty() {
@@ -603,6 +606,7 @@ impl SileroVad {
                 samples: self.extract_speech_segment(start_time, self.current_time),
                 start_time,
                 end_time: self.current_time,
+                sample_rate: self.config.sample_rate,
             })
         } else {
             None
