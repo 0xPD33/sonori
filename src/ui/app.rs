@@ -280,62 +280,14 @@ impl ApplicationHandler for WindowApp {
                     },
                 ..
             } => {
-                // Get modifier states before borrowing window
-                let ctrl_pressed = self.current_modifiers.state().control_key();
-
                 if let Some(window) = self.windows.get_mut(&window_id) {
-                    // Get keyboard shortcuts from config
-                    let shortcuts = &self.config.keyboard_shortcuts;
-
-                    // Check for copy transcript shortcut
-                    if ctrl_pressed
-                        && key_code
-                            == shortcuts
-                                .to_key_code(&shortcuts.copy_transcript)
-                                .unwrap_or(KeyCode::KeyC)
-                    {
-                        println!("Copy transcript shortcut pressed, copying transcript");
-                        window.copy_transcript();
-                    }
-                    // Check for reset transcript shortcut
-                    else if ctrl_pressed
-                        && key_code
-                            == shortcuts
-                                .to_key_code(&shortcuts.reset_transcript)
-                                .unwrap_or(KeyCode::KeyR)
-                    {
-                        println!("Reset transcript shortcut pressed, resetting transcript");
-                        window.reset_transcript();
-                    }
-                    // Check for toggle recording shortcut (Space) - only in real-time mode
-                    else if key_code
-                        == shortcuts
-                            .to_key_code(&shortcuts.toggle_recording)
-                            .unwrap_or(KeyCode::Space)
-                    {
-                        let current_mode = *self.transcription_mode_ref.lock();
-                        if current_mode == crate::real_time_transcriber::TranscriptionMode::RealTime
-                        {
-                            window.toggle_recording();
-                            self.notify_tray_about_recording();
-                        }
-                    }
-                    // TEMPORARY: Restore Tab handler for debugging (works when window focused)
+                    // Tab - Toggle manual session (temporary, works when window focused)
                     // TODO: Once global shortcut (Super+Tab) works unfocused, remove this
-                    else if key_code == KeyCode::Tab {
+                    if key_code == KeyCode::Tab {
                         let current_mode = *self.transcription_mode_ref.lock();
                         if current_mode == crate::real_time_transcriber::TranscriptionMode::Manual {
                             window.toggle_manual_session();
                         }
-                    }
-                    // Check for exit application shortcut
-                    else if key_code
-                        == shortcuts
-                            .to_key_code(&shortcuts.exit_application)
-                            .unwrap_or(KeyCode::Escape)
-                    {
-                        println!("Exit application shortcut pressed, initiating shutdown");
-                        window.quit();
                     }
                 }
                 return;

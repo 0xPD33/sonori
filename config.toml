@@ -4,7 +4,7 @@
 # These are the most important settings you'll likely want to change
 
 [general_config]
-model = "small"               # Whisper model size (tiny, base, small, medium, large, large-v2, large-v3, large-v3-turbo)
+model = "large-v3-turbo"               # Whisper model size (tiny, base, small, medium, large, large-v2, large-v3, large-v3-turbo)
 language = "en"                        # Transcription language (use "auto" for auto-detect)
 transcription_mode = "realtime"        # "realtime" for live transcription, "manual" for push-to-talk
 
@@ -26,18 +26,27 @@ quantization_level = "medium"         # Precision: "high" (full), "medium" (q8_0
 
 [audio_processor_config]
 sample_rate = 16000                   # Audio sample rate in Hz (must be 8000 or 16000 for VAD)
-buffer_size = 1024                    # Audio buffer size (fundamental processing block size)
-max_vis_samples = 1024                # Samples to display in audio visualization
+buffer_size = 1024                    # Audio buffer size (also used for visualization)
+
+# =============================================================================
+# TRANSCRIPTION MODE SETTINGS
+# =============================================================================
+# Configure real-time and manual transcription modes
+
+[realtime_mode_config]
+max_buffer_duration_sec = 30.0        # Maximum audio buffer duration for VAD history (seconds)
+max_segment_count = 20                # Maximum number of speech segments to buffer
+
+[manual_mode_config]
+max_recording_duration_secs = 120     # Maximum recording time per session (2 minutes)
+clear_on_new_session = true           # Clear transcript when starting new session
 
 [vad_config]
-threshold = 0.15                      # Speech detection sensitivity (0.0-1.0, lower = more sensitive)
-speech_end_threshold = 0.1            # Lower threshold for speech continuation (hysteresis)
+threshold = 0.10                      # Speech detection sensitivity (0.0-1.0, lower = more sensitive)
+speech_end_threshold = 0.08           # Lower threshold for speech continuation (hysteresis)
 hangbefore_frames = 5                 # Frames to wait before confirming speech start (50ms)
 hangover_frames = 30                  # Frames to wait after speech ends before cutting (300ms)
 silence_tolerance_frames = 8          # Frames of silence to tolerate during speech (80ms)
-hop_samples = 160                     # Samples to advance between frames (10ms at 16kHz)
-max_buffer_duration_sec = 30.0        # Maximum audio buffer size in seconds
-max_segment_count = 20                # Maximum number of speech segments to keep
 speech_prob_smoothing = 0.3           # Exponential moving average smoothing factor
 
 [sound_config]
@@ -45,23 +54,24 @@ enabled = true                        # Enable sound feedback
 volume = 0.5                         # Sound volume (0.0-1.0)
 
 # =============================================================================
-# BACKEND-SPECIFIC OPTIONS
+# TRANSCRIPTION OPTIONS
 # =============================================================================
-# Advanced transcription parameters for each backend
+# Configure transcription behavior
 
-# CTranslate2 options (used when backend = "ctranslate2")
-[ctranslate2_options]
-beam_size = 5                         # Beam search width (1-10, higher = more accurate but slower)
+# Common options shared across all backends
+[common_transcription_options]
+beam_size = 5                         # Beam search width (1 = greedy/fastest, higher = more accurate but slower)
 patience = 1.0                        # Beam search patience factor
+
+# CTranslate2-specific options (used when backend = "ctranslate2")
+[ctranslate2_options]
 repetition_penalty = 1.25             # Penalty for repeated tokens
 
-# Whisper.cpp options (used when backend = "whisper_cpp")
+# Whisper.cpp-specific options (used when backend = "whisper_cpp")
 [whisper_cpp_options]
-beam_size = 5                         # Beam search width (1 = greedy/fastest, 5 = more accurate)
-patience = 1.0                        # Beam search patience factor
 temperature = 0.0                     # Sampling temperature (0.0 = deterministic, higher = more creative)
 suppress_blank = true                 # Suppress blank outputs at beginning
-no_context = true                     # Use past transcription as context for better accuracy
+no_context = false                    # Use past transcription as context for better accuracy
 max_tokens = 0                        # Maximum tokens per segment (0 = auto)
 entropy_thold = 2.4                   # Entropy threshold for fallback sampling
 logprob_thold = -1.0                  # Log probability threshold for speech detection
@@ -70,20 +80,14 @@ no_speech_thold = 0.6                 # No-speech probability threshold
 # =============================================================================
 # USER INTERFACE & CONTROLS
 # =============================================================================
-# Configure keyboard shortcuts and interaction
-
-[keyboard_shortcuts]
-copy_transcript = "KeyC"              # Copy transcript to clipboard (Ctrl+C)
-reset_transcript = "KeyR"             # Clear transcript (Ctrl+R)
-toggle_recording = "Space"            # Start/stop recording (Space)
-exit_application = "Escape"           # Quit application (Escape)
+# Configure display and window behavior
 
 [display_config]
 vsync_mode = "Enabled"                # VSync: "Auto", "Enabled", "Adaptive", "Disabled", "Mailbox"
 target_fps = 60                       # Target FPS when vsync is disabled
 
 [window_behavior_config]
-hide_when_idle = false                # Auto-hide window when not recording
+hide_when_idle = true                # Auto-hide window when not recording
 auto_hide_delay_ms = 2000             # Delay before auto-hiding (milliseconds)
 start_hidden = false                  # Start application with window hidden
 show_in_system_tray = true            # Show icon in system tray
@@ -101,16 +105,15 @@ application_id = "dev.paddy.sonori"   # Application ID for desktop portal regist
 paste_shortcut = "ctrl_shift_v"       # Paste method: "ctrl_shift_v" (terminals) or "ctrl_v" (apps)
 
 # =============================================================================
-# MANUAL TRANSCRIPTION MODE
+# TRANSCRIPTION POST-PROCESSING
 # =============================================================================
-# Settings specific to manual/push-to-talk transcription mode
+# Clean up transcription artifacts and normalize output
 
-[manual_mode_config]
-max_recording_duration_secs = 120     # Maximum recording time per session (2 minutes)
-manual_buffer_size = 1920000          # Audio buffer size for manual sessions (2 min at 16kHz)
-auto_restart_sessions = false         # Auto-start new session after completing one
-clear_on_new_session = true           # Clear transcript when starting new session
-processing_timeout_secs = 30          # Timeout for transcription processing
+[post_process_config]
+enabled = true                        # Enable post-processing of transcriptions
+remove_leading_dashes = true          # Remove leading dashes (e.g., "- text" → "text")
+remove_trailing_dashes = true         # Remove trailing dashes (e.g., "text -" → "text")
+normalize_whitespace = true           # Normalize whitespace (collapse multiple spaces, etc.)
 
 # =============================================================================
 # DEBUGGING & DEVELOPMENT

@@ -14,10 +14,8 @@ pub struct AudioProcessorConfig {
     pub sample_rate: usize,
     /// The global buffer size used throughout the application
     /// This is the fundamental audio processing block size in samples
+    /// Also used for visualization sample count
     pub buffer_size: usize,
-    /// Maximum number of samples to store for visualization
-    /// Controls the detail level of the audio waveform display
-    pub max_vis_samples: usize,
 }
 
 impl Default for AudioProcessorConfig {
@@ -25,7 +23,6 @@ impl Default for AudioProcessorConfig {
         Self {
             sample_rate: 16000,
             buffer_size: 1024,
-            max_vis_samples: 1024, // Number of samples to display in visualization
         }
     }
 }
@@ -52,19 +49,6 @@ impl Default for GeneralConfig {
     }
 }
 
-/// Configuration for keyboard shortcuts
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KeyboardShortcuts {
-    /// Key to copy transcript (with Ctrl modifier)
-    pub copy_transcript: String,
-    /// Key to reset transcript (with Ctrl modifier)
-    pub reset_transcript: String,
-    /// Key to toggle recording
-    pub toggle_recording: String,
-    /// Key to exit application
-    pub exit_application: String,
-}
-
 /// Configuration for XDG Desktop Portal features
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -82,34 +66,36 @@ pub struct PortalConfig {
     pub paste_shortcut: String,
 }
 
+/// Configuration for real-time transcription mode
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RealtimeModeConfig {
+    /// Maximum audio buffer duration in seconds for VAD history
+    pub max_buffer_duration_sec: f32,
+
+    /// Maximum number of speech segments to keep in buffer
+    pub max_segment_count: usize,
+}
+
+impl Default for RealtimeModeConfig {
+    fn default() -> Self {
+        Self {
+            max_buffer_duration_sec: 30.0,
+            max_segment_count: 20,
+        }
+    }
+}
+
 /// Configuration for manual transcription mode
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ManualModeConfig {
     /// Maximum recording duration in seconds (default: 120)
+    /// Buffer size is calculated as: max_recording_duration_secs * sample_rate
     pub max_recording_duration_secs: u32,
-
-    /// Audio buffer size for manual sessions (default: 16000 * 120 = 2 min at 16kHz)
-    pub manual_buffer_size: usize,
-
-    /// Whether to auto-start a new session after completing one
-    pub auto_restart_sessions: bool,
 
     /// Whether to clear previous transcript when starting new session
     pub clear_on_new_session: bool,
-
-    /// Processing timeout in seconds
-    pub processing_timeout_secs: u32,
-}
-
-impl Default for KeyboardShortcuts {
-    fn default() -> Self {
-        Self {
-            copy_transcript: "KeyC".to_string(),    // Default: Ctrl+C
-            reset_transcript: "KeyR".to_string(),   // Default: Ctrl+R
-            toggle_recording: "Space".to_string(),  // Default: Space
-            exit_application: "Escape".to_string(), // Default: Escape
-        }
-    }
 }
 
 impl Default for PortalConfig {
@@ -128,10 +114,7 @@ impl Default for ManualModeConfig {
     fn default() -> Self {
         Self {
             max_recording_duration_secs: 120,
-            manual_buffer_size: 16000 * 120, // 2 minutes at 16kHz
-            auto_restart_sessions: false,
             clear_on_new_session: true,
-            processing_timeout_secs: 30,
         }
     }
 }
@@ -158,6 +141,31 @@ impl Default for DebugConfig {
     fn default() -> Self {
         Self {
             log_stats_enabled: false,
+        }
+    }
+}
+
+/// Configuration for transcription post-processing
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PostProcessConfig {
+    /// Enable post-processing of transcriptions
+    pub enabled: bool,
+    /// Remove leading dashes from transcriptions
+    pub remove_leading_dashes: bool,
+    /// Remove trailing dashes from transcriptions
+    pub remove_trailing_dashes: bool,
+    /// Normalize whitespace (collapse multiple spaces, remove leading/trailing)
+    pub normalize_whitespace: bool,
+}
+
+impl Default for PostProcessConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            remove_leading_dashes: true,
+            remove_trailing_dashes: true,
+            normalize_whitespace: true,
         }
     }
 }
@@ -266,66 +274,6 @@ impl DisplayConfig {
     }
 }
 
-impl KeyboardShortcuts {
-    /// Convert a key string to a KeyCode
-    pub fn to_key_code(&self, key_str: &str) -> Option<KeyCode> {
-        match key_str {
-            "KeyA" => Some(KeyCode::KeyA),
-            "KeyB" => Some(KeyCode::KeyB),
-            "KeyC" => Some(KeyCode::KeyC),
-            "KeyD" => Some(KeyCode::KeyD),
-            "KeyE" => Some(KeyCode::KeyE),
-            "KeyF" => Some(KeyCode::KeyF),
-            "KeyG" => Some(KeyCode::KeyG),
-            "KeyH" => Some(KeyCode::KeyH),
-            "KeyI" => Some(KeyCode::KeyI),
-            "KeyJ" => Some(KeyCode::KeyJ),
-            "KeyK" => Some(KeyCode::KeyK),
-            "KeyL" => Some(KeyCode::KeyL),
-            "KeyM" => Some(KeyCode::KeyM),
-            "KeyN" => Some(KeyCode::KeyN),
-            "KeyO" => Some(KeyCode::KeyO),
-            "KeyP" => Some(KeyCode::KeyP),
-            "KeyQ" => Some(KeyCode::KeyQ),
-            "KeyR" => Some(KeyCode::KeyR),
-            "KeyS" => Some(KeyCode::KeyS),
-            "KeyT" => Some(KeyCode::KeyT),
-            "KeyU" => Some(KeyCode::KeyU),
-            "KeyV" => Some(KeyCode::KeyV),
-            "KeyW" => Some(KeyCode::KeyW),
-            "KeyX" => Some(KeyCode::KeyX),
-            "KeyY" => Some(KeyCode::KeyY),
-            "KeyZ" => Some(KeyCode::KeyZ),
-            "Digit0" => Some(KeyCode::Digit0),
-            "Digit1" => Some(KeyCode::Digit1),
-            "Digit2" => Some(KeyCode::Digit2),
-            "Digit3" => Some(KeyCode::Digit3),
-            "Digit4" => Some(KeyCode::Digit4),
-            "Digit5" => Some(KeyCode::Digit5),
-            "Digit6" => Some(KeyCode::Digit6),
-            "Digit7" => Some(KeyCode::Digit7),
-            "Digit8" => Some(KeyCode::Digit8),
-            "Digit9" => Some(KeyCode::Digit9),
-            "Space" => Some(KeyCode::Space),
-            "Escape" => Some(KeyCode::Escape),
-            "Enter" => Some(KeyCode::Enter),
-            "Tab" => Some(KeyCode::Tab),
-            "F1" => Some(KeyCode::F1),
-            "F2" => Some(KeyCode::F2),
-            "F3" => Some(KeyCode::F3),
-            "F4" => Some(KeyCode::F4),
-            "F5" => Some(KeyCode::F5),
-            "F6" => Some(KeyCode::F6),
-            "F7" => Some(KeyCode::F7),
-            "F8" => Some(KeyCode::F8),
-            "F9" => Some(KeyCode::F9),
-            "F10" => Some(KeyCode::F10),
-            "F11" => Some(KeyCode::F11),
-            "F12" => Some(KeyCode::F12),
-            _ => None,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -339,8 +287,17 @@ pub struct AppConfig {
     /// Audio processing configuration
     pub audio_processor_config: AudioProcessorConfig,
 
+    /// Real-time transcription mode configuration
+    pub realtime_mode_config: RealtimeModeConfig,
+
+    /// Manual transcription mode configuration
+    pub manual_mode_config: ManualModeConfig,
+
     /// Voice Activity Detection configuration
     pub vad_config: VadConfigSerde,
+
+    /// Common transcription options shared across all backends
+    pub common_transcription_options: CommonTranscriptionOptions,
 
     /// CTranslate2-specific options
     pub ctranslate2_options: CT2Options,
@@ -348,14 +305,8 @@ pub struct AppConfig {
     /// Whisper.cpp-specific options
     pub whisper_cpp_options: WhisperCppOptions,
 
-    /// Keyboard shortcuts configuration
-    pub keyboard_shortcuts: KeyboardShortcuts,
-
     /// XDG Desktop Portal configuration
     pub portal_config: PortalConfig,
-
-    /// Manual transcription mode configuration
-    pub manual_mode_config: ManualModeConfig,
 
     /// Display and rendering configuration
     pub display_config: DisplayConfig,
@@ -369,6 +320,9 @@ pub struct AppConfig {
     /// Debug and development configuration
     pub debug_config: DebugConfig,
 
+    /// Transcription post-processing configuration
+    pub post_process_config: PostProcessConfig,
+
     /// Deprecated legacy field - use backend_config instead
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compute_type: Option<String>,
@@ -378,20 +332,36 @@ pub struct AppConfig {
     pub device: Option<String>,
 }
 
+/// Common transcription options shared across all backends
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CommonTranscriptionOptions {
+    /// Beam search width (1 = greedy/fastest, higher = more accurate but slower)
+    pub beam_size: usize,
+    /// Beam search patience factor
+    pub patience: f32,
+}
+
+impl Default for CommonTranscriptionOptions {
+    fn default() -> Self {
+        Self {
+            beam_size: 5,
+            patience: 1.0,
+        }
+    }
+}
+
 /// CTranslate2-specific transcription options
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CT2Options {
-    pub beam_size: usize,
-    pub patience: f32,
+    /// Penalty for repeated tokens
     pub repetition_penalty: f32,
 }
 
 impl Default for CT2Options {
     fn default() -> Self {
         Self {
-            beam_size: 5,
-            patience: 1.0,
             repetition_penalty: 1.25,
         }
     }
@@ -401,8 +371,6 @@ impl Default for CT2Options {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WhisperCppOptions {
-    pub beam_size: usize,
-    pub patience: f32,
     pub temperature: f32,
     pub suppress_blank: bool,
     pub no_context: bool,
@@ -415,8 +383,6 @@ pub struct WhisperCppOptions {
 impl Default for WhisperCppOptions {
     fn default() -> Self {
         Self {
-            beam_size: 5,         // Beam search (better accuracy with OpenBLAS)
-            patience: 1.0,
             temperature: 0.0,     // Deterministic
             suppress_blank: true, // Skip blank segments
             no_context: false,    // Use context for better accuracy
@@ -438,12 +404,6 @@ pub struct VadConfigSerde {
     pub hangbefore_frames: usize,
     /// Number of frames after speech before ending segment
     pub hangover_frames: usize,
-    /// Number of samples to advance between frames
-    pub hop_samples: usize,
-    /// Maximum buffer size in seconds
-    pub max_buffer_duration_sec: f32,
-    /// Maximum number of segments to keep
-    pub max_segment_count: usize,
     /// Number of non-speech frames to tolerate in PossibleSpeech before giving up
     pub silence_tolerance_frames: usize,
     /// Lower threshold for speech continuation (hysteresis)
@@ -458,9 +418,6 @@ impl Default for VadConfigSerde {
             threshold: 0.15,               // Lower threshold to detect quieter speech
             hangbefore_frames: 5,          // Increased to 50ms - capture more lead-in audio
             hangover_frames: 30,           // Increased to 300ms - keep more trailing audio
-            hop_samples: 160,              // 10ms hop for overlapping windows
-            max_buffer_duration_sec: 30.0, // Maximum buffer size in seconds
-            max_segment_count: 20,         // Maximum number of segments to keep
             silence_tolerance_frames: 8,   // Increased to 80ms - tolerate more pauses
             speech_end_threshold: 0.1,     // Lower threshold for continuation
             speech_prob_smoothing: 0.3,    // EMA smoothing factor (production standard)
@@ -471,6 +428,7 @@ impl Default for VadConfigSerde {
 impl SileroVadConfig {
     pub fn from_config(
         vad_config: &VadConfigSerde,
+        realtime_config: &RealtimeModeConfig,
         _buffer_size: usize,
         sample_rate: usize,
     ) -> Self {
@@ -480,9 +438,9 @@ impl SileroVadConfig {
             sample_rate,
             hangbefore_frames: vad_config.hangbefore_frames,
             hangover_frames: vad_config.hangover_frames,
-            hop_samples: vad_config.hop_samples,
-            max_buffer_duration: (vad_config.max_buffer_duration_sec * sample_rate as f32) as usize,
-            max_segment_count: vad_config.max_segment_count,
+            hop_samples: (sample_rate as f32 * 0.01) as usize, // 10ms hop calculated from sample_rate
+            max_buffer_duration: (realtime_config.max_buffer_duration_sec * sample_rate as f32) as usize,
+            max_segment_count: realtime_config.max_segment_count,
             silence_tolerance_frames: vad_config.silence_tolerance_frames,
             speech_end_threshold: vad_config.speech_end_threshold,
             speech_prob_smoothing: vad_config.speech_prob_smoothing,
@@ -490,17 +448,17 @@ impl SileroVadConfig {
     }
 }
 
-impl From<(VadConfigSerde, usize, usize)> for SileroVadConfig {
-    fn from((config, _buffer_size, sample_rate): (VadConfigSerde, usize, usize)) -> Self {
+impl From<(VadConfigSerde, RealtimeModeConfig, usize, usize)> for SileroVadConfig {
+    fn from((config, realtime_config, _buffer_size, sample_rate): (VadConfigSerde, RealtimeModeConfig, usize, usize)) -> Self {
         Self {
             threshold: config.threshold,
             frame_size: 512,
             sample_rate,
             hangbefore_frames: config.hangbefore_frames,
             hangover_frames: config.hangover_frames,
-            hop_samples: config.hop_samples,
-            max_buffer_duration: (config.max_buffer_duration_sec * sample_rate as f32) as usize,
-            max_segment_count: config.max_segment_count,
+            hop_samples: (sample_rate as f32 * 0.01) as usize, // 10ms hop calculated from sample_rate
+            max_buffer_duration: (realtime_config.max_buffer_duration_sec * sample_rate as f32) as usize,
+            max_segment_count: realtime_config.max_segment_count,
             silence_tolerance_frames: config.silence_tolerance_frames,
             speech_end_threshold: config.speech_end_threshold,
             speech_prob_smoothing: config.speech_prob_smoothing,
@@ -514,16 +472,18 @@ impl Default for AppConfig {
             general_config: GeneralConfig::default(),
             backend_config: BackendConfig::default(),
             audio_processor_config: AudioProcessorConfig::default(),
+            realtime_mode_config: RealtimeModeConfig::default(),
+            manual_mode_config: ManualModeConfig::default(),
             vad_config: VadConfigSerde::default(),
+            common_transcription_options: CommonTranscriptionOptions::default(),
             ctranslate2_options: CT2Options::default(),
             whisper_cpp_options: WhisperCppOptions::default(),
-            keyboard_shortcuts: KeyboardShortcuts::default(),
             portal_config: PortalConfig::default(),
-            manual_mode_config: ManualModeConfig::default(),
             display_config: DisplayConfig::default(),
             window_behavior_config: WindowBehaviorConfig::default(),
             sound_config: SoundConfig::default(),
             debug_config: DebugConfig::default(),
+            post_process_config: PostProcessConfig::default(),
             compute_type: None,
             device: None,
         }
@@ -553,11 +513,11 @@ impl AppConfig {
 }
 
 impl CT2Options {
-    /// Convert to ct2rs::WhisperOptions
-    pub fn to_whisper_options(&self) -> WhisperOptions {
+    /// Convert to ct2rs::WhisperOptions, combining with common options
+    pub fn to_whisper_options(&self, common_options: &CommonTranscriptionOptions) -> WhisperOptions {
         WhisperOptions {
-            beam_size: self.beam_size,
-            patience: self.patience,
+            beam_size: common_options.beam_size,
+            patience: common_options.patience,
             repetition_penalty: self.repetition_penalty,
             ..Default::default()
         }
