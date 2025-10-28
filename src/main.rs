@@ -156,11 +156,11 @@ async fn run_realtime_cli(mut transcriber: RealTimeTranscriber) -> anyhow::Resul
 
     loop {
         tokio::select! {
-            Ok(transcription) = transcript_rx.recv() => {
+            Ok(message) = transcript_rx.recv() => {
                 // Clear the current line and print the new transcription
                 print!("\r{:100}\r", ""); // Clear line with spaces
                 current_line.push(' ');
-                current_line.push_str(&transcription);
+                current_line.push_str(&message.text);
                 print!("{}", current_line);
                 std::io::Write::flush(&mut std::io::stdout()).unwrap();
             }
@@ -235,9 +235,9 @@ async fn run_manual_cli(mut transcriber: RealTimeTranscriber) -> anyhow::Result<
     // Main event loop
     loop {
         tokio::select! {
-            Ok(transcription) = transcript_rx.recv() => {
+            Ok(message) = transcript_rx.recv() => {
                 current_transcript.push(' ');
-                current_transcript.push_str(&transcription);
+                current_transcript.push_str(&message.text);
 
                 // Clear previous line and print updated status
                 print!("\r{:100}\r", ""); // Clear line
@@ -409,9 +409,27 @@ async fn run_gui_mode(
 
     let clipboard_tx_clone = clipboard_tx.clone();
     let portal_tx_clone = portal_tx.clone();
+    let audio_processor_for_session = transcriber.get_audio_processor();
 
     tokio::spawn(async move {
-        while let Ok(transcription) = transcript_rx.recv().await {
+        while let Ok(message) = transcript_rx.recv().await {
+            // Get current session ID to filter stale transcriptions
+            let current_session_id = if let Some(ref ap) = audio_processor_for_session {
+                ap.get_session_id()
+            } else {
+                None
+            };
+
+            // Discard transcriptions from old sessions
+            if message.session_id != current_session_id {
+                println!(
+                    "Discarding stale transcription from session {:?} (current: {:?})",
+                    message.session_id, current_session_id
+                );
+                continue;
+            }
+
+            let transcription = message.text;
             let updated_transcript = {
                 let mut history = transcript_history.write();
                 if !history.is_empty() {

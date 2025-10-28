@@ -46,6 +46,7 @@ pub struct WindowState {
     pub scrollbar: Scrollbar,
     pub scroll_offset: f32,
     pub max_scroll_offset: f32,
+    pub target_scroll_offset: f32,
     pub auto_scroll: bool,
     pub last_transcript_len: usize,
     pub event_handler: EventHandler,
@@ -232,6 +233,7 @@ impl WindowState {
             scrollbar,
             scroll_offset: 0.0,
             max_scroll_offset: 0.0,
+            target_scroll_offset: 0.0,
 
             // Auto-scroll control
             auto_scroll: true,
@@ -506,9 +508,23 @@ impl WindowState {
         self.scrollbar.scroll_offset = self.scroll_offset;
         self.scrollbar.auto_scroll = self.event_handler.auto_scroll;
 
-        if self.auto_scroll && transcript_changed {
-            self.scroll_offset = self.max_scroll_offset;
-            self.scrollbar.scroll_offset = self.max_scroll_offset;
+        if self.auto_scroll {
+            // Set target to bottom
+            self.target_scroll_offset = self.max_scroll_offset;
+
+            // Smoothly interpolate towards target (20% per frame)
+            let lerp_factor = 0.2;
+            self.scroll_offset += (self.target_scroll_offset - self.scroll_offset) * lerp_factor;
+
+            // Snap to target when very close to avoid infinite approach
+            if (self.target_scroll_offset - self.scroll_offset).abs() < 0.5 {
+                self.scroll_offset = self.target_scroll_offset;
+            }
+
+            self.scrollbar.scroll_offset = self.scroll_offset;
+        } else {
+            // When not auto-scrolling, target follows current position
+            self.target_scroll_offset = self.scroll_offset;
         }
 
         // Get text position from the layout manager

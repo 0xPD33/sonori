@@ -2,9 +2,17 @@
 
 A lightweight, transparent overlay application that displays real-time transcriptions of your speech using multiple AI backends on Linux.
 
-The application is currently in very early development and might be unstable, buggy and/or crash.
+## Contributing
 
-Contributions are welcome. There are no guidelines yet. Just check the planned features, known issues and make sure your changes work on NixOS and other distros!
+Contributions are welcome and encouraged! Whether you're fixing bugs, adding features, improving documentation, or testing on different distributions, your help is appreciated.
+
+**Getting Started:**
+- Check out [ARCHITECTURE.md](./ARCHITECTURE.md) to understand the codebase structure
+- Look at the planned features and known issues below for ideas
+- Test your changes on your distribution (we aim to support NixOS and other major distros)
+- Open an issue or PR - no formal guidelines yet, just make sure it works!
+
+**Note:** The application is in active development. You may encounter bugs or instability as new features are added.
 
 ## Features
 
@@ -49,7 +57,7 @@ Contributions are welcome. There are no guidelines yet. Just check the planned f
 
 ### Dependencies
 
-DISCLAIMER: Building from source, installing dependencies and running the application has only been tested on NixOS and I'm unsure if it will work on other distributions.
+**Note:** While primarily tested on NixOS, the application should work on other Linux distributions with the proper dependencies installed. Feedback on other distros is welcome!
 
 For Debian/Ubuntu-based distributions:
 
@@ -185,29 +193,49 @@ quantization_level = "medium"     # Precision: "high", "medium" (q8_0), "low" (q
 
 [audio_processor_config]
 sample_rate = 16000               # Audio sample rate in Hz
-buffer_size = 1024                # Audio buffer size
-max_vis_samples = 1024            # Samples for visualization
+buffer_size = 1024                # Audio buffer size (also used for visualization)
+
+[realtime_mode_config]
+max_buffer_duration_sec = 30.0    # Maximum audio buffer duration for VAD history
+max_segment_count = 20            # Maximum number of speech segments to buffer
+
+[manual_mode_config]
+max_recording_duration_secs = 120 # Maximum recording time per session (2 minutes)
+clear_on_new_session = true       # Clear transcript when starting new session
 
 [vad_config]
-threshold = 0.15                  # Speech detection sensitivity (lower = more sensitive)
+threshold = 0.10                  # Speech detection sensitivity (lower = more sensitive)
+speech_end_threshold = 0.08       # Lower threshold for speech continuation (hysteresis)
 hangbefore_frames = 5             # Frames before confirming speech start (50ms)
 hangover_frames = 30              # Frames of silence before ending segment (300ms)
 silence_tolerance_frames = 8      # Frames of silence tolerated during speech (80ms)
-speech_end_threshold = 0.1        # Lower threshold for speech continuation (hysteresis)
-hop_samples = 160                 # Samples between frames (10ms at 16kHz)
 speech_prob_smoothing = 0.3       # EMA smoothing factor
-max_buffer_duration_sec = 30.0    # Maximum audio buffer duration
-max_segment_count = 20            # Maximum segments to keep in memory
 
 [sound_config]
 enabled = true                    # Enable sound feedback
 volume = 0.5                      # Volume for sound effects (0.0-1.0)
 
-[keyboard_shortcuts]
-copy_transcript = "KeyC"          # Copy transcription to clipboard (Ctrl+C)
-reset_transcript = "KeyR"         # Clear current transcript (Ctrl+R)
-toggle_recording = "Space"        # Pause/resume recording (real-time) or manual session (manual mode)
-exit_application = "Escape"       # Exit the application
+[common_transcription_options]
+beam_size = 5                     # Beam search width (1 = greedy/fastest, higher = more accurate)
+patience = 1.0                    # Beam search patience factor
+
+[ctranslate2_options]
+repetition_penalty = 1.25         # Penalty for repeated tokens
+
+[whisper_cpp_options]
+temperature = 0.0                 # Sampling temperature (0.0 = deterministic)
+suppress_blank = true             # Suppress blank outputs at beginning
+no_context = false                # Use past transcription as context
+max_tokens = 0                    # Maximum tokens per segment (0 = auto)
+entropy_thold = 2.4               # Entropy threshold for fallback sampling
+logprob_thold = -1.0              # Log probability threshold
+no_speech_thold = 0.6             # No-speech probability threshold
+
+[post_process_config]
+enabled = true                    # Enable post-processing of transcriptions
+remove_leading_dashes = true      # Remove leading dashes (e.g., "- text" → "text")
+remove_trailing_dashes = true     # Remove trailing dashes (e.g., "text -" → "text")
+normalize_whitespace = true       # Normalize whitespace
 
 [portal_config]
 enable_xdg_portal = true              # Enable XDG Desktop Portal for input injection and global shortcuts
@@ -216,34 +244,19 @@ manual_toggle_accelerator = "<Super>backslash"  # Accelerator for toggling manua
 application_id = "dev.paddy.sonori"   # App ID for portal integration
 paste_shortcut = "ctrl_shift_v"       # Paste method: "ctrl_shift_v" (terminals) or "ctrl_v" (apps)
 
-[manual_mode_config]
-max_recording_duration_secs = 120     # Maximum duration per manual session (2 minutes)
-manual_buffer_size = 1920000          # Buffer size for manual sessions (2 min at 16kHz)
-auto_restart_sessions = false         # Auto-start new session after completing one
-clear_on_new_session = true           # Clear previous transcript when starting new session
-processing_timeout_secs = 30          # Timeout for processing manual sessions
+[display_config]
+vsync_mode = "Enabled"                # VSync: "Auto", "Enabled", "Adaptive", "Disabled", "Mailbox"
+target_fps = 60                       # Target FPS when vsync is disabled
+
+[window_behavior_config]
+hide_when_idle = true                 # Auto-hide window when not recording
+auto_hide_delay_ms = 2000             # Delay before auto-hiding (milliseconds)
+start_hidden = false                  # Start application with window hidden
+show_in_system_tray = true            # Show icon in system tray
 
 [debug_config]
 log_stats_enabled = false             # Enable detailed performance logging
 ```
-
-### Keyboard Shortcuts
-
-You can customize the keyboard shortcuts used in the application by editing the `keyboard_shortcuts` section in the config.toml file. The default shortcuts are:
-
-- `copy_transcript`: KeyC (Ctrl+C) - Copy the transcription to clipboard
-- `reset_transcript`: KeyR (Ctrl+R) - Clear the current transcript
-- `toggle_recording`: Space - Toggle recording on/off (real-time) or manual session (manual mode)
-- `exit_application`: Escape - Exit the application
-
-When specifying keys, use the key names from the [KeyCode enum in winit](https://docs.rs/winit/latest/winit/keyboard/enum.KeyCode.html), such as:
-
-- Letter keys: KeyA, KeyB, KeyC, etc.
-- Number keys: Digit0, Digit1, etc.
-- Function keys: F1, F2, etc.
-- Special keys: Space, Escape, Enter, Tab, etc.
-
-Note: The Ctrl modifier is automatically applied to copy_transcript and reset_transcript shortcuts.
 
 ### Backend Selection
 

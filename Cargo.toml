@@ -31,6 +31,7 @@ image = "0.25.5"
 chrono = "0.4.35"
 num_cpus = "1.16"
 whisper-rs = { version = "0.15.1", features = ["openblas", "vulkan"] }
+hound = "3.5"
 
 [features]
 # Enable runtime CPU feature detection

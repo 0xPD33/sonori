@@ -22,6 +22,9 @@ pub struct AudioSegment {
     pub start_time: f64,
     pub end_time: f64,
     pub sample_rate: usize,
+    /// Session ID to track which session this segment belongs to
+    /// Realtime mode uses Some("realtime"), manual mode uses session ID
+    pub session_id: Option<String>,
 }
 
 /// Configuration for Voice Activity Detection
@@ -313,6 +316,7 @@ impl SileroVad {
                     start_time,
                     end_time: new_time_offset,
                     sample_rate: self.config.sample_rate,
+                    session_id: None, // Will be set by AudioProcessor
                 };
 
                 if !segment.samples.is_empty() {
@@ -440,6 +444,7 @@ impl SileroVad {
                 start_time,
                 end_time: self.current_time,
                 sample_rate: self.config.sample_rate,
+                session_id: None, // Will be set by AudioProcessor
             };
 
             if !segment.samples.is_empty() {
@@ -607,6 +612,7 @@ impl SileroVad {
                 start_time,
                 end_time: self.current_time,
                 sample_rate: self.config.sample_rate,
+                session_id: None, // Will be set by AudioProcessor
             })
         } else {
             None
