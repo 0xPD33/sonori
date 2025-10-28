@@ -131,11 +131,11 @@ impl WhisperCppBackend {
         params.set_logprob_thold(options.logprob_thold);
         params.set_no_speech_thold(options.no_speech_thold);
 
-        // Adaptive segmentation: Use single_segment for short audio (<30s), multi-segment for longer
+        // Adaptive segmentation: Use single_segment for short audio (<=30s), multi-segment for longer
         // The Whisper model was trained on 30-second chunks, so longer audio benefits from chunking
         const SEGMENT_THRESHOLD_SECONDS: usize = 30;
         let audio_duration_secs = samples.len() / sample_rate;
-        let use_single_segment = audio_duration_secs < SEGMENT_THRESHOLD_SECONDS;
+        let use_single_segment = audio_duration_secs <= SEGMENT_THRESHOLD_SECONDS;
 
         params.set_single_segment(use_single_segment);
         params.set_no_timestamps(false);   // We need timestamps for segment boundaries

@@ -4,6 +4,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::time::Duration;
+use hound;
+use std::path::Path;
 
 use crate::config::{AppConfig, AudioProcessorConfig};
 use crate::real_time_transcriber::TranscriptionMode;
@@ -27,6 +29,13 @@ pub struct AudioProcessor {
     transcription_mode: Arc<Mutex<TranscriptionMode>>,
     manual_audio_buffer: Arc<Mutex<Vec<f32>>>,
     manual_buffer_max_size: usize,
+    manual_session_tx: mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>,
+
+    // Session tracking for preventing cross-session contamination
+    current_session_id: Arc<RwLock<Option<String>>>,
+
+    // Debug configuration
+    debug_config: crate::config::DebugConfig,
 
     sample_rate: usize,
 }
@@ -41,10 +50,19 @@ impl AudioProcessor {
         segment_tx: mpsc::Sender<AudioSegment>,
         transcription_mode: Arc<Mutex<TranscriptionMode>>,
         transcription_stats: Arc<Mutex<TranscriptionStats>>,
+        manual_session_tx: mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>,
         app_config: AppConfig,
     ) -> Self {
-        let manual_buffer_max_size = app_config.manual_mode_config.manual_buffer_size;
+        // Calculate manual buffer size from max_recording_duration_secs and sample_rate
+        let manual_buffer_max_size = (app_config.manual_mode_config.max_recording_duration_secs as usize)
+            * app_config.audio_processor_config.sample_rate;
         let manual_audio_buffer = Arc::new(Mutex::new(Vec::with_capacity(manual_buffer_max_size)));
+
+        // Initialize session ID based on transcription mode
+        let initial_session_id = match *transcription_mode.lock() {
+            TranscriptionMode::RealTime => Some("realtime".to_string()),
+            TranscriptionMode::Manual => None, // Will be set when session starts
+        };
 
         Self {
             running,
@@ -59,6 +77,9 @@ impl AudioProcessor {
             transcription_mode,
             manual_audio_buffer,
             manual_buffer_max_size,
+            manual_session_tx,
+            current_session_id: Arc::new(RwLock::new(initial_session_id)),
+            debug_config: app_config.debug_config.clone(),
             sample_rate: app_config.audio_processor_config.sample_rate,
         }
     }
@@ -77,11 +98,11 @@ impl AudioProcessor {
         let manual_audio_buffer = self.manual_audio_buffer.clone();
         let manual_buffer_max_size = self.manual_buffer_max_size;
         let transcription_stats = self.transcription_stats.clone();
+        let session_id_ref = self.current_session_id.clone();
         let sample_rate = self.sample_rate;
 
         // Create thread-local buffer
         let mut audio_buffer = Vec::with_capacity(buffer_size);
-        let max_vis_samples = config.max_vis_samples;
         let preroll_max_samples = ((sample_rate * 150) / 1000).max(buffer_size);
         let mut preroll_buffer: VecDeque<f32> = VecDeque::with_capacity(preroll_max_samples);
 
@@ -154,11 +175,12 @@ impl AudioProcessor {
                                     &segment_tx,
                                     &transcript_history,
                                     &transcription_stats,
-                                    max_vis_samples,
+                                    buffer_size,
                                     &mut latest_is_speaking,
                                     &mut preroll_buffer,
                                     preroll_max_samples,
                                     sample_rate,
+                                    &session_id_ref,
                                 )
                                 .await;
                             }
@@ -167,9 +189,10 @@ impl AudioProcessor {
                                     &audio_buffer,
                                     &manual_audio_buffer,
                                     &audio_visualization_data,
-                                    max_vis_samples,
+                                    buffer_size,
                                     manual_buffer_max_size,
                                     &recording,
+                                    sample_rate,
                                 )
                                 .await;
                             }
@@ -197,11 +220,12 @@ impl AudioProcessor {
         segment_tx: &mpsc::Sender<AudioSegment>,
         transcript_history: &Arc<RwLock<String>>,
         transcription_stats: &Arc<Mutex<TranscriptionStats>>,
-        max_vis_samples: usize,
+        buffer_size: usize,
         latest_is_speaking: &mut bool,
         preroll_buffer: &mut VecDeque<f32>,
         preroll_max_samples: usize,
         sample_rate: usize,
+        session_id_ref: &Arc<RwLock<Option<String>>>,
     ) {
         let (segments_result, vad_speaking) = {
             let mut processor = audio_processor.lock();
@@ -210,7 +234,7 @@ impl AudioProcessor {
             (result, speaking)
         };
 
-        let new_samples: Vec<f32> = audio_buffer.iter().take(max_vis_samples).copied().collect();
+        let new_samples: Vec<f32> = audio_buffer.iter().take(buffer_size).copied().collect();
         let was_speaking = *latest_is_speaking;
 
         let mut reset_history = false;
@@ -251,6 +275,7 @@ impl AudioProcessor {
 
                 let total = segments.len();
                 let mut prepend_preroll = !was_speaking;
+                let current_session_id = session_id_ref.read().clone();
                 for (idx, mut segment) in segments.into_iter().enumerate() {
                     if prepend_preroll && !preroll_buffer.is_empty() {
                         let mut combined =
@@ -263,6 +288,9 @@ impl AudioProcessor {
                         segment.start_time = (segment.start_time - preroll_duration).max(0.0);
                         prepend_preroll = false;
                     }
+
+                    // Set session ID for this segment
+                    segment.session_id = current_session_id.clone();
 
                     if let Err(e) = segment_tx.send(segment).await {
                         eprintln!("Failed to send audio segment: {}", e);
@@ -301,14 +329,15 @@ impl AudioProcessor {
         audio_buffer: &[f32],
         manual_audio_buffer: &Arc<Mutex<Vec<f32>>>,
         audio_visualization_data: &Arc<RwLock<AudioVisualizationData>>,
-        max_vis_samples: usize,
+        buffer_size: usize,
         manual_buffer_max_size: usize,
         recording: &Arc<AtomicBool>,
+        sample_rate: usize,
     ) {
         // Update visualization data
         if let Some(mut audio_data) = audio_visualization_data.try_write() {
             let new_samples: Vec<f32> =
-                audio_buffer.iter().take(max_vis_samples).copied().collect();
+                audio_buffer.iter().take(buffer_size).copied().collect();
             if audio_data.samples != new_samples {
                 audio_data.samples = new_samples;
             }
@@ -324,7 +353,6 @@ impl AudioProcessor {
 
         // Check if adding this audio would exceed the buffer limit
         if new_size > manual_buffer_max_size {
-            let sample_rate = 16000;
             let current_duration = current_size as f64 / sample_rate as f64;
             let max_duration = manual_buffer_max_size as f64 / sample_rate as f64;
 
@@ -347,9 +375,12 @@ impl AudioProcessor {
     }
 
     /// Process accumulated manual audio when session ends
+    /// Manual mode transcribes the entire buffer without VAD filtering to guarantee
+    /// that no speech is missed. User controls start/stop explicitly.
     pub async fn process_accumulated_manual_audio(
         &self,
         sample_rate: usize,
+        expected_session_id: Option<String>,
     ) -> Result<(), anyhow::Error> {
         let accumulated_audio = {
             let mut manual_buffer = self.manual_audio_buffer.lock();
@@ -360,53 +391,24 @@ impl AudioProcessor {
             std::mem::take(&mut *manual_buffer)
         };
 
-        let original_duration = accumulated_audio.len() as f64 / sample_rate as f64;
+        let duration_secs = accumulated_audio.len() as f64 / sample_rate as f64;
         println!(
             "Processing manual audio: {} samples ({:.2}s)",
             accumulated_audio.len(),
-            original_duration
+            duration_secs
         );
 
-        // Apply VAD preprocessing to remove silence, but use original audio as fallback
-        let speech_only_audio = {
-            let mut vad = self.audio_processor.lock();
-            match vad.process_audio(&accumulated_audio) {
-                Ok(speech_segments) => {
-                    if speech_segments.is_empty() {
-                        println!("VAD found no speech, using original audio");
-                        accumulated_audio // Use original instead of discarding
-                    } else {
-                        // Concatenate speech segments
-                        let total_samples: usize =
-                            speech_segments.iter().map(|seg| seg.samples.len()).sum();
-                        let mut concatenated = Vec::with_capacity(total_samples);
-                        for segment in speech_segments {
-                            concatenated.extend_from_slice(&segment.samples);
-                        }
+        // Save audio to WAV file for debugging
+        self.save_audio_to_wav(&accumulated_audio, sample_rate as u32);
 
-                        let speech_duration = concatenated.len() as f64 / sample_rate as f64;
-                        let silence_removed = original_duration - speech_duration;
-                        println!(
-                            "VAD: kept {:.2}s speech, removed {:.2}s silence",
-                            speech_duration, silence_removed
-                        );
-
-                        concatenated
-                    }
-                }
-                Err(e) => {
-                    eprintln!("VAD failed: {}, using original audio", e);
-                    accumulated_audio // Fallback on error
-                }
-            }
-        };
-
-        // Create a single audio segment for transcription
-        let duration_secs = speech_only_audio.len() as f64 / sample_rate as f64;
+        // Create a single audio segment for transcription with ALL audio
+        // No VAD filtering - guarantees every sample is transcribed
         let segment = AudioSegment {
-            samples: speech_only_audio,
+            samples: accumulated_audio,
             start_time: 0.0,
             end_time: duration_secs,
+            sample_rate,
+            session_id: expected_session_id,
         };
 
         // Send to transcription processor
@@ -435,7 +437,7 @@ impl AudioProcessor {
         Ok(())
     }
 
-    /// Get the current manual buffer size
+    /// Get the current size of the manual audio buffer
     pub fn get_manual_buffer_size(&self) -> usize {
         self.manual_audio_buffer.lock().len()
     }
@@ -445,11 +447,72 @@ impl AudioProcessor {
         self.manual_audio_buffer.lock().clear();
     }
 
+    /// Reset the VAD state for a new session
+    /// This clears all internal buffers and state to prevent audio from previous sessions
+    /// from leaking into new sessions
+    pub fn reset_vad_state(&self) {
+        let mut vad = self.audio_processor.lock();
+        vad.reset();
+    }
+
     /// Trigger manual transcription of accumulated audio
     pub async fn trigger_manual_transcription(
         &self,
         sample_rate: usize,
+        expected_session_id: Option<String>,
     ) -> Result<(), anyhow::Error> {
-        self.process_accumulated_manual_audio(sample_rate).await
+        self.process_accumulated_manual_audio(sample_rate, expected_session_id).await
+    }
+
+    /// Update the current session ID
+    pub fn set_session_id(&self, session_id: Option<String>) {
+        *self.current_session_id.write() = session_id;
+    }
+
+    /// Get the current session ID
+    pub fn get_session_id(&self) -> Option<String> {
+        self.current_session_id.read().clone()
+    }
+
+    /// Get a reference to the current session ID (for cloning into async tasks)
+    pub fn get_session_id_ref(&self) -> Arc<RwLock<Option<String>>> {
+        self.current_session_id.clone()
+    }
+
+    /// Save audio to WAV file in the project root directory (only if debug flag is enabled)
+    pub fn save_audio_to_wav(&self, audio_samples: &[f32], sample_rate: u32) {
+        // Only save if debug option is enabled
+        if !self.debug_config.save_manual_audio_debug {
+            return;
+        }
+
+        let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+        let filename = format!("recording_{}.wav", timestamp);
+        let path = Path::new(&filename);
+
+        // Create WAV writer
+        match hound::WavWriter::create(path, hound::WavSpec {
+            channels: 1,
+            sample_rate,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        }) {
+            Ok(mut writer) => {
+                // Convert f32 samples to i16
+                for &sample in audio_samples {
+                    let sample_i16 = (sample * 32767.0).clamp(-32768.0, 32767.0) as i16;
+                    if let Err(e) = writer.write_sample(sample_i16) {
+                        eprintln!("Error writing WAV sample: {}", e);
+                        return;
+                    }
+                }
+
+                match writer.finalize() {
+                    Ok(_) => println!("Audio saved to: {}", filename),
+                    Err(e) => eprintln!("Error finalizing WAV file: {}", e),
+                }
+            }
+            Err(e) => eprintln!("Failed to create WAV file: {}", e),
+        }
     }
 }

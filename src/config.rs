@@ -96,6 +96,22 @@ pub struct ManualModeConfig {
 
     /// Whether to clear previous transcript when starting new session
     pub clear_on_new_session: bool,
+
+    /// Whether to enable chunk overlap for manual mode transcription (default: true)
+    /// When enabled, uses small overlap between 30-second chunks to catch boundary words
+    /// Overlap amount is controlled by chunk_overlap_seconds
+    pub enable_chunk_overlap: bool,
+
+    /// Overlap duration in seconds between chunks (default: 0.5)
+    /// Only used when enable_chunk_overlap is true
+    /// Recommended range: 0.1 to 1.0 seconds (avoid 2+ seconds due to hallucination)
+    pub chunk_overlap_seconds: f32,
+
+    /// EXPERIMENTAL: Disable chunking for manual mode transcription (default: false)
+    /// When enabled, processes entire recording as single segment (no 30-second limit)
+    /// Note: May consume more memory for very long recordings
+    /// Note: Whisper model was trained on 30-second chunks, very long audio may have issues
+    pub disable_chunking: bool,
 }
 
 impl Default for PortalConfig {
@@ -115,6 +131,9 @@ impl Default for ManualModeConfig {
         Self {
             max_recording_duration_secs: 120,
             clear_on_new_session: true,
+            enable_chunk_overlap: true,           // Enable overlap by default
+            chunk_overlap_seconds: 0.5,           // 0.5 second overlap (industry best practice)
+            disable_chunking: false,              // Chunking enabled by default
         }
     }
 }
@@ -125,6 +144,8 @@ impl Default for ManualModeConfig {
 pub struct DebugConfig {
     /// Whether to log statistics
     pub log_stats_enabled: bool,
+    /// Whether to save manual mode audio to WAV files for debugging
+    pub save_manual_audio_debug: bool,
 }
 
 /// Configuration for sound settings
@@ -141,6 +162,7 @@ impl Default for DebugConfig {
     fn default() -> Self {
         Self {
             log_stats_enabled: false,
+            save_manual_audio_debug: false,
         }
     }
 }

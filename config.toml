@@ -40,6 +40,9 @@ max_segment_count = 20                # Maximum number of speech segments to buf
 [manual_mode_config]
 max_recording_duration_secs = 120     # Maximum recording time per session (2 minutes)
 clear_on_new_session = true           # Clear transcript when starting new session
+enable_chunk_overlap = true            # Enable overlap between 30-second chunks (prevents word cutoff)
+chunk_overlap_seconds = 0.5            # Overlap duration in seconds (0.5s = industry best practice)
+disable_chunking = false               # EXPERIMENTAL: Process entire recording as single segment (no 30s limit)
 
 [vad_config]
 threshold = 0.10                      # Speech detection sensitivity (0.0-1.0, lower = more sensitive)
@@ -69,9 +72,9 @@ repetition_penalty = 1.25             # Penalty for repeated tokens
 
 # Whisper.cpp-specific options (used when backend = "whisper_cpp")
 [whisper_cpp_options]
-temperature = 0.0                     # Sampling temperature (0.0 = deterministic, higher = more creative)
+temperature = 0.2                     # Sampling temperature (0.0 = deterministic, higher = more creative)
 suppress_blank = true                 # Suppress blank outputs at beginning
-no_context = false                    # Use past transcription as context for better accuracy
+no_context = true                     # Disable context to prevent double transcriptions
 max_tokens = 0                        # Maximum tokens per segment (0 = auto)
 entropy_thold = 2.4                   # Entropy threshold for fallback sampling
 logprob_thold = -1.0                  # Log probability threshold for speech detection
@@ -122,6 +125,7 @@ normalize_whitespace = true           # Normalize whitespace (collapse multiple 
 
 [debug_config]
 log_stats_enabled = false             # Enable detailed performance logging
+save_manual_audio_debug = false        # Save manual mode audio to WAV files for debugging
 
 # =============================================================================
 # EXAMPLE CONFIGURATIONS

@@ -147,7 +147,7 @@ impl TranscriptionProcessor {
     pub fn start(
         &self,
         mut segment_rx: mpsc::Receiver<AudioSegment>,
-        transcript_tx: broadcast::Sender<String>,
+        transcript_tx: broadcast::Sender<crate::real_time_transcriber::TranscriptionMessage>,
     ) -> tokio::task::JoinHandle<()> {
         let backend = self.backend.clone();
         let language = self.language.clone();
@@ -181,6 +181,7 @@ impl TranscriptionProcessor {
                         let language_clone = language.clone();
                         let stats_clone = transcription_stats.clone();
                         let tx_clone = transcript_tx.clone();
+                        let session_id = segment.session_id.clone();
 
                         tokio::task::spawn_blocking(move || {
                             let transcription = Self::transcribe_segment(
@@ -191,7 +192,11 @@ impl TranscriptionProcessor {
                             );
 
                             if !transcription.is_empty() {
-                                if let Err(e) = tx_clone.send(transcription) {
+                                let message = crate::real_time_transcriber::TranscriptionMessage {
+                                    text: transcription,
+                                    session_id,
+                                };
+                                if let Err(e) = tx_clone.send(message) {
                                     eprintln!("Failed to send transcription: {}", e);
                                 }
                             }
@@ -228,6 +233,7 @@ impl TranscriptionProcessor {
                         let language_clone = language.clone();
                         let stats_clone = transcription_stats.clone();
                         let tx_clone = transcript_tx.clone();
+                        let session_id = segment.session_id.clone();
 
                         if is_manual_segment {
                             // Handle manual mode segments with longer timeout and batch processing
@@ -240,7 +246,11 @@ impl TranscriptionProcessor {
                                 );
 
                                 if !transcription.is_empty() {
-                                    if let Err(e) = tx_clone.send(transcription) {
+                                    let message = crate::real_time_transcriber::TranscriptionMessage {
+                                        text: transcription,
+                                        session_id,
+                                    };
+                                    if let Err(e) = tx_clone.send(message) {
                                         eprintln!("Failed to send manual transcription: {}", e);
                                     }
                                 } else {
@@ -249,6 +259,7 @@ impl TranscriptionProcessor {
                             });
                         } else {
                             // Handle real-time segments (existing behavior)
+                            let session_id_rt = session_id.clone();
                             tokio::task::spawn_blocking(move || {
                                 let transcription = Self::transcribe_segment(
                                     &backend_clone,
@@ -258,7 +269,11 @@ impl TranscriptionProcessor {
                                 );
 
                                 if !transcription.is_empty() {
-                                    if let Err(e) = tx_clone.send(transcription) {
+                                    let message = crate::real_time_transcriber::TranscriptionMessage {
+                                        text: transcription,
+                                        session_id: session_id_rt,
+                                    };
+                                    if let Err(e) = tx_clone.send(message) {
                                         eprintln!("Failed to send transcription: {}", e);
                                     }
                                 }
@@ -294,10 +309,23 @@ impl TranscriptionProcessor {
         language: &str,
         stats: &Arc<Mutex<TranscriptionStats>>,
     ) -> String {
+        let app_config = read_app_config();
         let start_time = Instant::now();
         let duration = segment.end_time - segment.start_time;
 
         println!("Processing manual segment: {:.2}s of audio", duration);
+
+        // Check if user wants to disable chunking entirely (experimental mode)
+        if app_config.manual_mode_config.disable_chunking {
+            println!("EXPERIMENTAL: Processing entire recording as single segment (chunking disabled)");
+            let result = Self::transcribe_segment(backend, segment, language, stats);
+            let processing_time = start_time.elapsed();
+            println!(
+                "Manual segment processing completed in {:.2}s",
+                processing_time.as_secs_f32()
+            );
+            return result;
+        }
 
         // For very long segments, we might want to split them into smaller chunks
         // to avoid memory issues and improve processing reliability
@@ -330,9 +358,28 @@ impl TranscriptionProcessor {
         language: &str,
         stats: &Arc<Mutex<TranscriptionStats>>,
     ) -> String {
+        let app_config = read_app_config();
         let sample_rate = segment.sample_rate;
-        let chunk_duration_samples = 30 * sample_rate; // 30 seconds per chunk
-        let overlap_samples = 2 * sample_rate; // 2 seconds overlap to avoid cutting words
+        let chunk_duration_samples = 30 * sample_rate; // 30 seconds per chunk (Whisper training window)
+
+        // Get overlap settings from config
+        let use_overlap = app_config.manual_mode_config.enable_chunk_overlap;
+        let overlap_seconds = app_config.manual_mode_config.chunk_overlap_seconds;
+        let overlap_samples = if use_overlap {
+            (overlap_seconds * sample_rate as f32) as usize
+        } else {
+            0
+        };
+
+        if use_overlap {
+            println!(
+                "Using {:.1}s overlap between chunks (config: enable_chunk_overlap=true, chunk_overlap_seconds={:.1})",
+                overlap_seconds, overlap_seconds
+            );
+        } else {
+            println!("No overlap between chunks (config: enable_chunk_overlap=false)");
+        }
+
         let mut transcriptions = Vec::new();
         let mut start_idx = 0;
 
@@ -349,6 +396,7 @@ impl TranscriptionProcessor {
                 start_time: chunk_start_time,
                 end_time: chunk_end_time,
                 sample_rate,
+                session_id: segment.session_id.clone(), // Inherit session ID from parent segment
             };
 
             println!(
@@ -364,39 +412,22 @@ impl TranscriptionProcessor {
                 transcriptions.push(chunk_transcription.trim().to_string());
             }
 
-            // Move to next chunk with overlap to avoid cutting words
+            // Move to next chunk (with optional overlap for boundary word handling)
+            // Industry best practice: use small overlap (0.5-1.0s) to catch boundary words
+            // while avoiding the hallucination caused by large overlaps (2+ seconds)
             if end_idx >= segment.samples.len() {
                 break;
             }
-            start_idx = end_idx - overlap_samples;
-        }
 
-        // Combine all chunk transcriptions
-        let combined = transcriptions.join(" ");
-
-        // Clean up potential word duplicates from overlapping chunks
-        Self::clean_overlap_duplicates(&combined)
-    }
-
-    /// Clean up potential word duplicates from overlapping chunk processing
-    fn clean_overlap_duplicates(text: &str) -> String {
-        let words: Vec<&str> = text.split_whitespace().collect();
-        if words.is_empty() {
-            return String::new();
-        }
-
-        let mut cleaned_words = vec![words[0]];
-
-        for i in 1..words.len() {
-            let current_word = words[i].to_lowercase();
-            let previous_word = words[i - 1].to_lowercase();
-
-            // Skip if current word is the same as previous (likely overlap duplicate)
-            if current_word != previous_word {
-                cleaned_words.push(words[i]);
+            // Calculate next start position based on overlap setting
+            if use_overlap {
+                start_idx = (end_idx as isize - overlap_samples as isize).max(0) as usize;
+            } else {
+                start_idx = end_idx;
             }
         }
 
-        cleaned_words.join(" ")
+        // Combine all chunk transcriptions
+        transcriptions.join(" ")
     }
 }
