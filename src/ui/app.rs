@@ -132,19 +132,6 @@ impl ApplicationHandler for WindowApp {
             let mut notify_recording = false;
             while let Ok(command) = tray_rx.try_recv() {
                 match command {
-                    crate::system_tray::TrayCommand::ToggleWindow => {
-                        // Toggle window visibility for all windows
-                        for window in self.windows.values_mut() {
-                            window.toggle_window_visibility();
-                            // Update tray about visibility change
-                            if let Some(tray_tx) = &self.tray_update_tx {
-                                let _ =
-                                    tray_tx.send(crate::system_tray::TrayUpdate::WindowVisible(
-                                        window.is_visible,
-                                    ));
-                            }
-                        }
-                    }
                     crate::system_tray::TrayCommand::ToggleRecording => {
                         // Toggle recording in real-time mode
                         for window in self.windows.values_mut() {
@@ -179,19 +166,6 @@ impl ApplicationHandler for WindowApp {
                 self.notify_tray_about_recording();
             }
         }
-
-        // Check for auto-hide based on window configuration
-        let hide_when_idle = self.config.window_behavior_config.hide_when_idle;
-        let auto_hide_delay = self.config.window_behavior_config.auto_hide_delay_ms;
-
-        for window in self.windows.values_mut() {
-            if window.should_auto_hide(hide_when_idle, auto_hide_delay) {
-                window.hide_window();
-                if let Some(tray_tx) = &self.tray_update_tx {
-                    let _ = tray_tx.send(crate::system_tray::TrayUpdate::WindowVisible(false));
-                }
-            }
-        }
     }
 
     fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
@@ -224,15 +198,6 @@ impl ApplicationHandler for WindowApp {
 
             if let Some(audio_data) = &self.audio_data {
                 window_state.set_audio_data(audio_data.clone());
-            }
-
-            // Apply start_hidden configuration
-            if self.config.window_behavior_config.start_hidden {
-                window_state.hide_window();
-                // Update tray about initial visibility
-                if let Some(tray_tx) = &self.tray_update_tx {
-                    let _ = tray_tx.send(crate::system_tray::TrayUpdate::WindowVisible(false));
-                }
             }
 
             let window_id = window_state.window.id();

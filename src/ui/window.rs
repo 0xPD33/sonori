@@ -59,10 +59,7 @@ pub struct WindowState {
     last_frame_time: Option<std::time::Instant>,
     target_frame_duration: std::time::Duration,
     present_mode: wgpu::PresentMode,
-    // Window visibility state
-    pub is_visible: bool,
-    pub last_activity_time: Option<std::time::Instant>,
-}
+    }
 
 impl WindowState {
     pub fn new(
@@ -252,67 +249,10 @@ impl WindowState {
             last_frame_time: None,
             target_frame_duration,
             present_mode,
-
-            // Window visibility state
-            is_visible: true,
-            last_activity_time: Some(std::time::Instant::now()),
         }
     }
 
-    /// Hide the window
-    pub fn hide_window(&mut self) {
-        if self.is_visible {
-            self.is_visible = false;
-            self.window.set_visible(false);
-        }
-    }
-
-    /// Toggle window visibility
-    pub fn toggle_window_visibility(&mut self) {
-        if self.is_visible {
-            self.is_visible = false;
-            self.window.set_visible(false);
-        } else {
-            self.is_visible = true;
-            self.last_activity_time = Some(std::time::Instant::now());
-            self.window.set_visible(true);
-            self.window.request_redraw();
-        }
-    }
-
-    /// Check if window should auto-hide based on inactivity
-    pub fn should_auto_hide(&self, hide_when_idle: bool, auto_hide_delay_ms: u64) -> bool {
-        if !hide_when_idle || !self.is_visible {
-            return false;
-        }
-
-        // Don't auto-hide if recording
-        if let Some(recording) = &self.recording {
-            if recording.load(Ordering::Relaxed) {
-                return false;
-            }
-        }
-
-        // Don't auto-hide if user is hovering
-        if self.event_handler.hovering_transcript {
-            return false;
-        }
-
-        // Check inactivity timeout
-        if let Some(last_activity) = self.last_activity_time {
-            let elapsed = last_activity.elapsed();
-            let delay = std::time::Duration::from_millis(auto_hide_delay_ms);
-            elapsed > delay
-        } else {
-            false
-        }
-    }
-
-    /// Update activity timestamp
-    pub fn update_activity(&mut self) {
-        self.last_activity_time = Some(std::time::Instant::now());
-    }
-
+    
     pub fn resize(&mut self, width: u32, height: u32) {
         if width > 0 && height > 0 {
             self.config.width = width;
@@ -683,7 +623,6 @@ impl WindowState {
             .map(|rec| rec.load(Ordering::Relaxed))
             .unwrap_or(false);
 
-
         if let Some(sender) = &self.event_handler.manual_session_sender {
             let sender = sender.clone();
             // ASYNC: Send command without blocking UI thread
@@ -723,7 +662,10 @@ impl WindowState {
         if let Some(sender) = &self.event_handler.manual_session_sender {
             let sender = sender.clone();
             tokio::spawn(async move {
-                if let Err(e) = sender.send(crate::real_time_transcriber::ManualSessionCommand::SwitchMode(new_mode)).await {
+                if let Err(e) = sender
+                    .send(crate::real_time_transcriber::ManualSessionCommand::SwitchMode(new_mode))
+                    .await
+                {
                     eprintln!("Failed to send mode switch command from tray: {}", e);
                 }
             });

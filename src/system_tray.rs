@@ -9,7 +9,6 @@ use crate::real_time_transcriber::TranscriptionMode;
 /// Commands that the system tray can send to the main application
 #[derive(Debug, Clone)]
 pub enum TrayCommand {
-    ToggleWindow,
     ToggleRecording,
     ToggleManualSession,
     SwitchMode,
@@ -22,7 +21,6 @@ pub enum TrayUpdate {
     Recording(bool),
     Mode(TranscriptionMode),
     Transcript(String),
-    WindowVisible(bool),
 }
 
 /// StatusNotifierItem implementation
@@ -30,7 +28,6 @@ struct StatusNotifierItem {
     command_tx: mpsc::UnboundedSender<TrayCommand>,
     is_recording: Arc<AtomicBool>,
     transcription_mode: Arc<parking_lot::Mutex<TranscriptionMode>>,
-    is_window_visible: Arc<AtomicBool>,
 }
 
 /// DBusMenu implementation for context menu
@@ -38,14 +35,13 @@ struct DbusMenu {
     command_tx: mpsc::UnboundedSender<TrayCommand>,
     is_recording: Arc<AtomicBool>,
     transcription_mode: Arc<parking_lot::Mutex<TranscriptionMode>>,
-    is_window_visible: Arc<AtomicBool>,
 }
 
 #[interface(name = "org.kde.StatusNotifierItem")]
 impl StatusNotifierItem {
     /// Activate method - called on left click
     async fn activate(&self, _x: i32, _y: i32) {
-        let _ = self.command_tx.send(TrayCommand::ToggleWindow);
+        // No action - window visibility is no longer controllable
     }
 
     /// Scroll method
@@ -130,9 +126,16 @@ impl DbusMenu {
         _parent_id: i32,
         _recursion_depth: i32,
         _property_names: Vec<String>,
-    ) -> (u32, (i32, std::collections::HashMap<String, zbus::zvariant::Value<'_>>, Vec<zbus::zvariant::Value<'_>>)) {
-        use zbus::zvariant::Value;
+    ) -> (
+        u32,
+        (
+            i32,
+            std::collections::HashMap<String, zbus::zvariant::Value<'_>>,
+            Vec<zbus::zvariant::Value<'_>>,
+        ),
+    ) {
         use std::collections::HashMap;
+        use zbus::zvariant::Value;
 
         let is_recording = self.is_recording.load(Ordering::Relaxed);
         let mode = *self.transcription_mode.lock();
@@ -145,7 +148,11 @@ impl DbusMenu {
         let mut item1_props = HashMap::new();
         item1_props.insert(
             "label".to_string(),
-            Value::new(if is_recording { "Stop Recording" } else { "Start Recording" }),
+            Value::new(if is_recording {
+                "Stop Recording"
+            } else {
+                "Start Recording"
+            }),
         );
         item1_props.insert("enabled".to_string(), Value::new(is_manual));
         let item1 = Value::new((MENU_TOGGLE_RECORDING, item1_props, Vec::<Value>::new()));
@@ -155,7 +162,11 @@ impl DbusMenu {
         let mut item2_props = HashMap::new();
         item2_props.insert(
             "label".to_string(),
-            Value::new(if is_manual { "Mode: Manual" } else { "Mode: Real-time" }),
+            Value::new(if is_manual {
+                "Mode: Manual"
+            } else {
+                "Mode: Real-time"
+            }),
         );
         item2_props.insert("toggle-type".to_string(), Value::new("checkmark"));
         item2_props.insert("toggle-state".to_string(), Value::new(1i32)); // Always checked for current mode
@@ -233,7 +244,6 @@ impl DbusMenu {
 /// Start the system tray service
 pub async fn run_system_tray(
     is_recording: Arc<AtomicBool>,
-    is_window_visible: Arc<AtomicBool>,
     transcription_mode: Arc<parking_lot::Mutex<TranscriptionMode>>,
     running: Arc<AtomicBool>,
 ) -> Result<(
@@ -248,7 +258,6 @@ pub async fn run_system_tray(
         command_tx: command_tx.clone(),
         is_recording: is_recording.clone(),
         transcription_mode: transcription_mode.clone(),
-        is_window_visible: is_window_visible.clone(),
     };
 
     // Create our DBusMenu
@@ -256,7 +265,6 @@ pub async fn run_system_tray(
         command_tx: command_tx.clone(),
         is_recording: is_recording.clone(),
         transcription_mode: transcription_mode.clone(),
-        is_window_visible: is_window_visible.clone(),
     };
 
     // Build DBus connection and register our services
@@ -273,7 +281,6 @@ pub async fn run_system_tray(
     // Spawn update handler and keep connection alive
     let is_recording_clone = is_recording.clone();
     let transcription_mode_clone = transcription_mode.clone();
-    let is_window_visible_clone = is_window_visible.clone();
 
     tokio::spawn(async move {
         // Keep the connection alive for the lifetime of the app
@@ -291,9 +298,6 @@ pub async fn run_system_tray(
                     }
                     TrayUpdate::Transcript(_text) => {
                         // No longer displaying transcript preview
-                    }
-                    TrayUpdate::WindowVisible(visible) => {
-                        is_window_visible_clone.store(visible, Ordering::Relaxed);
                     }
                 }
             }
