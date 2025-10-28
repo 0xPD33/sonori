@@ -90,9 +90,6 @@ vsync_mode = "Enabled"                # VSync: "Auto", "Enabled", "Adaptive", "D
 target_fps = 60                       # Target FPS when vsync is disabled
 
 [window_behavior_config]
-hide_when_idle = true                # Auto-hide window when not recording
-auto_hide_delay_ms = 2000             # Delay before auto-hiding (milliseconds)
-start_hidden = false                  # Start application with window hidden
 show_in_system_tray = true            # Show icon in system tray
 
 # =============================================================================

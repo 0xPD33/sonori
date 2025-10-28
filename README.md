@@ -181,15 +181,15 @@ Example configuration:
 
 ```toml
 [general_config]
-model = "small"                   # Model name (format depends on backend)
-language = "en"                   # Language code for transcription
-transcription_mode = "manual"   # Mode: "realtime" or "manual"
+model = "large-v3-turbo"          # Whisper model size (tiny, base, small, medium, large, large-v2, large-v3, large-v3-turbo)
+language = "en"                   # Language code for transcription (use "auto" for auto-detect)
+transcription_mode = "manual"     # "realtime" for live transcription, "manual" for push-to-talk
 
 [backend_config]
 backend = "whisper_cpp"           # Backend: "ctranslate2", "whisper_cpp" (default)
-threads = 8                       # Number of CPU threads
-gpu_enabled = false               # Enable GPU acceleration (Vulkan for whisper_cpp)
-quantization_level = "medium"     # Precision: "high", "medium" (q8_0), "low" (q5_1)
+threads = 8                       # Number of CPU threads (default: min(num_cpus, 4))
+gpu_enabled = true                # Enable GPU acceleration (CUDA/Metal/Vulkan)
+quantization_level = "medium"     # Precision: "high" (full), "medium" (q8_0), "low" (q5_1)
 
 [audio_processor_config]
 sample_rate = 16000               # Audio sample rate in Hz
@@ -207,16 +207,16 @@ chunk_overlap_seconds = 0.5       # Overlap duration between chunks (seconds)
 disable_chunking = false          # Experimental: Disable chunking for no-limit mode
 
 [vad_config]
-threshold = 0.15                  # Speech detection sensitivity (lower = more sensitive)
-speech_end_threshold = 0.10       # Lower threshold for speech continuation (hysteresis)
-hangbefore_frames = 5             # Frames before confirming speech start (50ms)
-hangover_frames = 30              # Frames of silence before ending segment (300ms)
-silence_tolerance_frames = 8      # Frames of silence tolerated during speech (80ms)
-speech_prob_smoothing = 0.3       # EMA smoothing factor
+threshold = 0.10                  # Speech detection sensitivity (0.0-1.0, lower = more sensitive)
+speech_end_threshold = 0.08       # Lower threshold for speech continuation (hysteresis)
+hangbefore_frames = 5             # Frames to wait before confirming speech start (50ms)
+hangover_frames = 30              # Frames to wait after speech ends before cutting (300ms)
+silence_tolerance_frames = 8      # Frames of silence to tolerate during speech (80ms)
+speech_prob_smoothing = 0.3       # Exponential moving average smoothing factor
 
 [sound_config]
 enabled = true                    # Enable sound feedback
-volume = 0.5                      # Volume for sound effects (0.0-1.0)
+volume = 0.5                      # Sound volume (0.0-1.0)
 
 [common_transcription_options]
 beam_size = 5                     # Beam search width (1 = greedy/fastest, higher = more accurate)
@@ -226,12 +226,12 @@ patience = 1.0                    # Beam search patience factor
 repetition_penalty = 1.25         # Penalty for repeated tokens
 
 [whisper_cpp_options]
-temperature = 0.0                 # Sampling temperature (0.0 = deterministic)
+temperature = 0.2                 # Sampling temperature (0.0 = deterministic, higher = more creative)
 suppress_blank = true             # Suppress blank outputs at beginning
-no_context = false                # Use past transcription as context
+no_context = true                 # Disable context to prevent double transcriptions
 max_tokens = 0                    # Maximum tokens per segment (0 = auto)
 entropy_thold = 2.4               # Entropy threshold for fallback sampling
-logprob_thold = -1.0              # Log probability threshold
+logprob_thold = -1.0              # Log probability threshold for speech detection
 no_speech_thold = 0.6             # No-speech probability threshold
 
 [post_process_config]
