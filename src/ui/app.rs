@@ -145,24 +145,6 @@ impl ApplicationHandler for WindowApp {
                             }
                         }
                     }
-                    crate::system_tray::TrayCommand::ShowWindow => {
-                        for window in self.windows.values_mut() {
-                            window.show_window();
-                            if let Some(tray_tx) = &self.tray_update_tx {
-                                let _ = tray_tx
-                                    .send(crate::system_tray::TrayUpdate::WindowVisible(true));
-                            }
-                        }
-                    }
-                    crate::system_tray::TrayCommand::HideWindow => {
-                        for window in self.windows.values_mut() {
-                            window.hide_window();
-                            if let Some(tray_tx) = &self.tray_update_tx {
-                                let _ = tray_tx
-                                    .send(crate::system_tray::TrayUpdate::WindowVisible(false));
-                            }
-                        }
-                    }
                     crate::system_tray::TrayCommand::ToggleRecording => {
                         // Toggle recording in real-time mode
                         for window in self.windows.values_mut() {
@@ -174,6 +156,13 @@ impl ApplicationHandler for WindowApp {
                         // Toggle manual session in manual mode
                         for window in self.windows.values_mut() {
                             window.toggle_manual_session();
+                        }
+                        notify_recording = true;
+                    }
+                    crate::system_tray::TrayCommand::SwitchMode => {
+                        // Switch between manual and real-time modes
+                        for window in self.windows.values_mut() {
+                            window.toggle_mode();
                         }
                         notify_recording = true;
                     }

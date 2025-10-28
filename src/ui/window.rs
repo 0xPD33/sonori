@@ -259,16 +259,6 @@ impl WindowState {
         }
     }
 
-    /// Show the window
-    pub fn show_window(&mut self) {
-        if !self.is_visible {
-            self.is_visible = true;
-            self.last_activity_time = Some(std::time::Instant::now());
-            self.window.set_visible(true);
-            self.window.request_redraw();
-        }
-    }
-
     /// Hide the window
     pub fn hide_window(&mut self) {
         if self.is_visible {
@@ -280,9 +270,13 @@ impl WindowState {
     /// Toggle window visibility
     pub fn toggle_window_visibility(&mut self) {
         if self.is_visible {
-            self.hide_window();
+            self.is_visible = false;
+            self.window.set_visible(false);
         } else {
-            self.show_window();
+            self.is_visible = true;
+            self.last_activity_time = Some(std::time::Instant::now());
+            self.window.set_visible(true);
+            self.window.request_redraw();
         }
     }
 
@@ -712,6 +706,30 @@ impl WindowState {
             eprintln!("Manual session sender not available");
         }
         // UI thread continues immediately - manual session processor handles the command
+    }
+
+    pub fn toggle_mode(&mut self) {
+        // Switch between manual and real-time modes
+        let current_mode = *self.transcription_mode_ref.lock();
+        let new_mode = match current_mode {
+            crate::real_time_transcriber::TranscriptionMode::RealTime => {
+                crate::real_time_transcriber::TranscriptionMode::Manual
+            }
+            crate::real_time_transcriber::TranscriptionMode::Manual => {
+                crate::real_time_transcriber::TranscriptionMode::RealTime
+            }
+        };
+
+        if let Some(sender) = &self.event_handler.manual_session_sender {
+            let sender = sender.clone();
+            tokio::spawn(async move {
+                if let Err(e) = sender.send(crate::real_time_transcriber::ManualSessionCommand::SwitchMode(new_mode)).await {
+                    eprintln!("Failed to send mode switch command from tray: {}", e);
+                }
+            });
+        } else {
+            eprintln!("Manual session sender not available for mode switching from tray");
+        }
     }
 
     pub fn quit(&mut self) {

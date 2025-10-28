@@ -6,7 +6,7 @@
 [general_config]
 model = "large-v3-turbo"               # Whisper model size (tiny, base, small, medium, large, large-v2, large-v3, large-v3-turbo)
 language = "en"                        # Transcription language (use "auto" for auto-detect)
-transcription_mode = "realtime"        # "realtime" for live transcription, "manual" for push-to-talk
+transcription_mode = "manual"          # "realtime" for live transcription, "manual" for push-to-talk
 
 # =============================================================================
 # BACKEND CONFIGURATION

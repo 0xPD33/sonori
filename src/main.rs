@@ -109,8 +109,14 @@ async fn main() -> anyhow::Result<()> {
 
     transcriber.start()?;
 
-    println!("Starting transcription automatically...");
-    transcriber.toggle_recording();
+    // Only auto-start recording in real-time mode
+    // In manual mode, user explicitly starts/stops sessions
+    if matches!(transcription_mode, TranscriptionMode::RealTime) {
+        println!("Starting real-time transcription automatically...");
+        transcriber.toggle_recording();
+    } else {
+        println!("Manual mode - ready to start recording on demand");
+    }
 
     if args.cli {
         // CLI mode - no GUI

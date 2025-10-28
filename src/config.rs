@@ -44,7 +44,7 @@ impl Default for GeneralConfig {
         Self {
             model: "small.en".to_string(),
             language: "en".to_string(),
-            transcription_mode: "realtime".to_string(),
+            transcription_mode: "manual".to_string(),
         }
     }
 }
