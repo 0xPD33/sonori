@@ -13,12 +13,12 @@ Sonori is a high-performance, real-time speech transcription application built i
 The application follows a **modular, multi-threaded pipeline architecture** with clear separation of concerns:
 
 ```
-Audio Input → VAD Processing → Speech Transcription (Multi-Backend) → GPU Rendering → System Integration
-     ↓            ↓                 ↓                                    ↓              ↓
-PortAudio → Silero VAD → Backend Abstraction (CT2/WhisperCpp) → WGPU UI → Wayland/XDG Portal
-                               ↓                                ↓
-                          GPU Acceleration              Sound Feedback
-                        (CUDA/Vulkan)                 System Tray
+Audio Input → VAD Processing → Speech Transcription (Multi-Backend) → Post-Processing → GPU Rendering → System Integration
+     ↓            ↓                 ↓                                    ↓                ↓              ↓
+PortAudio → Silero VAD → Backend Abstraction (CT2/WhisperCpp) → Text Cleanup → WGPU UI → Wayland/XDG Portal
+                               ↓                                ↓                ↓
+                          GPU Acceleration                    Sound Feedback   System Tray
+                        (CUDA/Vulkan)                      (CPAL)          (StatusNotifierItem)
 ```
 
 ### Primary Components
@@ -27,12 +27,13 @@ PortAudio → Silero VAD → Backend Abstraction (CT2/WhisperCpp) → WGPU UI �
 2. **Voice Activity Detection** - Silero VAD with ONNX Runtime inference
 3. **Multi-Backend Transcription** - Unified backend abstraction supporting:
    - CTranslate2 (CUDA/CPU, default)
-   - Whisper.cpp (Vulkan/OpenBLAS/CPU)
+   - Whisper.cpp (Vulkan/OpenBLAS/CPU, implemented)
    - Parakeet (planned)
    - Supporting both real-time streaming and manual batch modes
-4. **Custom GPU UI** - WGPU-based rendering with custom WGSL shaders, including mode-specific button layouts
-5. **Sound Feedback System** - CPAL-based audio playback for state transitions (record start/stop, session complete, etc.)
-6. **System Integration** - Wayland layer shell for transparent overlays, system tray (StatusNotifierItem), and optional XDG Desktop Portal for global shortcuts and input injection
+4. **Text Post-Processing** - Configurable text cleanup and normalization pipeline for transcription output
+5. **Custom GPU UI** - WGPU-based rendering with custom WGSL shaders, including mode-specific button layouts
+6. **Sound Feedback System** - CPAL-based audio playback for state transitions (record start/stop, session complete, etc.)
+7. **System Integration** - Wayland layer shell for transparent overlays, system tray (StatusNotifierItem), and optional XDG Desktop Portal for global shortcuts and input injection
 
 ### Transcription Modes
 
@@ -65,14 +66,29 @@ Modes can be toggled at runtime via UI button or CLI flags (`--mode manual`). Th
 - **`transcribe.rs`** - Whisper model integration with CTranslate2 optimization
 - **`transcription_processor.rs`** - Async transcription task management and queuing; supports larger batch segments for manual mode with optional chunking for long audio
 
+### Text Post-Processing Pipeline
+
+- **`post_processor.rs`** - Text cleanup and normalization for transcription output
+  - Removes leading/trailing dashes and artifacts
+  - Normalizes whitespace and character encoding
+  - Configurable cleaning rules via `[post_process_config]`
+  - Applied to all transcription output before display
+
 ### GPU-Accelerated UI Framework
 
 - **`ui/app.rs`** - Winit application event handler and window management
 - **`ui/window.rs`** - Main rendering orchestration and state management, including mode detection for layout updates
 - **`ui/render_pipeline.rs`** - WGPU render pipeline setup and shader compilation
 - **`ui/text_renderer.rs`** - Text rendering via Glyphon with font management
+- **`ui/text_processor.rs`** - Text layout and processing for transcript display
+- **`ui/text_window.rs`** - Text window rendering and scrolling management
 - **`ui/spectogram.rs`** - Real-time FFT-based audio visualization
 - **`ui/buttons.rs`** - Interactive buttons with mode-specific layouts (e.g., RecordToggle, Accept for manual mode)
+- **`ui/button_texture.rs`** - Button texture management and rendering
+- **`ui/event_handler.rs`** - Mouse and keyboard input event processing
+- **`ui/layout_manager.rs`** - Dynamic UI layout management and positioning
+- **`ui/scrollbar.rs`** - Custom scrollbar implementation for transcript scrolling
+- **`ui/common.rs`** - Shared UI utilities and constants
 - **`ui/*.wgsl`** - Custom GPU shaders for UI components
 
 ### Sound Feedback System
@@ -85,7 +101,7 @@ Modes can be toggled at runtime via UI button or CLI flags (`--mode manual`). Th
 - **`portal_input.rs`** - XDG Desktop Portal integration for remote desktop and keyboard input injection (e.g., automatic Ctrl+V pasting); handles session lifecycle and token persistence
 - **`portal_tokens.rs`** - Portal session token persistence and restoration across runs
 - **`global_shortcuts.rs`** - Global shortcut registration via XDG Desktop Portal (e.g., Super+backslash to toggle manual sessions); handles accelerator normalization and signal management
-- **`system_tray.rs`** - StatusNotifierItem D-Bus integration for system tray presence; supports window control, recording toggle, session management, and status display
+- **`system_tray.rs`** - Full StatusNotifierItem D-Bus integration with context menu, status indicators, and command support (window control, recording toggle, session management, mode switching, quit)
 - **`copy.rs`** - Wayland clipboard operations using wl-copy
 - **`stats_reporter.rs`** - Performance monitoring and telemetry collection
 - **`transcription_stats.rs`** - Transcription quality metrics and analysis
@@ -103,11 +119,11 @@ Sonori uses an enum-based dispatch pattern for zero-cost abstraction across mult
   - Model format: Directory with model.bin, config.json, tokenizer.json
   - Max segment: 60 seconds
 
-- **Whisper.cpp** - Lightweight, portable inference using whisper.cpp bindings
+- **Whisper.cpp** - Lightweight, portable inference using whisper.cpp bindings (implemented)
   - GPU: Vulkan support, CPU optimization with OpenBLAS
   - Quantization: q8_0 (default), q5_1, f32
   - Model format: Single .bin GGML file
-  - Max segment: 30 seconds
+  - Max segment: No hard limit - adaptive segmentation based on audio length
 
 - **Parakeet** (planned) - NVIDIA Parakeet RNNT models for improved accuracy
   - GPU: CUDA/GPU support via ONNX Runtime
@@ -227,16 +243,21 @@ Silence → PossibleSpeech → Speech → PossibleSilence → Silence
    - Adaptive thresholding and hangover frame handling
 
 3. **Speech Transcription** (`TranscriptionProcessor`)
-   - Whisper model inference via CTranslate2
+   - Whisper model inference via CTranslate2 or whisper.cpp backends
    - Asynchronous processing with configurable beam search
    - Segment-based processing with context preservation
 
-4. **GPU Rendering** (`UI` modules)
+4. **Text Post-Processing** (`post_processor`)
+   - Configurable text cleanup and normalization
+   - Removal of artifacts (leading/trailing dashes)
+   - Whitespace normalization and character encoding cleanup
+
+5. **GPU Rendering** (`UI` modules)
    - Real-time spectrogram visualization
    - Scrollable transcript display with syntax highlighting
    - Interactive button system with hover states
 
-5. **System Integration** (`WaylandConnection` / `PortalInput`)
+6. **System Integration** (`WaylandConnection` / `PortalInput`)
    - Automatic text pasting to focused applications via wl-copy or XDG Portal
    - Wayland layer shell positioning and transparency
 
@@ -435,6 +456,8 @@ The architecture supports various performance scaling approaches:
 ## Conclusion
 
 Sonori's architecture demonstrates sophisticated systems programming techniques optimized for real-time and on-demand audio processing. The custom GPU-accelerated UI framework, combined with careful threading design, mode-aware pipelines, and platform integration (including XDG Portal), creates a responsive and flexible transcription experience supporting both continuous and session-based workflows.
+
+The architecture supports future extensibility through its modular design, backend abstraction layer, and component-based UI framework, allowing for incremental enhancements while maintaining backward compatibility and performance characteristics.
 
 ## Desktop Integration Reference
 

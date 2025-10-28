@@ -27,7 +27,7 @@ Contributions are welcome and encouraged! Whether you're fixing bugs, adding fea
 - **Audio Visualization**: Visual feedback when speaking with a spectrogram display
 - **Copy/Paste Functionality**: Easily copy transcribed text to clipboard
 - **Pause/Resume Recording**: Pause/Resume recording (real-time mode) or Start/Stop sessions (manual mode)
-- **Auto-Start Recording**: Begins recording as soon as the application launches
+- **Auto-Start Recording**: Begins recording automatically in real-time mode (manual mode requires manual start)
 - **Scroll Controls**: Navigate through longer transcripts
 - **CLI Mode**: Run without GUI in terminal mode using `--cli` flag for headless usage
 - **Sound Feedback**: Optional audio cues for recording state changes
@@ -45,7 +45,7 @@ Contributions are welcome and encouraged! Whether you're fixing bugs, adding fea
 - **Better error handling**: Handle errors gracefully and provide useful error messages
 - **Better UI**: A better UI with a focus on more usability
 - **Cloud API Support**: Integration with cloud providers (Deepgram, OpenAI) for higher accuracy and speed
-- **Additional Backends**: Support for NVIDIA Parakeet and other specialized models
+- **Additional Backends**: Support for other specialized transcription models
 - **CUDA Support**: Enhanced GPU acceleration across all backends
 
 ### NOT Planned
@@ -140,7 +140,7 @@ Sonori needs models to function properly, depending on the selected backend:
    ./target/release/sonori
    ```
 2. A transparent overlay will appear at the bottom of your screen
-3. Recording starts automatically (real-time mode)
+3. In real-time mode, recording starts automatically; in manual mode, press Record to start sessions
 4. Speak naturally - your speech will be transcribed in real-time or near real-time (based on the model and hardware)
 5. Use the buttons on the overlay to:
    - Pause/Resume recording (real-time mode)
@@ -161,14 +161,14 @@ For headless usage or terminal-based transcription:
    ./target/release/sonori --cli
    ```
 2. Transcription will appear directly in your terminal
-3. Recording starts automatically
-4. Speak naturally - transcriptions will update in real-time on the same line (real-time mode) or use spacebar to start/stop sessions (manual mode)
+3. In real-time mode, recording starts automatically; in manual mode, use spacebar to start/stop sessions
+4. Speak naturally - transcriptions will update in real-time on the same line (real-time mode) or after session acceptance (manual mode)
 5. Press `Ctrl+C` to exit gracefully
 
 ### Command Line Options
 
 - `--cli`: Run in CLI mode without GUI
-- `--mode <realtime|manual>`: Set transcription mode (default: realtime)
+- `--mode <realtime|manual>`: Set transcription mode (default: manual)
 - `--manual`: Shorthand for `--mode manual` to start in manual transcription mode
 - `--help`: Show help information
 - `--version`: Display version information
@@ -183,10 +183,10 @@ Example configuration:
 [general_config]
 model = "small"                   # Model name (format depends on backend)
 language = "en"                   # Language code for transcription
-transcription_mode = "realtime"   # Mode: "realtime" or "manual"
+transcription_mode = "manual"   # Mode: "realtime" or "manual"
 
 [backend_config]
-backend = "whisper_cpp"           # Backend: "ctranslate2", "whisper_cpp" (default), "parakeet"
+backend = "whisper_cpp"           # Backend: "ctranslate2", "whisper_cpp" (default)
 threads = 8                       # Number of CPU threads
 gpu_enabled = false               # Enable GPU acceleration (Vulkan for whisper_cpp)
 quantization_level = "medium"     # Precision: "high", "medium" (q8_0), "low" (q5_1)
@@ -202,10 +202,13 @@ max_segment_count = 20            # Maximum number of speech segments to buffer
 [manual_mode_config]
 max_recording_duration_secs = 120 # Maximum recording time per session (2 minutes)
 clear_on_new_session = true       # Clear transcript when starting new session
+enable_chunk_overlap = true       # Enable overlapping chunks for long sessions
+chunk_overlap_seconds = 0.5       # Overlap duration between chunks (seconds)
+disable_chunking = false          # Experimental: Disable chunking for no-limit mode
 
 [vad_config]
-threshold = 0.10                  # Speech detection sensitivity (lower = more sensitive)
-speech_end_threshold = 0.08       # Lower threshold for speech continuation (hysteresis)
+threshold = 0.15                  # Speech detection sensitivity (lower = more sensitive)
+speech_end_threshold = 0.10       # Lower threshold for speech continuation (hysteresis)
 hangbefore_frames = 5             # Frames before confirming speech start (50ms)
 hangover_frames = 30              # Frames of silence before ending segment (300ms)
 silence_tolerance_frames = 8      # Frames of silence tolerated during speech (80ms)
@@ -249,9 +252,6 @@ vsync_mode = "Enabled"                # VSync: "Auto", "Enabled", "Adaptive", "D
 target_fps = 60                       # Target FPS when vsync is disabled
 
 [window_behavior_config]
-hide_when_idle = true                 # Auto-hide window when not recording
-auto_hide_delay_ms = 2000             # Delay before auto-hiding (milliseconds)
-start_hidden = false                  # Start application with window hidden
 show_in_system_tray = true            # Show icon in system tray
 
 [debug_config]
@@ -262,18 +262,18 @@ log_stats_enabled = false             # Enable detailed performance logging
 
 Sonori supports multiple transcription backends, each with different strengths:
 
+#### Whisper.cpp (Default)
+- **Models**: GGML format models (e.g., `base.en`, `small.en`)
+- **Strengths**: Often faster, lighter weight, better CPU optimization, GPU acceleration support
+- **Use case**: Recommended default for most users, performance-critical applications, lower resource usage
+- **Model format**: Single .bin GGML files
+- **GPU Support**: Optional Vulkan GPU acceleration (configure `gpu_enabled = true` in backend_config)
+
 #### CTranslate2
 - **Models**: Hugging Face Whisper models (e.g., `openai/whisper-base.en`)
 - **Strengths**: Good balance of speed and accuracy, well-tested
 - **Use case**: Alternative for compatibility or specific use cases
 - **Model format**: CTranslate2 converted models
-
-#### Whisper.cpp (Default)
-- **Models**: GGML format models (e.g., `base.en`, `small.en`)
-- **Strengths**: Often faster, lighter weight, better CPU optimization, GPU acceleration support
-- **Use case**: Performance-critical applications, lower resource usage, GPU-accelerated inference
-- **Model format**: Single .bin GGML files
-- **GPU Support**: Optional Vulkan GPU acceleration (configure `gpu_enabled = true` in backend_config)
 
 ### Model Options
 
@@ -313,17 +313,11 @@ target_fps = 60
 ```
 
 #### Window Behavior
-- `hide_when_idle`: Auto-hide window when not recording (default: false)
-- `auto_hide_delay_ms`: Delay before auto-hiding in milliseconds (default: 2000)
-- `start_hidden`: Launch application with window hidden (default: false)
 - `show_in_system_tray`: Show application icon in system tray (default: true)
 
 Example:
 ```toml
 [window_behavior_config]
-hide_when_idle = false
-auto_hide_delay_ms = 2000
-start_hidden = false
 show_in_system_tray = true
 ```
 
