@@ -7,7 +7,9 @@ use super::traits::TranscriptionError;
 use super::{BackendCapabilities, BackendConfig};
 use parking_lot::Mutex;
 use std::path::Path;
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState};
+use whisper_rs::{
+    FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState,
+};
 
 /// whisper.cpp backend wrapper
 pub struct WhisperCppBackend {
@@ -39,12 +41,9 @@ impl WhisperCppBackend {
         ctx_params.use_gpu = backend_config.gpu_enabled;
 
         // Get model path as string
-        let model_path_str = model_path
-            .as_ref()
-            .to_str()
-            .ok_or_else(|| {
-                TranscriptionError::ConfigurationError("Invalid model path encoding".to_string())
-            })?;
+        let model_path_str = model_path.as_ref().to_str().ok_or_else(|| {
+            TranscriptionError::ConfigurationError("Invalid model path encoding".to_string())
+        })?;
 
         // Load the GGML model
         let context = WhisperContext::new_with_params(model_path_str, ctx_params).map_err(|e| {
@@ -56,7 +55,10 @@ impl WhisperCppBackend {
 
         // Create initial state for reuse across transcriptions
         let state = context.create_state().map_err(|e| {
-            TranscriptionError::ModelNotAvailable(format!("Failed to create whisper state: {:?}", e))
+            TranscriptionError::ModelNotAvailable(format!(
+                "Failed to create whisper state: {:?}",
+                e
+            ))
         })?;
 
         Ok(Self {
@@ -71,8 +73,8 @@ impl WhisperCppBackend {
         BackendCapabilities {
             name: "whisper.cpp",
             max_audio_duration: None, // No hard limit - processes audio of any length
-            supported_languages: None,       // Supports all Whisper languages
-            supports_streaming: false,       // Standard whisper.cpp doesn't stream
+            supported_languages: None, // Supports all Whisper languages
+            supports_streaming: false, // Standard whisper.cpp doesn't stream
             gpu_available: self.config.gpu_enabled,
         }
     }
@@ -138,7 +140,7 @@ impl WhisperCppBackend {
         let use_single_segment = audio_duration_secs <= SEGMENT_THRESHOLD_SECONDS;
 
         params.set_single_segment(use_single_segment);
-        params.set_no_timestamps(false);   // We need timestamps for segment boundaries
+        params.set_no_timestamps(false); // We need timestamps for segment boundaries
 
         if !use_single_segment {
             println!(

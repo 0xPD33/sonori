@@ -131,9 +131,9 @@ impl Default for ManualModeConfig {
         Self {
             max_recording_duration_secs: 120,
             clear_on_new_session: true,
-            enable_chunk_overlap: true,           // Enable overlap by default
-            chunk_overlap_seconds: 0.5,           // 0.5 second overlap (industry best practice)
-            disable_chunking: false,              // Chunking enabled by default
+            enable_chunk_overlap: true, // Enable overlap by default
+            chunk_overlap_seconds: 0.5, // 0.5 second overlap (industry best practice)
+            disable_chunking: false,    // Chunking enabled by default
         }
     }
 }
@@ -217,19 +217,10 @@ pub struct DisplayConfig {
     pub target_fps: u32,
 }
 
-/// Configuration for window visibility and system tray behavior
+/// Configuration for system tray behavior
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WindowBehaviorConfig {
-    /// Whether to automatically hide the window when idle
-    pub hide_when_idle: bool,
-
-    /// Delay in milliseconds before auto-hiding after recording stops
-    pub auto_hide_delay_ms: u64,
-
-    /// Whether to start the application with the window hidden
-    pub start_hidden: bool,
-
     /// Whether to show the application icon in the system tray
     pub show_in_system_tray: bool,
 }
@@ -246,9 +237,6 @@ impl Default for DisplayConfig {
 impl Default for WindowBehaviorConfig {
     fn default() -> Self {
         Self {
-            hide_when_idle: false,     // Don't auto-hide by default
-            auto_hide_delay_ms: 2000,  // 2 seconds delay
-            start_hidden: false,       // Start visible by default
             show_in_system_tray: true, // Show tray icon by default
         }
     }
@@ -295,7 +283,6 @@ impl DisplayConfig {
         }
     }
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -437,12 +424,12 @@ pub struct VadConfigSerde {
 impl Default for VadConfigSerde {
     fn default() -> Self {
         Self {
-            threshold: 0.15,               // Lower threshold to detect quieter speech
-            hangbefore_frames: 5,          // Increased to 50ms - capture more lead-in audio
-            hangover_frames: 30,           // Increased to 300ms - keep more trailing audio
-            silence_tolerance_frames: 8,   // Increased to 80ms - tolerate more pauses
-            speech_end_threshold: 0.1,     // Lower threshold for continuation
-            speech_prob_smoothing: 0.3,    // EMA smoothing factor (production standard)
+            threshold: 0.15,             // Lower threshold to detect quieter speech
+            hangbefore_frames: 5,        // Increased to 50ms - capture more lead-in audio
+            hangover_frames: 30,         // Increased to 300ms - keep more trailing audio
+            silence_tolerance_frames: 8, // Increased to 80ms - tolerate more pauses
+            speech_end_threshold: 0.1,   // Lower threshold for continuation
+            speech_prob_smoothing: 0.3,  // EMA smoothing factor (production standard)
         }
     }
 }
@@ -461,7 +448,8 @@ impl SileroVadConfig {
             hangbefore_frames: vad_config.hangbefore_frames,
             hangover_frames: vad_config.hangover_frames,
             hop_samples: (sample_rate as f32 * 0.01) as usize, // 10ms hop calculated from sample_rate
-            max_buffer_duration: (realtime_config.max_buffer_duration_sec * sample_rate as f32) as usize,
+            max_buffer_duration: (realtime_config.max_buffer_duration_sec * sample_rate as f32)
+                as usize,
             max_segment_count: realtime_config.max_segment_count,
             silence_tolerance_frames: vad_config.silence_tolerance_frames,
             speech_end_threshold: vad_config.speech_end_threshold,
@@ -471,7 +459,14 @@ impl SileroVadConfig {
 }
 
 impl From<(VadConfigSerde, RealtimeModeConfig, usize, usize)> for SileroVadConfig {
-    fn from((config, realtime_config, _buffer_size, sample_rate): (VadConfigSerde, RealtimeModeConfig, usize, usize)) -> Self {
+    fn from(
+        (config, realtime_config, _buffer_size, sample_rate): (
+            VadConfigSerde,
+            RealtimeModeConfig,
+            usize,
+            usize,
+        ),
+    ) -> Self {
         Self {
             threshold: config.threshold,
             frame_size: 512,
@@ -479,7 +474,8 @@ impl From<(VadConfigSerde, RealtimeModeConfig, usize, usize)> for SileroVadConfi
             hangbefore_frames: config.hangbefore_frames,
             hangover_frames: config.hangover_frames,
             hop_samples: (sample_rate as f32 * 0.01) as usize, // 10ms hop calculated from sample_rate
-            max_buffer_duration: (realtime_config.max_buffer_duration_sec * sample_rate as f32) as usize,
+            max_buffer_duration: (realtime_config.max_buffer_duration_sec * sample_rate as f32)
+                as usize,
             max_segment_count: realtime_config.max_segment_count,
             silence_tolerance_frames: config.silence_tolerance_frames,
             speech_end_threshold: config.speech_end_threshold,
@@ -536,7 +532,10 @@ impl AppConfig {
 
 impl CT2Options {
     /// Convert to ct2rs::WhisperOptions, combining with common options
-    pub fn to_whisper_options(&self, common_options: &CommonTranscriptionOptions) -> WhisperOptions {
+    pub fn to_whisper_options(
+        &self,
+        common_options: &CommonTranscriptionOptions,
+    ) -> WhisperOptions {
         WhisperOptions {
             beam_size: common_options.beam_size,
             patience: common_options.patience,

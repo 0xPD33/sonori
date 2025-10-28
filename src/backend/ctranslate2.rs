@@ -74,8 +74,8 @@ impl CT2Backend {
         BackendCapabilities {
             name: "CTranslate2",
             max_audio_duration: Some(60.0), // CT2 handles up to 60s segments well
-            supported_languages: None,       // Supports all Whisper languages
-            supports_streaming: false,       // CT2 doesn't support streaming
+            supported_languages: None,      // Supports all Whisper languages
+            supports_streaming: false,      // CT2 doesn't support streaming
             gpu_available: self.config.gpu_enabled,
         }
     }
@@ -103,7 +103,9 @@ impl CT2Backend {
         let ct2_options = options.to_whisper_options(common_options);
 
         // Call CT2 generate
-        let result = self.whisper.generate(samples, Some(language), false, &ct2_options)?;
+        let result = self
+            .whisper
+            .generate(samples, Some(language), false, &ct2_options)?;
 
         // Extract first result (CT2 returns Vec<String>)
         let transcription = result
@@ -131,8 +133,8 @@ pub fn migrate_legacy_config(
     };
 
     // Map device string to gpu_enabled
-    let gpu_enabled = device_str.to_uppercase().contains("CUDA")
-        || device_str.to_uppercase().contains("GPU");
+    let gpu_enabled =
+        device_str.to_uppercase().contains("CUDA") || device_str.to_uppercase().contains("GPU");
 
     BackendConfig {
         backend: BackendType::CTranslate2,

@@ -61,9 +61,7 @@ fn remove_trailing_dashes(text: String) -> String {
 /// - Removes leading and trailing whitespace
 /// - Converts newlines and tabs to spaces
 fn normalize_whitespace(text: String) -> String {
-    text.split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[cfg(test)]
@@ -85,10 +83,7 @@ mod tests {
             remove_leading_dashes("- hello world".to_string()),
             "hello world"
         );
-        assert_eq!(
-            remove_leading_dashes("-- hello".to_string()),
-            "hello"
-        );
+        assert_eq!(remove_leading_dashes("-- hello".to_string()), "hello");
         assert_eq!(
             remove_leading_dashes("hello world".to_string()),
             "hello world"
@@ -101,10 +96,7 @@ mod tests {
             remove_trailing_dashes("hello world -".to_string()),
             "hello world"
         );
-        assert_eq!(
-            remove_trailing_dashes("hello --".to_string()),
-            "hello"
-        );
+        assert_eq!(remove_trailing_dashes("hello --".to_string()), "hello");
         assert_eq!(
             remove_trailing_dashes("hello world".to_string()),
             "hello world"

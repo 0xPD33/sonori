@@ -374,7 +374,10 @@ fn normalize_model_name(model_name: &str, backend_type: crate::backend::BackendT
         crate::backend::BackendType::WhisperCpp => {
             // WhisperCpp uses standard OpenAI model names as-is
             // Just strip any "distil-" prefix if present
-            model_name.strip_prefix("distil-").unwrap_or(model_name).to_string()
+            model_name
+                .strip_prefix("distil-")
+                .unwrap_or(model_name)
+                .to_string()
         }
         crate::backend::BackendType::Parakeet => {
             // Parakeet will use standard model names
@@ -448,9 +451,9 @@ pub async fn download_whisper_cpp_model(
     // Determine quantization suffix for filename
     // Available for whisper.cpp: full precision (no suffix), q8_0, q5_1
     let quant_suffix = match quantization {
-        QuantizationLevel::High => "",        // Full precision (148MB for base.en)
+        QuantizationLevel::High => "", // Full precision (148MB for base.en)
         QuantizationLevel::Medium => "-q8_0", // Q8_0 quantization (82MB for base.en)
-        QuantizationLevel::Low => "-q5_1",    // Q5_1 quantization (60MB for base.en)
+        QuantizationLevel::Low => "-q5_1", // Q5_1 quantization (60MB for base.en)
     };
 
     // Build filename: ggml-{model}{quant}.bin

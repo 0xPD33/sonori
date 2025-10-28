@@ -73,15 +73,9 @@ pub async fn create_backend(
 /// - "/path/to/ggml-base.en.bin" -> "base.en"
 /// - "/path/to/ggml-small-q5_1.bin" -> "small"
 fn extract_whisper_cpp_model_name(path: &Path) -> Result<String, TranscriptionError> {
-    let filename = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .ok_or_else(|| {
-            TranscriptionError::ConfigurationError(format!(
-                "Invalid model path: {}",
-                path.display()
-            ))
-        })?;
+    let filename = path.file_stem().and_then(|s| s.to_str()).ok_or_else(|| {
+        TranscriptionError::ConfigurationError(format!("Invalid model path: {}", path.display()))
+    })?;
 
     // Remove "ggml-" prefix if present
     let name = filename.strip_prefix("ggml-").unwrap_or(filename);

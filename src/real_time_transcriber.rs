@@ -281,7 +281,9 @@ impl RealTimeTranscriber {
             );
             println!(
                 "Backend config: threads={}, gpu_enabled={}, quantization={:?}",
-                backend_config.threads, backend_config.gpu_enabled, backend_config.quantization_level
+                backend_config.threads,
+                backend_config.gpu_enabled,
+                backend_config.quantization_level
             );
 
             match create_backend(backend_type, &model_path_clone, &backend_config).await {
@@ -1017,10 +1019,7 @@ impl RealTimeTranscriber {
             self.recording.store(true, Ordering::Relaxed);
         }
 
-        println!(
-            "Recording toggled: {} -> {}",
-            was_recording, new_state
-        );
+        println!("Recording toggled: {} -> {}", was_recording, new_state);
 
         // Play sound feedback
         if let Some(sound_player) = &self.sound_player {

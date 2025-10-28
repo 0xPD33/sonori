@@ -35,7 +35,7 @@ pub enum BackendType {
 
 impl Default for BackendType {
     fn default() -> Self {
-        BackendType::CTranslate2
+        BackendType::WhisperCpp
     }
 }
 
@@ -103,7 +103,7 @@ impl Default for BackendConfig {
         Self {
             backend: BackendType::default(),
             threads: num_cpus::get().min(4), // Cap at 4 threads for efficiency
-            gpu_enabled: false,               // Default to CPU for compatibility
+            gpu_enabled: false,              // Default to CPU for compatibility
             quantization_level: QuantizationLevel::Medium,
         }
     }
@@ -158,10 +158,11 @@ impl TranscriptionBackend {
         match self {
             TranscriptionBackend::CTranslate2(backend) => backend.capabilities(),
             TranscriptionBackend::WhisperCpp(backend) => backend.capabilities(),
-            TranscriptionBackend::Parakeet => unimplemented!("Parakeet backend not yet implemented"),
+            TranscriptionBackend::Parakeet => {
+                unimplemented!("Parakeet backend not yet implemented")
+            }
         }
     }
-
 }
 
 // Re-export commonly used types
