@@ -1,11 +1,11 @@
 use crate::config::SoundConfig;
 use crate::sound_generator::{SoundGenerator, SoundType};
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use parking_lot::Mutex;
-use std::sync::mpsc;
 use anyhow::Result;
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use parking_lot::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
+use std::sync::Arc;
 
 pub struct SoundPlayer {
     sound_tx: mpsc::Sender<(SoundType, f32)>,
@@ -43,9 +43,7 @@ impl SoundPlayer {
             let generator = SoundGenerator::new(sample_rate);
 
             while let Ok((sound_type, volume)) = sound_rx.recv() {
-                if let Err(e) =
-                    Self::play_sound_internal(&device, &generator, sound_type, volume)
-                {
+                if let Err(e) = Self::play_sound_internal(&device, &generator, sound_type, volume) {
                     eprintln!("Failed to play sound {:?}: {}", sound_type, e);
                 }
             }

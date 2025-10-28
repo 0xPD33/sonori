@@ -78,15 +78,26 @@ impl TranscriptionProcessor {
         let inference_start = Instant::now();
 
         let result = match backend_ref {
-            crate::backend::TranscriptionBackend::CTranslate2(ct2_backend) => {
-                ct2_backend.transcribe(&segment.samples, language, &app_config.common_transcription_options, &app_config.ctranslate2_options, segment.sample_rate)
-            }
+            crate::backend::TranscriptionBackend::CTranslate2(ct2_backend) => ct2_backend
+                .transcribe(
+                    &segment.samples,
+                    language,
+                    &app_config.common_transcription_options,
+                    &app_config.ctranslate2_options,
+                    segment.sample_rate,
+                ),
             crate::backend::TranscriptionBackend::WhisperCpp(whisper_cpp_backend) => {
-                whisper_cpp_backend.transcribe(&segment.samples, language, &app_config.common_transcription_options, &app_config.whisper_cpp_options, segment.sample_rate)
+                whisper_cpp_backend.transcribe(
+                    &segment.samples,
+                    language,
+                    &app_config.common_transcription_options,
+                    &app_config.whisper_cpp_options,
+                    segment.sample_rate,
+                )
             }
             crate::backend::TranscriptionBackend::Parakeet => {
                 Err(crate::backend::TranscriptionError::BackendNotImplemented(
-                    "Parakeet backend not yet implemented".to_string()
+                    "Parakeet backend not yet implemented".to_string(),
                 ))
             }
         };
@@ -116,7 +127,10 @@ impl TranscriptionProcessor {
                 }
 
                 // Apply post-processing
-                let processed_transcription = post_processor::post_process_text(transcription, &app_config.post_process_config);
+                let processed_transcription = post_processor::post_process_text(
+                    transcription,
+                    &app_config.post_process_config,
+                );
 
                 if log_stats_enabled {
                     println!("Transcription (processed): '{}'", processed_transcription);
@@ -246,10 +260,11 @@ impl TranscriptionProcessor {
                                 );
 
                                 if !transcription.is_empty() {
-                                    let message = crate::real_time_transcriber::TranscriptionMessage {
-                                        text: transcription,
-                                        session_id,
-                                    };
+                                    let message =
+                                        crate::real_time_transcriber::TranscriptionMessage {
+                                            text: transcription,
+                                            session_id,
+                                        };
                                     if let Err(e) = tx_clone.send(message) {
                                         eprintln!("Failed to send manual transcription: {}", e);
                                     }
@@ -269,10 +284,11 @@ impl TranscriptionProcessor {
                                 );
 
                                 if !transcription.is_empty() {
-                                    let message = crate::real_time_transcriber::TranscriptionMessage {
-                                        text: transcription,
-                                        session_id: session_id_rt,
-                                    };
+                                    let message =
+                                        crate::real_time_transcriber::TranscriptionMessage {
+                                            text: transcription,
+                                            session_id: session_id_rt,
+                                        };
                                     if let Err(e) = tx_clone.send(message) {
                                         eprintln!("Failed to send transcription: {}", e);
                                     }
@@ -317,7 +333,9 @@ impl TranscriptionProcessor {
 
         // Check if user wants to disable chunking entirely (experimental mode)
         if app_config.manual_mode_config.disable_chunking {
-            println!("EXPERIMENTAL: Processing entire recording as single segment (chunking disabled)");
+            println!(
+                "EXPERIMENTAL: Processing entire recording as single segment (chunking disabled)"
+            );
             let result = Self::transcribe_segment(backend, segment, language, stats);
             let processing_time = start_time.elapsed();
             println!(
@@ -331,12 +349,7 @@ impl TranscriptionProcessor {
         // to avoid memory issues and improve processing reliability
         if duration > 30.0 {
             println!("Large manual segment detected, processing in chunks...");
-            return Self::process_large_manual_segment(
-                backend,
-                segment,
-                language,
-                stats,
-            );
+            return Self::process_large_manual_segment(backend, segment, language, stats);
         }
 
         // Process normally for smaller manual segments
@@ -380,13 +393,54 @@ impl TranscriptionProcessor {
             println!("No overlap between chunks (config: enable_chunk_overlap=false)");
         }
 
-        let mut transcriptions = Vec::new();
+        let mut chunk_ranges: Vec<(usize, usize)> = Vec::new();
         let mut start_idx = 0;
+        let total_len = segment.samples.len();
 
-        while start_idx < segment.samples.len() {
-            let end_idx = (start_idx + chunk_duration_samples).min(segment.samples.len());
+        while start_idx < total_len {
+            let end_idx = (start_idx + chunk_duration_samples).min(total_len);
+            chunk_ranges.push((start_idx, end_idx));
 
-            // Create chunk segment
+            if end_idx >= total_len {
+                break;
+            }
+
+            if use_overlap {
+                start_idx = end_idx.saturating_sub(overlap_samples);
+            } else {
+                start_idx = end_idx;
+            }
+        }
+
+        // Merge the trailing remainder into the previous chunk if it's too short on its own.
+        // This mirrors the VAD behavior that avoids handing tiny fragments to the backend.
+        if chunk_ranges.len() > 1 {
+            if let Some(&(last_start, last_end)) = chunk_ranges.last() {
+                let last_len = last_end.saturating_sub(last_start);
+
+                // Minimum chunk size: roughly one-sixth of the main chunk (≈5s) or 0.5s, whichever is larger.
+                // Whisper is much happier with these longer windows and avoids skipping tail words.
+                let min_chunk_samples = (chunk_duration_samples / 6)
+                    .max(sample_rate / 2)
+                    .max(1);
+
+                if last_len > 0 && last_len < min_chunk_samples {
+                    let len = chunk_ranges.len();
+                    if let Some(prev_range) = chunk_ranges.get_mut(len - 2) {
+                        println!(
+                            "Merging trailing {:.2}s remainder into previous chunk to avoid truncation",
+                            last_len as f64 / sample_rate as f64
+                        );
+                        prev_range.1 = last_end;
+                    }
+                    chunk_ranges.pop();
+                }
+            }
+        }
+
+        let mut transcriptions = Vec::new();
+
+        for (start_idx, end_idx) in chunk_ranges {
             let chunk_audio = segment.samples[start_idx..end_idx].to_vec();
             let chunk_start_time = start_idx as f64 / sample_rate as f64;
             let chunk_end_time = end_idx as f64 / sample_rate as f64;
@@ -404,26 +458,11 @@ impl TranscriptionProcessor {
                 chunk_start_time, chunk_end_time
             );
 
-            // Transcribe chunk
             let chunk_transcription =
                 Self::transcribe_segment(backend, &chunk_segment, language, stats);
 
             if !chunk_transcription.is_empty() {
                 transcriptions.push(chunk_transcription.trim().to_string());
-            }
-
-            // Move to next chunk (with optional overlap for boundary word handling)
-            // Industry best practice: use small overlap (0.5-1.0s) to catch boundary words
-            // while avoiding the hallucination caused by large overlaps (2+ seconds)
-            if end_idx >= segment.samples.len() {
-                break;
-            }
-
-            // Calculate next start position based on overlap setting
-            if use_overlap {
-                start_idx = (end_idx as isize - overlap_samples as isize).max(0) as usize;
-            } else {
-                start_idx = end_idx;
             }
         }
 

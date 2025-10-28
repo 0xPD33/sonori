@@ -1,11 +1,11 @@
+use hound;
 use parking_lot::{Mutex, RwLock};
 use std::collections::VecDeque;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::time::Duration;
-use hound;
-use std::path::Path;
 
 use crate::config::{AppConfig, AudioProcessorConfig};
 use crate::real_time_transcriber::TranscriptionMode;
@@ -54,7 +54,8 @@ impl AudioProcessor {
         app_config: AppConfig,
     ) -> Self {
         // Calculate manual buffer size from max_recording_duration_secs and sample_rate
-        let manual_buffer_max_size = (app_config.manual_mode_config.max_recording_duration_secs as usize)
+        let manual_buffer_max_size = (app_config.manual_mode_config.max_recording_duration_secs
+            as usize)
             * app_config.audio_processor_config.sample_rate;
         let manual_audio_buffer = Arc::new(Mutex::new(Vec::with_capacity(manual_buffer_max_size)));
 
@@ -336,8 +337,7 @@ impl AudioProcessor {
     ) {
         // Update visualization data
         if let Some(mut audio_data) = audio_visualization_data.try_write() {
-            let new_samples: Vec<f32> =
-                audio_buffer.iter().take(buffer_size).copied().collect();
+            let new_samples: Vec<f32> = audio_buffer.iter().take(buffer_size).copied().collect();
             if audio_data.samples != new_samples {
                 audio_data.samples = new_samples;
             }
@@ -461,7 +461,8 @@ impl AudioProcessor {
         sample_rate: usize,
         expected_session_id: Option<String>,
     ) -> Result<(), anyhow::Error> {
-        self.process_accumulated_manual_audio(sample_rate, expected_session_id).await
+        self.process_accumulated_manual_audio(sample_rate, expected_session_id)
+            .await
     }
 
     /// Update the current session ID
@@ -491,12 +492,15 @@ impl AudioProcessor {
         let path = Path::new(&filename);
 
         // Create WAV writer
-        match hound::WavWriter::create(path, hound::WavSpec {
-            channels: 1,
-            sample_rate,
-            bits_per_sample: 16,
-            sample_format: hound::SampleFormat::Int,
-        }) {
+        match hound::WavWriter::create(
+            path,
+            hound::WavSpec {
+                channels: 1,
+                sample_rate,
+                bits_per_sample: 16,
+                sample_format: hound::SampleFormat::Int,
+            },
+        ) {
             Ok(mut writer) => {
                 // Convert f32 samples to i16
                 for &sample in audio_samples {

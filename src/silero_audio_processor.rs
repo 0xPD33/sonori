@@ -295,11 +295,21 @@ impl SileroVad {
 
         // Calculate trim parameters
         let excess = self.sample_buffer.len() - self.config.max_buffer_duration;
-        let time_trimmed = excess as f64 / self.sample_rate_f64;
+
+        // Avoid flushing tiny slivers of audio (which produce blank transcripts)
+        // We only trim once we have a meaningful slice so the transcription backend
+        // continues to receive context-rich chunks instead of 10ms fragments.
+        let min_trim_samples = self.min_trim_samples();
+        let trim_samples = excess.max(min_trim_samples).min(self.sample_buffer.len());
+
+        let time_trimmed = trim_samples as f64 / self.sample_rate_f64;
         let new_time_offset = self.time_offset + time_trimmed;
 
         // This function does the actual trimming work, reused for both trim cases
-        self.trim_buffer(excess, new_time_offset);
+        self.trim_buffer(trim_samples, new_time_offset);
+
+        // Reset trim accounting so proactive trimming logic has fresh baseline
+        self.samples_since_trim = 0;
     }
 
     /// Trim buffer by specified number of samples, updating time offset
@@ -463,7 +473,6 @@ impl SileroVad {
         let context_duration = 0.1; // 100ms pre-roll buffer (industry standard)
         let context_samples = (context_duration * self.sample_rate_f64) as usize;
 
-
         // Adjust times for the current buffer window - doing calculations only once
         // Use asymmetric padding: add context before speech (for onset detection),
         // but not after (hangover_frames already provides adequate tail buffer)
@@ -487,6 +496,20 @@ impl SileroVad {
 
         // Get a slice of the buffer and convert to Vec directly
         self.sample_buffer[start_idx..end_idx].to_vec()
+    }
+
+    /// Minimum number of samples to remove when the buffer grows too large
+    fn min_trim_samples(&self) -> usize {
+        let max_buffer = self.config.max_buffer_duration.max(1);
+        let sample_rate = self.config.sample_rate.max(1);
+        let frame_size = self.config.frame_size.max(1);
+
+        // Target roughly one-sixth of the buffer (≈5s for 30s history)
+        // This mirrors human phrase cadence and keeps the language model happy.
+        let fraction = (max_buffer / 6).max(frame_size);
+        let half_second = (sample_rate / 2).max(frame_size);
+
+        fraction.max(half_second).min(max_buffer).max(1)
     }
 
     /// Process a batch of audio samples
