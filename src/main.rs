@@ -436,6 +436,10 @@ async fn run_gui_mode(
             }
 
             let transcription = message.text;
+
+            // Check if this is the first segment before updating history
+            let history_len_before = transcript_history.read().len();
+
             let updated_transcript = {
                 let mut history = transcript_history.write();
                 if !history.is_empty() {
@@ -447,10 +451,14 @@ async fn run_gui_mode(
             let mut audio_data = audio_visualization_data_for_thread.write();
             audio_data.transcript = updated_transcript;
 
-            // Forward chunk to clipboard and portal workers with leading space
-            let segment_with_leading_space = format!(" {}", transcription);
-            let _ = clipboard_tx_clone.send(segment_with_leading_space.clone());
-            let _ = portal_tx_clone.send(segment_with_leading_space);
+            // Forward chunk to clipboard and portal workers with leading space (except for first segment)
+            let segment_with_space = if history_len_before > 0 {
+                format!(" {}", transcription)
+            } else {
+                transcription.clone()
+            };
+            let _ = clipboard_tx_clone.send(segment_with_space.clone());
+            let _ = portal_tx_clone.send(segment_with_space);
         }
     });
 
