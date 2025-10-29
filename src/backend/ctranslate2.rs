@@ -151,6 +151,7 @@ mod tests {
     #[test]
     fn test_config_mapping() {
         let backend_config = BackendConfig {
+            backend: BackendType::CTranslate2,
             threads: 4,
             gpu_enabled: false,
             quantization_level: QuantizationLevel::Medium,
@@ -175,6 +176,7 @@ mod tests {
     #[test]
     fn test_gpu_config() {
         let backend_config = BackendConfig {
+            backend: BackendType::CTranslate2,
             threads: 4,
             gpu_enabled: true,
             quantization_level: QuantizationLevel::High,

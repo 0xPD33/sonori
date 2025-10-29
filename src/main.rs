@@ -447,9 +447,10 @@ async fn run_gui_mode(
             let mut audio_data = audio_visualization_data_for_thread.write();
             audio_data.transcript = updated_transcript;
 
-            // Forward chunk to clipboard and portal workers
-            let _ = clipboard_tx_clone.send(transcription.clone());
-            let _ = portal_tx_clone.send(transcription);
+            // Forward chunk to clipboard and portal workers with leading space
+            let segment_with_leading_space = format!(" {}", transcription);
+            let _ = clipboard_tx_clone.send(segment_with_leading_space.clone());
+            let _ = portal_tx_clone.send(segment_with_leading_space);
         }
     });
 

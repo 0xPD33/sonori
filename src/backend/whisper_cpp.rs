@@ -197,6 +197,7 @@ mod tests {
     #[test]
     fn test_config_interpretation() {
         let config = BackendConfig {
+            backend: super::super::BackendType::WhisperCpp,
             threads: 4,
             gpu_enabled: false,
             quantization_level: super::super::QuantizationLevel::Medium,

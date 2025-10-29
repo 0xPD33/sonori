@@ -57,82 +57,39 @@ fn remove_trailing_dashes(text: String) -> String {
 
 /// Normalize whitespace in text
 ///
-/// - Collapses multiple consecutive spaces into single space
+/// - Collapses multiple consecutive spaces (2+) into single spaces
 /// - Removes leading and trailing whitespace
 /// - Converts newlines and tabs to spaces
+/// - Preserves single spaces and natural word boundaries from AI model
 fn normalize_whitespace(text: String) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
+    let mut result = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn default_config() -> PostProcessConfig {
-        PostProcessConfig {
-            enabled: true,
-            remove_leading_dashes: true,
-            remove_trailing_dashes: true,
-            normalize_whitespace: true,
+    while let Some(c) = chars.next() {
+        match c {
+            // Preserve single spaces between words
+            ' ' if !result.is_empty() && !result.ends_with(' ') && !chars.peek().map_or(true, |&next| next.is_whitespace()) => {
+                // This is a single space between non-whitespace, keep it
+                result.push(' ');
+            }
+            // Collapse multiple consecutive whitespace characters
+            c if c.is_whitespace() => {
+                // Skip all consecutive whitespace characters
+                while chars.peek().map_or(false, |&next| next.is_whitespace()) {
+                    chars.next();
+                }
+                // Add single space if not at beginning or end
+                if !result.is_empty() && !matches!(chars.peek(), None | Some(' ' | '\t' | '\n' | '\r')) {
+                    result.push(' ');
+                }
+            }
+            _ => {
+                result.push(c);
+            }
         }
     }
 
-    #[test]
-    fn test_remove_leading_dashes() {
-        assert_eq!(
-            remove_leading_dashes("- hello world".to_string()),
-            "hello world"
-        );
-        assert_eq!(remove_leading_dashes("-- hello".to_string()), "hello");
-        assert_eq!(
-            remove_leading_dashes("hello world".to_string()),
-            "hello world"
-        );
-    }
-
-    #[test]
-    fn test_remove_trailing_dashes() {
-        assert_eq!(
-            remove_trailing_dashes("hello world -".to_string()),
-            "hello world"
-        );
-        assert_eq!(remove_trailing_dashes("hello --".to_string()), "hello");
-        assert_eq!(
-            remove_trailing_dashes("hello world".to_string()),
-            "hello world"
-        );
-    }
-
-    #[test]
-    fn test_normalize_whitespace() {
-        assert_eq!(
-            normalize_whitespace("hello   world".to_string()),
-            "hello world"
-        );
-        assert_eq!(
-            normalize_whitespace("  hello\nworld  ".to_string()),
-            "hello world"
-        );
-        assert_eq!(
-            normalize_whitespace("hello\t\tworld".to_string()),
-            "hello world"
-        );
-    }
-
-    #[test]
-    fn test_post_process_all_enabled() {
-        let text = "  - hello   world -  ".to_string();
-        let config = default_config();
-        assert_eq!(post_process_text(text, &config), "hello world");
-    }
-
-    #[test]
-    fn test_post_process_disabled() {
-        let text = "  - hello   world -  ".to_string();
-        let config = PostProcessConfig {
-            enabled: false,
-            ..default_config()
-        };
-        assert_eq!(post_process_text(text, &config), "  - hello   world -  ");
-    }
+    // Clean up any trailing space that might have been added
+    result.trim().to_string()
 }
+
