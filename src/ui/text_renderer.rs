@@ -118,7 +118,7 @@ impl TextRenderer {
         // Clear the buffer for new text
         self.buffer.lines.clear();
 
-        let font_size = 12.0 * scale;
+        let font_size = 10.0 * scale; // Reduced from 12.0 to 10.0 for smaller text
         let metrics = Metrics::new(font_size, font_size * 1.1);
         self.buffer.set_metrics(&mut self.font_system, metrics);
 

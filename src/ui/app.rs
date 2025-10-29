@@ -21,7 +21,7 @@ use super::common::AudioVisualizationData;
 use super::window::WindowState;
 
 // Constants from window.rs
-use super::window::{GAP, MARGIN, SPECTROGRAM_HEIGHT, SPECTROGRAM_WIDTH, TEXT_AREA_HEIGHT};
+use super::window::MARGIN;
 use crate::config::AppConfig;
 
 pub fn run() {
@@ -315,12 +315,27 @@ fn create_window(
     >,
     display_config: &crate::config::DisplayConfig,
 ) -> WindowState {
-    // Use spectrogram size plus text area height and gap
-    let fixed_size = PhysicalSize::new(
-        SPECTROGRAM_WIDTH,
-        SPECTROGRAM_HEIGHT + TEXT_AREA_HEIGHT + GAP,
-    );
-    let logical_size = fixed_size.to_logical::<i32>(scale_factor);
+    // Get monitor dimensions from video mode
+    let monitor_size = monitor_mode.size();
+    let monitor_width = monitor_size.width;
+    let monitor_height = monitor_size.height;
+
+    // Calculate 10% of screen size
+    let window_width = (monitor_width as f32 * 0.10) as u32;
+    let window_height = (monitor_height as f32 * 0.10) as u32;
+
+    // Ensure minimum viable size (240x174 as current minimum)
+    let window_width = window_width.max(240);
+    let window_height = window_height.max(174);
+
+    // Calculate proportional layout (make spectrogram more rectangular)
+    let spectrogram_width = window_width;
+    let spectrogram_height = (window_height as f32 * 0.32) as u32; // Increased from 0.28 to 0.32 for a bit more height
+    let text_area_height = (window_height as f32 * 0.66) as u32; // Decreased from 0.70 to 0.66
+    let gap = (window_height as f32 * 0.02).max(4.0) as u32;
+
+    let dynamic_size = PhysicalSize::new(window_width, window_height);
+    let logical_size = dynamic_size.to_logical::<i32>(scale_factor);
 
     // Set the fixed size in the window attributes
     let w = w.with_surface_size(logical_size);
@@ -357,5 +372,11 @@ fn create_window(
         manual_session_sender,
         transcription_mode_ref,
         display_config,
+        window_width,
+        window_height,
+        spectrogram_width,
+        spectrogram_height,
+        text_area_height,
+        gap,
     )
 }

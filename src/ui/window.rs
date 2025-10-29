@@ -55,6 +55,13 @@ pub struct WindowState {
     transcription_mode_ref:
         Arc<parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>>,
     last_known_mode: crate::real_time_transcriber::TranscriptionMode,
+    // Dynamic sizing
+    pub window_width: u32,
+    pub window_height: u32,
+    pub spectrogram_width: u32,
+    pub spectrogram_height: u32,
+    pub text_area_height: u32,
+    pub gap: u32,
     // Frame rate limiting
     last_frame_time: Option<std::time::Instant>,
     target_frame_duration: std::time::Duration,
@@ -74,6 +81,12 @@ impl WindowState {
             parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>,
         >,
         display_config: &crate::config::DisplayConfig,
+        window_width: u32,
+        window_height: u32,
+        spectrogram_width: u32,
+        spectrogram_height: u32,
+        text_area_height: u32,
+        gap: u32,
     ) -> Self {
         let window: Arc<dyn Window> = Arc::from(window);
 
@@ -111,8 +124,9 @@ impl WindowState {
         ))
         .unwrap();
 
-        let fixed_width = SPECTROGRAM_WIDTH;
-        let fixed_height = SPECTROGRAM_HEIGHT + TEXT_AREA_HEIGHT + GAP;
+        // Use dynamic sizing values
+        let fixed_width = window_width;
+        let fixed_height = window_height;
 
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = surface_caps
@@ -157,6 +171,8 @@ impl WindowState {
             PhysicalSize::new(config.width, config.height),
             config.format,
             transcription_mode,
+            text_area_height,
+            gap,
         );
 
         // Load button icons
@@ -192,12 +208,12 @@ impl WindowState {
         let layout_manager = LayoutManager::new(
             config.width,
             config.height,
-            SPECTROGRAM_WIDTH,
-            SPECTROGRAM_HEIGHT,
-            TEXT_AREA_HEIGHT,
+            spectrogram_width,
+            spectrogram_height,
+            text_area_height,
             RIGHT_MARGIN,
             LEFT_MARGIN,
-            GAP,
+            gap,
         );
 
         // Create event handler
@@ -245,6 +261,14 @@ impl WindowState {
             transcription_mode_ref,
             last_known_mode,
 
+            // Dynamic sizing
+            window_width,
+            window_height,
+            spectrogram_width,
+            spectrogram_height,
+            text_area_height,
+            gap,
+
             // Frame rate limiting
             last_frame_time: None,
             target_frame_duration,
@@ -277,7 +301,7 @@ impl WindowState {
         // Initialize spectrogram if not already created
         if self.spectrogram.is_none() {
             // Create the spectrogram with the dedicated spectrogram size, not the full window size
-            let size = PhysicalSize::new(SPECTROGRAM_WIDTH, SPECTROGRAM_HEIGHT);
+            let size = PhysicalSize::new(self.spectrogram_width, self.spectrogram_height);
             let spectrogram = Spectrogram::new(
                 Arc::new(self.device.clone()),
                 Arc::new(self.queue.clone()),
@@ -326,10 +350,10 @@ impl WindowState {
         self.render_pipelines.draw_spectrogram_background(
             &mut encoder,
             &view,
-            TEXT_AREA_HEIGHT,
-            GAP,
-            SPECTROGRAM_WIDTH,
-            SPECTROGRAM_HEIGHT,
+            self.text_area_height,
+            self.gap,
+            self.spectrogram_width,
+            self.spectrogram_height,
         );
 
         // Get audio data once
@@ -351,7 +375,7 @@ impl WindowState {
 
         // Always ensure the spectrogram is initialized
         if self.spectrogram.is_none() {
-            let size = PhysicalSize::new(SPECTROGRAM_WIDTH, SPECTROGRAM_HEIGHT);
+            let size = PhysicalSize::new(self.spectrogram_width, self.spectrogram_height);
             let spectrogram = Spectrogram::new(
                 Arc::new(self.device.clone()),
                 Arc::new(self.queue.clone()),
@@ -464,13 +488,17 @@ impl WindowState {
         // Get text position from the layout manager
         let (text_x, text_y) = self.layout_manager.get_text_position(self.scroll_offset);
 
-        let text_scale = 1.0;
+        // Calculate text scale with constrained growth to keep text smaller
+        let base_width = 240.0;
+        let max_scale = 1.4; // Reduced from 1.5 to 1.4 for better proportions
+        let raw_scale = self.window_width as f32 / base_width;
+        let text_scale = raw_scale.min(max_scale).max(0.85); // Increased minimum to 0.85x for better readability
 
         // Choose text color based on speaking state
         let text_color = if is_speaking {
-            [0.0, 0.8, 0.4, 1.0] // Teal-green for listening
+            [0.1, 0.9, 0.5, 1.0] // Brighter teal-green for better visibility
         } else {
-            [1.0, 0.8, 0.1, 1.0] // Bright gold for ready/text
+            [1.0, 0.85, 0.15, 1.0] // Slightly warmer gold for better readability
         };
 
         // Render text window (background and text)
@@ -480,7 +508,7 @@ impl WindowState {
             &display_text,
             text_area_width,
             text_area_height,
-            GAP,
+            self.gap,
             text_x,
             text_y,
             text_scale,
@@ -495,7 +523,7 @@ impl WindowState {
                 &mut encoder,
                 self.config.width,
                 text_area_height,
-                GAP,
+                self.gap,
             );
         }
 

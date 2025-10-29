@@ -12,18 +12,16 @@ use crate::real_time_transcriber::TranscriptionMode;
 
 use super::button_texture::ButtonTexture;
 
-// Button dimensions and positions
-const COPY_BUTTON_SIZE: u32 = 16;
-const RESET_BUTTON_SIZE: u32 = 16;
-const PAUSE_BUTTON_SIZE: u32 = 16;
-const CLOSE_BUTTON_SIZE: u32 = 12;
-const BUTTON_MARGIN: u32 = 8;
-const BUTTON_SPACING: u32 = 8;
+// Button base sizes (will be scaled dynamically)
+const COPY_BUTTON_BASE_SIZE: f32 = 16.0; // Base size for scaling calculations
+const CLOSE_BUTTON_BASE_SIZE: f32 = 12.0; // Base size for close button (slightly smaller)
+const BUTTON_MARGIN_RATIO: f32 = 0.025; // Margin as ratio of window width
+const BUTTON_SPACING_RATIO: f32 = 0.02; // Spacing as ratio of window width
 
 // Animation constants
-const ANIMATION_DURATION: f32 = 0.1;
-const HOVER_SCALE: f32 = 1.1;
-const PRESS_SCALE: f32 = 0.9;
+const ANIMATION_DURATION: f32 = 0.15; // Slightly longer for smoother feel
+const HOVER_SCALE: f32 = 1.15; // More noticeable hover effect
+const PRESS_SCALE: f32 = 0.95; // Less aggressive press for better feel
 const HOVER_ROTATION: f32 = 0.261799; // 15 degrees in radians (π/12)
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -68,6 +66,7 @@ pub struct Button {
 pub struct ButtonManager {
     buttons: std::collections::HashMap<ButtonType, Button>,
     text_area_height: u32,
+    gap: u32,
     active_button: Option<ButtonType>,
     recording: Option<Arc<AtomicBool>>,
     transcription_mode: crate::real_time_transcriber::TranscriptionMode,
@@ -539,14 +538,34 @@ impl Button {
 }
 
 impl ButtonManager {
+    /// Calculate dynamic button size based on window dimensions
+    fn calculate_button_size(window_width: u32, is_close: bool) -> u32 {
+        let base_size = if is_close { CLOSE_BUTTON_BASE_SIZE } else { COPY_BUTTON_BASE_SIZE };
+        let scale_factor = (window_width as f32 / 240.0).max(0.7).min(1.2); // Reduced max scale from 1.5 to 1.2 for smaller buttons
+        (base_size * scale_factor) as u32
+    }
+
+    /// Calculate dynamic button margin based on window dimensions
+    fn calculate_button_margin(window_width: u32) -> u32 {
+        ((window_width as f32) * BUTTON_MARGIN_RATIO).max(6.0).min(16.0) as u32 // Reduced max from 20 to 16
+    }
+
+    /// Calculate dynamic button spacing based on window dimensions
+    fn calculate_button_spacing(window_width: u32) -> u32 {
+        ((window_width as f32) * BUTTON_SPACING_RATIO).max(4.0).min(12.0) as u32 // Reduced max from 16 to 12
+    }
+
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         window_size: PhysicalSize<u32>,
         format: wgpu::TextureFormat,
         transcription_mode: TranscriptionMode,
+        text_area_height: u32,
+        gap: u32,
     ) -> Self {
-        let text_area_height = super::window::TEXT_AREA_HEIGHT - super::window::GAP;
+        // Store the original text_area_height for button positioning
+        // Buttons should be positioned within the text area, above the gap
 
         // Define button sets based on transcription mode
         let button_types = match transcription_mode {
@@ -577,8 +596,10 @@ impl ButtonManager {
             .cloned()
             .collect();
         let button_count = bottom_buttons.len();
-        let total_buttons_width = (button_count as u32) * COPY_BUTTON_SIZE
-            + (button_count.saturating_sub(1) as u32) * BUTTON_SPACING;
+        let button_size = Self::calculate_button_size(window_size.width, false);
+        let button_spacing = Self::calculate_button_spacing(window_size.width);
+        let total_buttons_width = (button_count as u32) * button_size
+            + (button_count.saturating_sub(1) as u32) * button_spacing;
         let center_x = window_size.width / 2;
         let start_x = center_x - total_buttons_width / 2;
 
@@ -587,32 +608,35 @@ impl ButtonManager {
 
         // Position bottom buttons (all except Close)
         for (i, &button_type) in bottom_buttons.iter().enumerate() {
-            let button_x = start_x + (i as u32) * (COPY_BUTTON_SIZE + BUTTON_SPACING);
-            let button_y = text_area_height - COPY_BUTTON_SIZE - BUTTON_MARGIN;
+            let button_x = start_x + (i as u32) * (button_size + button_spacing);
+            let button_margin = Self::calculate_button_margin(window_size.width);
+            let button_y = text_area_height - button_size - button_margin;
 
             let button = Button::new(
                 device,
                 queue,
                 button_type,
                 (button_x, button_y),
-                (COPY_BUTTON_SIZE, COPY_BUTTON_SIZE),
+                (button_size, button_size),
                 format,
                 None,
             );
             buttons.insert(button_type, button);
         }
 
-        // Add close button in top right corner
+        // Add close button in top right corner, aligned with text area right edge
         if button_types.contains(&ButtonType::Close) {
+            let close_button_size = Self::calculate_button_size(window_size.width, true);
+            let button_margin = Self::calculate_button_margin(window_size.width);
             let close_button = Button::new(
                 device,
                 queue,
                 ButtonType::Close,
                 (
-                    window_size.width - BUTTON_MARGIN - CLOSE_BUTTON_SIZE,
-                    BUTTON_MARGIN,
+                    window_size.width - 4 - button_margin - close_button_size, // 4 = RIGHT_MARGIN from text area
+                    button_margin,
                 ),
-                (CLOSE_BUTTON_SIZE, CLOSE_BUTTON_SIZE),
+                (close_button_size, close_button_size),
                 format,
                 None,
             );
@@ -622,6 +646,7 @@ impl ButtonManager {
         Self {
             buttons,
             text_area_height,
+            gap,
             active_button: None,
             recording: None,
             transcription_mode,
@@ -764,26 +789,36 @@ impl ButtonManager {
             .filter(|bt| self.buttons.contains_key(bt))
             .collect();
         let button_count = bottom_buttons.len();
-        let total_buttons_width = (button_count as u32) * COPY_BUTTON_SIZE
-            + (button_count.saturating_sub(1) as u32) * BUTTON_SPACING;
+        let button_size = Self::calculate_button_size(self.window_width, false);
+        let button_spacing = Self::calculate_button_spacing(self.window_width);
+        let total_buttons_width = (button_count as u32) * button_size
+            + (button_count.saturating_sub(1) as u32) * button_spacing;
         let center_x = window_size.width / 2;
         let start_x = center_x - total_buttons_width / 2;
 
         // Update positions for bottom buttons in the correct order
         for (i, &button_type) in bottom_buttons.iter().enumerate() {
             if let Some(button) = self.buttons.get_mut(&button_type) {
-                let button_x = start_x + (i as u32) * (COPY_BUTTON_SIZE + BUTTON_SPACING);
-                let button_y = self.text_area_height - COPY_BUTTON_SIZE - BUTTON_MARGIN;
+                let button_x = start_x + (i as u32) * (button_size + button_spacing);
+                // Position buttons much closer to the bottom of the text area (95% of text area height)
+                let button_size = Self::calculate_button_size(self.window_width, false);
+            let button_spacing = Self::calculate_button_spacing(self.window_width);
+            let button_margin = Self::calculate_button_margin(self.window_width);
+            let button_y = (self.text_area_height as f32 * 0.95) as u32 - button_size - button_margin;
                 button.position = (button_x, button_y);
+                button.size = (button_size, button_size);
             }
         }
 
         // Update close button position
         if let Some(close_button) = self.buttons.get_mut(&ButtonType::Close) {
+            let close_button_size = Self::calculate_button_size(self.window_width, true);
+            let button_margin = Self::calculate_button_margin(self.window_width);
             close_button.position = (
-                window_size.width - BUTTON_MARGIN - CLOSE_BUTTON_SIZE,
-                BUTTON_MARGIN,
+                window_size.width - 4 - button_margin - close_button_size, // 4 = RIGHT_MARGIN from text area
+                button_margin,
             );
+            close_button.size = (close_button_size, close_button_size);
         }
     }
 
@@ -1025,7 +1060,8 @@ impl ButtonManager {
 
     fn add_button(&mut self, button_type: ButtonType) {
         let position = (0, 0); // Temporary position, will be recalculated
-        let size = (COPY_BUTTON_SIZE, COPY_BUTTON_SIZE);
+        let button_size = Self::calculate_button_size(self.window_width, button_type == ButtonType::Close);
+        let size = (button_size, button_size);
 
         let button = Button::new(
             &self.device,
@@ -1101,26 +1137,36 @@ impl ButtonManager {
             .filter(|bt| self.buttons.contains_key(bt))
             .collect();
         let button_count = bottom_buttons.len();
-        let total_buttons_width = (button_count as u32) * COPY_BUTTON_SIZE
-            + (button_count.saturating_sub(1) as u32) * BUTTON_SPACING;
+        let button_size = Self::calculate_button_size(self.window_width, false);
+        let button_spacing = Self::calculate_button_spacing(self.window_width);
+        let total_buttons_width = (button_count as u32) * button_size
+            + (button_count.saturating_sub(1) as u32) * button_spacing;
         let center_x = self.window_width / 2;
         let start_x = center_x - total_buttons_width / 2;
 
         // Position bottom buttons (all except Close) in the correct order
         for (i, &button_type) in bottom_buttons.iter().enumerate() {
             if let Some(button) = self.buttons.get_mut(&button_type) {
-                let button_x = start_x + (i as u32) * (COPY_BUTTON_SIZE + BUTTON_SPACING);
-                let button_y = self.text_area_height - COPY_BUTTON_SIZE - BUTTON_MARGIN;
+                let button_x = start_x + (i as u32) * (button_size + button_spacing);
+                // Position buttons much closer to the bottom of the text area (95% of text area height)
+                let button_size = Self::calculate_button_size(self.window_width, false);
+            let button_spacing = Self::calculate_button_spacing(self.window_width);
+            let button_margin = Self::calculate_button_margin(self.window_width);
+            let button_y = (self.text_area_height as f32 * 0.95) as u32 - button_size - button_margin;
                 button.position = (button_x, button_y);
+                button.size = (button_size, button_size);
             }
         }
 
         // Update close button position
         if let Some(close_button) = self.buttons.get_mut(&ButtonType::Close) {
+            let close_button_size = Self::calculate_button_size(self.window_width, true);
+            let button_margin = Self::calculate_button_margin(self.window_width);
             close_button.position = (
-                self.window_width - BUTTON_MARGIN - CLOSE_BUTTON_SIZE,
-                BUTTON_MARGIN,
+                self.window_width - 4 - button_margin - close_button_size, // 4 = RIGHT_MARGIN from text area
+                button_margin,
             );
+            close_button.size = (close_button_size, close_button_size);
         }
     }
 

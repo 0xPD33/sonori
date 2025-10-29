@@ -4,15 +4,14 @@ use std::time::{Duration, Instant};
 use wgpu::{util::DeviceExt, Buffer, Device, Queue, RenderPipeline, TextureView};
 use winit::dpi::PhysicalSize;
 
-use super::window::{SPECTROGRAM_HEIGHT, SPECTROGRAM_WIDTH};
 
 // Configuration constants
 const FFT_SIZE: usize = 512; // Number of FFT bins
-const ANIMATION_SPEED: f32 = 0.75; // Animation speed for bar height changes
-const MIN_AMPLITUDE: f32 = 0.02; // Minimum bar amplitude to ensure visibility
+const ANIMATION_SPEED: f32 = 0.85; // Slightly faster animation for more responsive feel
+const MIN_AMPLITUDE: f32 = 0.025; // Slightly higher minimum for better visibility
 const MAX_AMPLITUDE: f32 = 1.0; // Maximum allowed amplitude
 const SPEAKING_THRESHOLD: f32 = 0.2; // Threshold to determine if audio contains speech
-const MIN_OPACITY: f32 = 0.1; // Minimum opacity for bar coloring - slightly higher than MIN_AMPLITUDE for better visibility
+const MIN_OPACITY: f32 = 0.15; // Higher minimum opacity for better visibility
 
 // Bar scaling constants
 const MAX_BAR_HEIGHT: f32 = 0.9; // Maximum height cap for bars
@@ -26,8 +25,8 @@ const CURRENT_BAR_WEIGHT: f32 = 0.6;
 const NEXT_BAR_WEIGHT: f32 = 0.2;
 
 // Edge tapering constants
-const MIN_EDGE_FACTOR: f32 = 0.7;
-const EDGE_FACTOR_RANGE: f32 = 0.3;
+const MIN_EDGE_FACTOR: f32 = 0.75; // Slightly higher minimum for more uniform appearance
+const EDGE_FACTOR_RANGE: f32 = 0.25; // Reduced range for smoother gradient
 
 pub struct Spectrogram {
     // WGPU resources

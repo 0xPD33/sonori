@@ -2,7 +2,6 @@ use wgpu::{self, util::DeviceExt};
 use winit::dpi::PhysicalSize;
 
 use super::text_renderer::TextRenderer;
-use super::window::{GAP, LEFT_MARGIN, RIGHT_MARGIN, TEXT_AREA_HEIGHT};
 
 pub struct TextWindow {
     pipeline: wgpu::RenderPipeline,
