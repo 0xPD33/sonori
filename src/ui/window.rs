@@ -11,14 +11,16 @@ use winit::{
     window::Window,
 };
 
+use super::button_panel::ButtonPanel;
 use super::buttons::ButtonManager;
 use super::common::AudioVisualizationData;
 use super::event_handler::EventHandler;
 use super::layout_manager::LayoutManager;
 use super::render_pipeline::RenderPipelines;
-use super::scrollbar::{Scrollbar, SCROLLBAR_WIDTH};
+use super::scroll_state::ScrollState;
+use super::scrollbar::Scrollbar;
 use super::spectogram::Spectrogram;
-use super::text_processor::{TextLayoutInfo, TextProcessor};
+use super::text_processor::TextProcessor;
 use super::text_window::TextWindow;
 use parking_lot::RwLock;
 
@@ -41,14 +43,11 @@ pub struct WindowState {
     pub render_pipelines: RenderPipelines,
     pub text_window: TextWindow,
     pub button_manager: ButtonManager,
+    pub button_panel: ButtonPanel,
     pub text_processor: TextProcessor,
     pub layout_manager: LayoutManager,
     pub scrollbar: Scrollbar,
-    pub scroll_offset: f32,
-    pub max_scroll_offset: f32,
-    pub target_scroll_offset: f32,
-    pub auto_scroll: bool,
-    pub last_transcript_len: usize,
+    pub scroll_state: ScrollState,
     pub event_handler: EventHandler,
     pub running: Option<Arc<AtomicBool>>,
     pub recording: Option<Arc<AtomicBool>>,
@@ -66,6 +65,10 @@ pub struct WindowState {
     last_frame_time: Option<std::time::Instant>,
     target_frame_duration: std::time::Duration,
     present_mode: wgpu::PresentMode,
+    // Hover animation state
+    hover_animation_progress: f32, // 0.0 to 1.0
+    is_hovering: bool,
+    last_hover_update: std::time::Instant,
     }
 
 impl WindowState {
@@ -162,6 +165,7 @@ impl WindowState {
             &queue,
             &config,
             PhysicalSize::new(config.width, config.height),
+            &render_pipelines.hover_bind_group_layout,
         );
 
         // Create the button manager
@@ -198,8 +202,17 @@ impl WindowState {
         // Set recording state in button manager
         button_manager.set_recording(recording.clone());
 
+        // Create the button panel with fade animation
+        let button_panel = ButtonPanel::new(
+            device.clone(),
+            queue.clone(),
+            PhysicalSize::new(config.width, config.height),
+            config.format,
+            &render_pipelines.hover_bind_group_layout,
+        );
+
         // Create the scrollbar
-        let scrollbar = Scrollbar::new(&device, &config);
+        let scrollbar = Scrollbar::new(&device, &config, &render_pipelines.hover_bind_group_layout);
 
         // Create text processor with default values
         let text_processor = TextProcessor::new(8.0, 20.0, 4.0);
@@ -239,18 +252,13 @@ impl WindowState {
             render_pipelines,
             text_window,
             button_manager,
+            button_panel,
             text_processor,
             layout_manager,
 
             // Scrollbar and scroll state
             scrollbar,
-            scroll_offset: 0.0,
-            max_scroll_offset: 0.0,
-            target_scroll_offset: 0.0,
-
-            // Auto-scroll control
-            auto_scroll: true,
-            last_transcript_len: 0,
+            scroll_state: ScrollState::new(),
 
             // Event handler
             event_handler,
@@ -273,6 +281,11 @@ impl WindowState {
             last_frame_time: None,
             target_frame_duration,
             present_mode,
+
+            // Hover animation state
+            hover_animation_progress: 0.0,
+            is_hovering: false,
+            last_hover_update: std::time::Instant::now(),
         }
     }
 
@@ -292,6 +305,7 @@ impl WindowState {
 
             self.text_window.resize(PhysicalSize::new(width, height));
             self.button_manager.resize(PhysicalSize::new(width, height));
+            self.button_panel.resize(PhysicalSize::new(width, height));
         }
     }
 
@@ -332,6 +346,21 @@ impl WindowState {
             self.button_manager.set_transcription_mode(current_mode);
             self.last_known_mode = current_mode;
         }
+
+        // Update hover animation state
+        let now = std::time::Instant::now();
+        let delta_time = now.duration_since(self.last_hover_update).as_secs_f32();
+        self.last_hover_update = now;
+
+        // Smooth animation: 0.0 to 1.0 over ~300ms
+        let animation_speed = 3.5; // Units per second
+        if self.event_handler.hovering_transcript {
+            // Fade in when hovering
+            self.hover_animation_progress = (self.hover_animation_progress + delta_time * animation_speed).min(1.0);
+        } else {
+            // Fade out when not hovering
+            self.hover_animation_progress = (self.hover_animation_progress - delta_time * animation_speed).max(0.0);
+        }
         let output = self.surface.get_current_texture().unwrap();
         let view = output
             .texture
@@ -345,6 +374,13 @@ impl WindowState {
 
         // First clear the screen to transparent
         self.render_pipelines.draw_background(&mut encoder, &view);
+
+        // Update hover animation uniform buffer
+        self.queue.write_buffer(
+            &self.render_pipelines.hover_uniform_buffer,
+            0,
+            bytemuck::cast_slice(&[self.hover_animation_progress]),
+        );
 
         // Draw the rounded rectangle background for the spectrogram only
         self.render_pipelines.draw_spectrogram_background(
@@ -402,8 +438,7 @@ impl WindowState {
                     display_text = "Sonori is ready".to_string();
                 }
                 is_speaking = false;
-                self.max_scroll_offset = 0.0;
-                self.last_transcript_len = 0;
+                self.scroll_state.reset();
                 need_scrollbar = false;
                 text_area_width = self.layout_manager.calculate_text_area_width(false);
                 self.scrollbar.max_scroll_offset = 0.0;
@@ -441,9 +476,9 @@ impl WindowState {
         }
 
         // Check if transcript has changed - only when recording
-        let transcript_changed = is_recording && display_text.len() != self.last_transcript_len;
+        let _transcript_changed = self.scroll_state.transcript_changed(display_text.len(), is_recording);
         if is_recording {
-            self.last_transcript_len = display_text.len();
+            self.scroll_state.update_transcript_len(display_text.len());
         }
 
         // Calculate text layout using the text processor
@@ -460,33 +495,20 @@ impl WindowState {
             .layout_manager
             .calculate_text_area_width(need_scrollbar);
 
-        self.max_scroll_offset = layout_info.max_scroll_offset;
-        self.scroll_offset = self.scroll_offset.min(self.max_scroll_offset);
-        self.scrollbar.max_scroll_offset = self.max_scroll_offset;
-        self.scrollbar.scroll_offset = self.scroll_offset;
-        self.scrollbar.auto_scroll = self.event_handler.auto_scroll;
+        // Update scroll state
+        self.scroll_state.set_max_scroll_offset(layout_info.max_scroll_offset);
+        self.scroll_state.auto_scroll = self.event_handler.auto_scroll;
 
-        if self.auto_scroll {
-            // Set target to bottom
-            self.target_scroll_offset = self.max_scroll_offset;
+        // Update with auto-scroll animation
+        self.scroll_state.update_with_auto_scroll();
 
-            // Smoothly interpolate towards target (20% per frame)
-            let lerp_factor = 0.2;
-            self.scroll_offset += (self.target_scroll_offset - self.scroll_offset) * lerp_factor;
-
-            // Snap to target when very close to avoid infinite approach
-            if (self.target_scroll_offset - self.scroll_offset).abs() < 0.5 {
-                self.scroll_offset = self.target_scroll_offset;
-            }
-
-            self.scrollbar.scroll_offset = self.scroll_offset;
-        } else {
-            // When not auto-scrolling, target follows current position
-            self.target_scroll_offset = self.scroll_offset;
-        }
+        // Sync scrollbar state
+        self.scrollbar.max_scroll_offset = self.scroll_state.max_scroll_offset;
+        self.scrollbar.scroll_offset = self.scroll_state.scroll_offset;
+        self.scrollbar.auto_scroll = self.scroll_state.auto_scroll;
 
         // Get text position from the layout manager
-        let (text_x, text_y) = self.layout_manager.get_text_position(self.scroll_offset);
+        let (text_x, text_y) = self.layout_manager.get_text_position(self.scroll_state.scroll_offset);
 
         // Calculate text scale with constrained growth to keep text smaller
         let base_width = 240.0;
@@ -513,6 +535,7 @@ impl WindowState {
             text_y,
             text_scale,
             text_color,
+            &self.render_pipelines.hover_bind_group,
         );
 
         // Draw scrollbar only if needed
@@ -524,14 +547,28 @@ impl WindowState {
                 self.config.width,
                 text_area_height,
                 self.gap,
+                &self.render_pipelines.hover_bind_group,
             );
         }
+
+        // Update button panel animation based on hover state
+        self.button_panel.set_visible(self.event_handler.hovering_transcript);
+        self.button_panel.update();
 
         // Render the buttons after the text - only when hovering over transcript
         // First make sure the RecordToggle button texture is up-to-date
         if self.event_handler.hovering_transcript {
             // Update RecordToggle button texture based on recording state
             self.button_manager.update_record_toggle_button_texture();
+
+            // Get button panel bounds from button manager
+            let bottom_button_bounds = self.button_manager.get_button_panel_bounds();
+            let close_button_bounds = self.button_manager.get_close_button_panel_bounds();
+
+            // Render button panel backgrounds before buttons
+            // Two separate panels: one for bottom buttons, one for close button
+            self.button_panel.render_with_bounds(&view, &mut encoder, bottom_button_bounds, &self.render_pipelines.hover_bind_group);
+            self.button_panel.render_with_bounds(&view, &mut encoder, close_button_bounds, &self.render_pipelines.hover_bind_group);
 
             // Only render buttons when hovering over transcript area
             (&mut self.button_manager).render(&view, &mut encoder, true, &self.queue);
@@ -553,10 +590,10 @@ impl WindowState {
 
     pub fn handle_scroll(&mut self, delta: MouseScrollDelta) {
         self.event_handler
-            .handle_scroll(&mut self.scroll_offset, self.max_scroll_offset, delta);
-        self.auto_scroll = self.event_handler.auto_scroll;
-        self.scrollbar.auto_scroll = self.auto_scroll;
-        self.scrollbar.scroll_offset = self.scroll_offset;
+            .handle_scroll(&mut self.scroll_state.scroll_offset, self.scroll_state.max_scroll_offset, delta);
+        self.scroll_state.auto_scroll = self.event_handler.auto_scroll;
+        self.scrollbar.auto_scroll = self.scroll_state.auto_scroll;
+        self.scrollbar.scroll_offset = self.scroll_state.scroll_offset;
         self.window.request_redraw();
     }
 
@@ -564,7 +601,7 @@ impl WindowState {
         // Calculate text area dimensions
         let text_area_width = self
             .layout_manager
-            .calculate_text_area_width(self.max_scroll_offset > 0.0);
+            .calculate_text_area_width(self.scroll_state.needs_scrollbar());
         let text_area_height = self.layout_manager.get_text_area_height();
 
         // Get window size
@@ -603,9 +640,9 @@ impl WindowState {
             position,
             &mut self.button_manager,
             &self.audio_data,
-            &mut self.last_transcript_len,
-            &mut self.scroll_offset,
-            &mut self.max_scroll_offset,
+            &mut self.scroll_state.last_transcript_len,
+            &mut self.scroll_state.scroll_offset,
+            &mut self.scroll_state.max_scroll_offset,
             &self.running,
             event_loop,
         );
@@ -622,9 +659,9 @@ impl WindowState {
     pub fn reset_transcript(&mut self) {
         EventHandler::reset_transcript(
             &self.audio_data,
-            &mut self.last_transcript_len,
-            &mut self.scroll_offset,
-            &mut self.max_scroll_offset,
+            &mut self.scroll_state.last_transcript_len,
+            &mut self.scroll_state.scroll_offset,
+            &mut self.scroll_state.max_scroll_offset,
         );
     }
 

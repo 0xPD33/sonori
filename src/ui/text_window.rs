@@ -15,6 +15,7 @@ impl TextWindow {
         queue: &wgpu::Queue,
         config: &wgpu::SurfaceConfiguration,
         size: PhysicalSize<u32>,
+        hover_bind_group_layout: &wgpu::BindGroupLayout,
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Text Window Shader"),
@@ -23,7 +24,7 @@ impl TextWindow {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Text Window Pipeline Layout"),
-            bind_group_layouts: &[],
+            bind_group_layouts: &[hover_bind_group_layout],
             push_constant_ranges: &[],
         });
 
@@ -108,6 +109,7 @@ impl TextWindow {
         text_y: f32,
         text_scale: f32,
         text_color: [f32; 4],
+        hover_bind_group: &wgpu::BindGroup,
     ) {
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Text Window Pass"),
@@ -134,6 +136,7 @@ impl TextWindow {
         );
 
         render_pass.set_pipeline(&self.pipeline);
+        render_pass.set_bind_group(0, hover_bind_group, &[]);
         render_pass.set_vertex_buffer(0, self.vertices.slice(..));
         render_pass.draw(0..4, 0..1);
 

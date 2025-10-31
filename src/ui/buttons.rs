@@ -1229,4 +1229,89 @@ impl ButtonManager {
             }
         }
     }
+
+    /// Get the bounding box for the bottom button panel (excludes Close button)
+    /// Returns (x, y, width, height) in pixels
+    pub fn get_button_panel_bounds(&self) -> Option<(f32, f32, f32, f32)> {
+        // Get the button order based on current mode
+        let button_order = match self.transcription_mode {
+            TranscriptionMode::RealTime => {
+                vec![
+                    ButtonType::Pause,
+                    ButtonType::Copy,
+                    ButtonType::Reset,
+                    ButtonType::ModeToggle,
+                ]
+            }
+            TranscriptionMode::Manual => {
+                vec![
+                    ButtonType::RecordToggle,
+                    ButtonType::Copy,
+                    ButtonType::Reset,
+                    ButtonType::ModeToggle,
+                ]
+            }
+        };
+
+        // Filter to only buttons that exist
+        let bottom_buttons: Vec<_> = button_order
+            .into_iter()
+            .filter_map(|bt| self.buttons.get(&bt))
+            .collect();
+
+        if bottom_buttons.is_empty() {
+            return None;
+        }
+
+        // Find min/max x and y coordinates for bottom buttons only
+        let mut min_x = f32::MAX;
+        let mut min_y = f32::MAX;
+        let mut max_x = f32::MIN;
+        let mut max_y = f32::MIN;
+
+        for button in &bottom_buttons {
+            let x = button.position.0 as f32;
+            let y = button.position.1 as f32;
+            let width = button.size.0 as f32;
+            let height = button.size.1 as f32;
+
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x + width);
+            max_y = max_y.max(y + height);
+        }
+
+        // Add padding around the buttons
+        const PADDING: f32 = 4.0;
+
+        // Clamp to ensure viewport bounds are valid (non-negative and within window)
+        let x = (min_x - PADDING).max(0.0);
+        let y = (min_y - PADDING).max(0.0);
+        let width = (max_x - min_x + (PADDING * 2.0)).min(self.window_width as f32 - x);
+        let height = (max_y - min_y + (PADDING * 2.0)).min(self.window_height as f32 - y);
+
+        Some((x, y, width, height))
+    }
+
+    /// Get the bounding box for the Close button panel
+    /// Returns (x, y, width, height) in pixels
+    pub fn get_close_button_panel_bounds(&self) -> Option<(f32, f32, f32, f32)> {
+        let close_button = self.buttons.get(&ButtonType::Close)?;
+
+        let x = close_button.position.0 as f32;
+        let y = close_button.position.1 as f32;
+        let width = close_button.size.0 as f32;
+        let height = close_button.size.1 as f32;
+
+        // Add padding around the close button
+        const PADDING: f32 = 4.0;
+
+        // Clamp to ensure viewport bounds are valid (non-negative and within window)
+        let panel_x = (x - PADDING).max(0.0);
+        let panel_y = (y - PADDING).max(0.0);
+        let panel_width = (width + (PADDING * 2.0)).min(self.window_width as f32 - panel_x);
+        let panel_height = (height + (PADDING * 2.0)).min(self.window_height as f32 - panel_y);
+
+        Some((panel_x, panel_y, panel_width, panel_height))
+    }
 }

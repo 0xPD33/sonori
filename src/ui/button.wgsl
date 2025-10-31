@@ -76,7 +76,9 @@ fn vs_close(@location(0) position: vec2<f32>) -> VertexOutput {
 fn fs_copy(in: VertexOutput) -> @location(0) vec4<f32> {
     // Sample the texture
     var color = textureSample(t_diffuse, s_diffuse, in.tex_coords);
-    
+    // Make button semi-transparent (85% opacity)
+    color.a *= 0.85;
+
     return color;
 }
 
@@ -85,7 +87,9 @@ fn fs_copy(in: VertexOutput) -> @location(0) vec4<f32> {
 fn fs_reset(in: VertexOutput) -> @location(0) vec4<f32> {
     // Sample the texture
     var color = textureSample(t_diffuse, s_diffuse, in.tex_coords);
-    
+    // Make button semi-transparent (85% opacity)
+    color.a *= 0.85;
+
     return color;
 }
 
@@ -94,7 +98,9 @@ fn fs_reset(in: VertexOutput) -> @location(0) vec4<f32> {
 fn fs_pause(in: VertexOutput) -> @location(0) vec4<f32> {
     // Sample the texture
     var color = textureSample(t_diffuse, s_diffuse, in.tex_coords);
-    
+    // Make button semi-transparent (85% opacity)
+    color.a *= 0.85;
+
     return color;
 }
 
@@ -116,10 +122,10 @@ fn fs_close(in: VertexOutput) -> @location(0) vec4<f32> {
     
     // If we're on either diagonal, color is white
     if (on_diagonal1 || on_diagonal2) {
-        // Pure white color for the X
-        color = vec4<f32>(1.0, 1.0, 1.0, 0.9);
+        // White color for the X at 50% opacity
+        color = vec4<f32>(1.0, 1.0, 1.0, 0.5);
     }
-    
+
     return color;
 }
 
@@ -161,34 +167,34 @@ fn fs_mode_toggle(in: VertexOutput) -> @location(0) vec4<f32> {
         
         // If we're on any part of the M, color is white
         if (on_left_vertical || on_right_vertical || on_left_diagonal || on_right_diagonal) {
-            color = vec4<f32>(1.0, 1.0, 1.0, 0.9);
+            color = vec4<f32>(1.0, 1.0, 1.0, 0.85);
         }
     } else {
         // Draw letter "R" - consists of vertical line, top horizontal, middle horizontal, and diagonal
         let left_x = 0.2;
         let right_x = 0.7;
         let middle_x = 0.45;
-        
+
         // Left vertical line (full height)
         let on_left_vertical = abs(uv.x - left_x) < thickness && uv.y > 0.1 && uv.y < 0.9;
-        
+
         // Top horizontal line
         let on_top_horizontal = abs(uv.y - 0.1) < thickness && uv.x >= left_x && uv.x <= right_x;
-        
+
         // Middle horizontal line (shorter)
         let on_middle_horizontal = abs(uv.y - 0.5) < thickness && uv.x >= left_x && uv.x <= middle_x;
-        
+
         // Right vertical line (top half only)
         let on_right_vertical = abs(uv.x - right_x) < thickness && uv.y > 0.1 && uv.y < 0.5;
-        
+
         // Diagonal line from middle to bottom-right
         let diag_slope = (0.9 - 0.5) / (right_x - middle_x);
         let diag_y = 0.5 + diag_slope * (uv.x - middle_x);
         let on_diagonal = abs(uv.y - diag_y) < thickness && uv.x >= middle_x && uv.x <= right_x && uv.y >= 0.5 && uv.y <= 0.9;
-        
+
         // If we're on any part of the R, color is white
         if (on_left_vertical || on_top_horizontal || on_middle_horizontal || on_right_vertical || on_diagonal) {
-            color = vec4<f32>(1.0, 1.0, 1.0, 0.9);
+            color = vec4<f32>(1.0, 1.0, 1.0, 0.85);
         }
     }
     

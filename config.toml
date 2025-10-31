@@ -124,6 +124,7 @@ normalize_whitespace = true           # Normalize whitespace (collapse multiple 
 [debug_config]
 log_stats_enabled = false             # Enable detailed performance logging
 save_manual_audio_debug = true        # Save manual mode audio to WAV files for debugging
+recording_dir = "recordings"          # Directory to save debug recordings
 
 # =============================================================================
 # EXAMPLE CONFIGURATIONS

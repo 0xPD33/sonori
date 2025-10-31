@@ -151,6 +151,8 @@ pub struct DebugConfig {
     pub log_stats_enabled: bool,
     /// Whether to save manual mode audio to WAV files for debugging
     pub save_manual_audio_debug: bool,
+    /// Directory to save debug recordings (default: "recordings")
+    pub recording_dir: String,
 }
 
 /// Configuration for sound settings
@@ -168,6 +170,7 @@ impl Default for DebugConfig {
         Self {
             log_stats_enabled: false,
             save_manual_audio_debug: false,
+            recording_dir: "recordings".to_string(),
         }
     }
 }

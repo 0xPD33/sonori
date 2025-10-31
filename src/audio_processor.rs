@@ -1,6 +1,7 @@
 use hound;
 use parking_lot::{Mutex, RwLock};
 use std::collections::VecDeque;
+use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -507,20 +508,28 @@ impl AudioProcessor {
         self.current_session_id.clone()
     }
 
-    /// Save audio to WAV file in the project root directory (only if debug flag is enabled)
+    /// Save audio to WAV file in the configured directory (only if debug flag is enabled)
     pub fn save_audio_to_wav(&self, audio_samples: &[f32], sample_rate: u32) {
         // Only save if debug option is enabled
         if !self.debug_config.save_manual_audio_debug {
             return;
         }
 
+        let recording_dir = &self.debug_config.recording_dir;
+
+        // Create directory if it doesn't exist
+        if let Err(e) = fs::create_dir_all(recording_dir) {
+            eprintln!("Failed to create recording directory '{}': {}", recording_dir, e);
+            return;
+        }
+
         let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
         let filename = format!("recording_{}.wav", timestamp);
-        let path = Path::new(&filename);
+        let path = Path::new(recording_dir).join(&filename);
 
         // Create WAV writer
         match hound::WavWriter::create(
-            path,
+            &path,
             hound::WavSpec {
                 channels: 1,
                 sample_rate,
@@ -539,7 +548,7 @@ impl AudioProcessor {
                 }
 
                 match writer.finalize() {
-                    Ok(_) => println!("Audio saved to: {}", filename),
+                    Ok(_) => println!("Audio saved to: {}", path.display()),
                     Err(e) => eprintln!("Error finalizing WAV file: {}", e),
                 }
             }

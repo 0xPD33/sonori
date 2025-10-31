@@ -11,7 +11,7 @@ pub struct Scrollbar {
 }
 
 impl Scrollbar {
-    pub fn new(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> Self {
+    pub fn new(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration, hover_bind_group_layout: &wgpu::BindGroupLayout) -> Self {
         // Create vertices for the scrollbar
         let scrollbar_vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Scrollbar Vertices"),
@@ -39,7 +39,7 @@ impl Scrollbar {
         let scrollbar_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Scrollbar Pipeline Layout"),
-                bind_group_layouts: &[],
+                bind_group_layouts: &[hover_bind_group_layout],
                 push_constant_ranges: &[],
             });
 
@@ -105,6 +105,7 @@ impl Scrollbar {
         window_width: u32,
         text_area_height: u32,
         gap: u32,
+        hover_bind_group: &wgpu::BindGroup,
     ) {
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Scrollbar Render Pass"),
@@ -135,6 +136,7 @@ impl Scrollbar {
 
         // Draw scrollbar track
         render_pass.set_pipeline(&self.pipeline);
+        render_pass.set_bind_group(0, hover_bind_group, &[]);
         render_pass.set_vertex_buffer(0, self.vertices.slice(..4 * 8));
         render_pass.draw(0..4, 0..1);
 
@@ -173,6 +175,7 @@ impl Scrollbar {
 
         // Draw scrollbar thumb
         render_pass.set_pipeline(&self.pipeline);
+        render_pass.set_bind_group(0, hover_bind_group, &[]);
         render_pass.set_vertex_buffer(0, self.vertices.slice(4 * 8..));
         render_pass.draw(0..4, 0..1);
 
@@ -188,6 +191,7 @@ impl Scrollbar {
             );
 
             render_pass.set_pipeline(&self.pipeline);
+            render_pass.set_bind_group(0, hover_bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.vertices.slice(4 * 8..));
             render_pass.draw(0..4, 0..1);
         }

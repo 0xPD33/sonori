@@ -5,6 +5,9 @@ use winit::dpi::PhysicalSize;
 pub struct RenderPipelines {
     pub rounded_rect_pipeline: wgpu::RenderPipeline,
     pub rounded_rect_vertices: wgpu::Buffer,
+    pub hover_uniform_buffer: wgpu::Buffer,
+    pub hover_bind_group: wgpu::BindGroup,
+    pub hover_bind_group_layout: wgpu::BindGroupLayout,
 }
 
 impl RenderPipelines {
@@ -15,11 +18,26 @@ impl RenderPipelines {
             source: wgpu::ShaderSource::Wgsl(include_str!("rounded_rect.wgsl").into()),
         });
 
+        // Create bind group layout for hover uniform
+        let hover_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Hover Bind Group Layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+
         // Create rounded rect pipeline layout
         let rounded_rect_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Rounded Rect Pipeline Layout"),
-                bind_group_layouts: &[],
+                bind_group_layouts: &[&hover_bind_group_layout],
                 push_constant_ranges: &[],
             });
 
@@ -91,9 +109,30 @@ impl RenderPipelines {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
+        // Create uniform buffer for hover animation
+        // Start with opacity_multiplier = 0.0 (base opacity)
+        let hover_uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Hover Uniform Buffer"),
+            contents: bytemuck::cast_slice(&[0.0f32]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        // Create bind group for hover uniform
+        let hover_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Hover Bind Group"),
+            layout: &hover_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: hover_uniform_buffer.as_entire_binding(),
+            }],
+        });
+
         Self {
             rounded_rect_pipeline,
             rounded_rect_vertices,
+            hover_uniform_buffer,
+            hover_bind_group,
+            hover_bind_group_layout,
         }
     }
 
@@ -154,6 +193,7 @@ impl RenderPipelines {
         );
 
         render_pass.set_pipeline(&self.rounded_rect_pipeline);
+        render_pass.set_bind_group(0, &self.hover_bind_group, &[]);
         render_pass.set_vertex_buffer(0, self.rounded_rect_vertices.slice(..));
         render_pass.draw(0..4, 0..1); // 4 vertices for the quad
     }
