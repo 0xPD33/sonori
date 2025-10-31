@@ -25,6 +25,9 @@ pub struct AudioSegment {
     /// Session ID to track which session this segment belongs to
     /// Realtime mode uses Some("realtime"), manual mode uses session ID
     pub session_id: Option<String>,
+    /// Explicit flag indicating if this is a manual transcription segment
+    /// Replaces duration-based heuristic (>5s) for better accuracy
+    pub is_manual: bool,
 }
 
 /// Configuration for Voice Activity Detection
@@ -327,6 +330,7 @@ impl SileroVad {
                     end_time: new_time_offset,
                     sample_rate: self.config.sample_rate,
                     session_id: None, // Will be set by AudioProcessor
+                    is_manual: false, // VAD-generated segments are always realtime
                 };
 
                 if !segment.samples.is_empty() {
@@ -350,8 +354,12 @@ impl SileroVad {
     ///
     /// Asymmetric smoothing: raw_prob for fast onset detection, smoothed_prob for noise robustness
     fn update_vad_state(&mut self, raw_prob: f32, smoothed_prob: f32) {
+        // Cache config values to reduce field accesses (hot path optimization)
         let threshold = self.config.threshold;
         let speech_end_threshold = self.config.speech_end_threshold;
+        let hangbefore_frames = self.config.hangbefore_frames;
+        let hangover_frames = self.config.hangover_frames;
+        let silence_tolerance_frames = self.config.silence_tolerance_frames;
 
         // Asymmetric smoothing strategy:
         // - Silence → PossibleSpeech: Use raw_prob for fast onset detection
@@ -368,10 +376,6 @@ impl SileroVad {
         let is_starting_speech = detection_prob > threshold;
         let is_continuing_speech = detection_prob > speech_end_threshold;
 
-        let hangbefore_frames = self.config.hangbefore_frames;
-        let hangover_frames = self.config.hangover_frames;
-        let silence_tolerance_frames = self.config.silence_tolerance_frames;
-
         match self.current_state {
             VadState::Silence => {
                 // Entering speech requires exceeding the higher threshold
@@ -387,20 +391,21 @@ impl SileroVad {
                     self.silence_frames = 0;
 
                     if self.frames_in_state >= hangbefore_frames {
-                        // Precompute values needed for start time calculation
+                        // Optimize: Only compute lookback time once we confirm speech
+                        // Cache frequently used values to reduce field access
                         let hop = self.config.hop_samples.max(1);
                         let frame_samples = self.config.frame_size;
-                        let total_samples = if hangbefore_frames == 0 {
+
+                        // Calculate time offset for hangbefore frames
+                        let lookback_samples = if hangbefore_frames == 0 {
                             0
                         } else {
                             frame_samples + (hangbefore_frames - 1) * hop
                         };
-                        let frames_to_time = total_samples as f64 / self.sample_rate_f64;
+                        let lookback_time = lookback_samples as f64 / self.sample_rate_f64;
 
                         // Set speech start time, accounting for the hangbefore frames
-                        let start_time = (self.current_time - frames_to_time).max(0.0);
-
-                        self.speech_start_time = Some(start_time);
+                        self.speech_start_time = Some((self.current_time - lookback_time).max(0.0));
                         self.current_state = VadState::Speech;
                         self.frames_in_state = 0;
                     }
@@ -455,6 +460,7 @@ impl SileroVad {
                 end_time: self.current_time,
                 sample_rate: self.config.sample_rate,
                 session_id: None, // Will be set by AudioProcessor
+                is_manual: false, // VAD-generated segments are always realtime
             };
 
             if !segment.samples.is_empty() {
@@ -636,6 +642,7 @@ impl SileroVad {
                 end_time: self.current_time,
                 sample_rate: self.config.sample_rate,
                 session_id: None, // Will be set by AudioProcessor
+                is_manual: false, // VAD-generated segments are always realtime
             })
         } else {
             None

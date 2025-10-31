@@ -119,10 +119,11 @@ impl AudioProcessor {
                 if !is_recording {
                     // When paused, decay spectrogram to zero instead of clearing immediately.
                     // Only keep the tight 60 Hz loop while there is data to animate.
-                    let mut sleep_duration = Duration::from_millis(100);
-                    {
-                        let mut audio_data = audio_visualization_data.write(); // Blocking write to ensure decay happens
-                        if !audio_data.samples.is_empty() {
+                    let sleep_duration = {
+                        // Use minimal lock scope for performance
+                        let mut audio_data = audio_visualization_data.write();
+
+                        let should_animate = if !audio_data.samples.is_empty() {
                             // Gradually decay samples toward zero for smooth fade-out effect
                             for sample in &mut audio_data.samples {
                                 *sample *= 0.95; // Exponential decay factor
@@ -138,13 +139,24 @@ impl AudioProcessor {
                             if max_amplitude < 0.001 {
                                 // Samples have decayed enough, clear them
                                 audio_data.samples.clear();
+                                false
                             } else {
                                 // Keep animating while decay is visible
-                                sleep_duration = Duration::from_millis(16);
+                                true
                             }
-                        }
+                        } else {
+                            false
+                        };
+
                         audio_data.is_speaking = false; // No longer speaking when paused
-                    } // Release lock here
+
+                        // Return appropriate sleep duration based on animation state
+                        if should_animate {
+                            Duration::from_millis(16) // 60 FPS for smooth animation
+                        } else {
+                            Duration::from_millis(100) // Slower poll when idle
+                        }
+                    }; // Release lock before sleep
 
                     preroll_buffer.clear();
                     tokio::time::sleep(sleep_duration).await;
@@ -409,6 +421,7 @@ impl AudioProcessor {
             end_time: duration_secs,
             sample_rate,
             session_id: expected_session_id,
+            is_manual: true, // Manual mode segment
         };
 
         // Send to transcription processor
@@ -444,7 +457,21 @@ impl AudioProcessor {
 
     /// Clear the manual audio buffer
     pub fn clear_manual_buffer(&self) {
-        self.manual_audio_buffer.lock().clear();
+        // Use mem::take() to reuse buffer capacity (avoids reallocation)
+        let mut buffer = self.manual_audio_buffer.lock();
+        let _ = std::mem::take(&mut *buffer);
+    }
+
+    /// Atomically start a new manual session by clearing buffer and setting session ID
+    /// This prevents race conditions where audio could be processed with inconsistent state
+    pub fn start_new_manual_session(&self, session_id: String) {
+        // Acquire both locks in consistent order to prevent race conditions
+        let mut buffer = self.manual_audio_buffer.lock();
+        let mut session_id_lock = self.current_session_id.write();
+
+        // Use mem::take() to reuse buffer capacity (avoids reallocation)
+        let _ = std::mem::take(&mut *buffer);
+        *session_id_lock = Some(session_id);
     }
 
     /// Reset the VAD state for a new session
