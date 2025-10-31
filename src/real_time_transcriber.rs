@@ -161,6 +161,7 @@ pub struct RealTimeTranscriber {
 
     // Model and parameters
     backend: Arc<Mutex<Option<TranscriptionBackend>>>,
+    backend_ready: Arc<AtomicBool>,
     language: String,
 
     // Processing components
@@ -270,6 +271,8 @@ impl RealTimeTranscriber {
         };
 
         let backend_clone = backend.clone();
+        let backend_ready = Arc::new(AtomicBool::new(false));
+        let backend_ready_for_task = backend_ready.clone();
         let model_path_clone = model_path.clone();
         let backend_type = app_config.backend_config.backend.clone();
         let backend_config = app_config.backend_config.clone();
@@ -297,9 +300,12 @@ impl RealTimeTranscriber {
                         capabilities.supports_streaming
                     );
                     *backend_clone.lock() = Some(b);
+                    backend_ready_for_task.store(true, Ordering::Relaxed);
+                    println!("Backend ready for transcription");
                 }
                 Err(e) => {
                     eprintln!("ERROR: Failed to load backend: {}", e);
+                    eprintln!("Backend will not be available for transcription");
                 }
             }
         });
@@ -320,6 +326,7 @@ impl RealTimeTranscriber {
             running,
             recording,
             backend,
+            backend_ready,
             language: app_config.general_config.language.clone(),
             audio_processor,
             transcript_history,
@@ -377,6 +384,7 @@ impl RealTimeTranscriber {
         // Initialize transcription processor
         let transcription_processor = TranscriptionProcessor::new(
             self.backend.clone(),
+            self.backend_ready.clone(),
             self.language.clone(),
             self.running.clone(),
             self.transcription_done_tx.clone(),

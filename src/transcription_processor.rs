@@ -13,6 +13,7 @@ use crate::transcription_stats::TranscriptionStats;
 /// Handles the processing of audio segments for transcription
 pub struct TranscriptionProcessor {
     backend: Arc<Mutex<Option<TranscriptionBackend>>>,
+    backend_ready: Arc<AtomicBool>,
     language: String,
     running: Arc<AtomicBool>,
     transcription_done_tx: mpsc::UnboundedSender<()>,
@@ -22,6 +23,7 @@ pub struct TranscriptionProcessor {
 impl TranscriptionProcessor {
     pub fn new(
         backend: Arc<Mutex<Option<TranscriptionBackend>>>,
+        backend_ready: Arc<AtomicBool>,
         language: String,
         running: Arc<AtomicBool>,
         transcription_done_tx: mpsc::UnboundedSender<()>,
@@ -29,6 +31,7 @@ impl TranscriptionProcessor {
     ) -> Self {
         Self {
             backend,
+            backend_ready,
             language,
             running,
             transcription_done_tx,
@@ -164,6 +167,7 @@ impl TranscriptionProcessor {
         transcript_tx: broadcast::Sender<crate::real_time_transcriber::TranscriptionMessage>,
     ) -> tokio::task::JoinHandle<()> {
         let backend = self.backend.clone();
+        let backend_ready = self.backend_ready.clone();
         let language = self.language.clone();
         let running = self.running.clone();
         let transcription_done_tx = self.transcription_done_tx.clone();
@@ -175,6 +179,22 @@ impl TranscriptionProcessor {
         // Spawn a dedicated task for transcription
         tokio::spawn(async move {
             println!("Transcription task started");
+
+            // Wait for backend to be ready before processing segments
+            println!("Waiting for transcription backend to initialize...");
+            let backend_timeout = std::time::Duration::from_secs(10);
+            let start_wait = std::time::Instant::now();
+
+            while !backend_ready.load(Ordering::Relaxed) {
+                if start_wait.elapsed() > backend_timeout {
+                    eprintln!("ERROR: Backend failed to initialize within timeout");
+                    eprintln!("Transcription will not be available");
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+
+            println!("Backend ready, starting transcription processing");
 
             // When recording is false, no segments are received from AudioProcessor,
             // so this task naturally idles until recording is resumed
@@ -239,8 +259,8 @@ impl TranscriptionProcessor {
 
                         let thread_start_time = Instant::now();
 
-                        // Check if this is a manual mode segment (larger duration indicates batch processing)
-                        let is_manual_segment = segment.end_time - segment.start_time > 5.0;
+                        // Use explicit flag to determine if this is a manual mode segment
+                        let is_manual_segment = segment.is_manual;
 
                         // Process in a separate task to avoid blocking
                         let backend_clone = backend.clone();
@@ -347,7 +367,8 @@ impl TranscriptionProcessor {
 
         // For very long segments, we might want to split them into smaller chunks
         // to avoid memory issues and improve processing reliability
-        if duration > 30.0 {
+        let chunk_threshold = app_config.manual_mode_config.chunk_duration_seconds as f64;
+        if duration >= chunk_threshold {
             println!("Large manual segment detected, processing in chunks...");
             return Self::process_large_manual_segment(backend, segment, language, stats);
         }
@@ -373,7 +394,13 @@ impl TranscriptionProcessor {
     ) -> String {
         let app_config = read_app_config();
         let sample_rate = segment.sample_rate;
-        let chunk_duration_samples = 30 * sample_rate; // 30 seconds per chunk (Whisper training window)
+        let chunk_duration_seconds = app_config.manual_mode_config.chunk_duration_seconds;
+        let chunk_duration_samples = (chunk_duration_seconds * sample_rate as f32) as usize;
+
+        println!(
+            "Using chunk duration of {:.1}s (config: chunk_duration_seconds={:.1})",
+            chunk_duration_seconds, chunk_duration_seconds
+        );
 
         // Get overlap settings from config
         let use_overlap = app_config.manual_mode_config.enable_chunk_overlap;
@@ -451,6 +478,7 @@ impl TranscriptionProcessor {
                 end_time: chunk_end_time,
                 sample_rate,
                 session_id: segment.session_id.clone(), // Inherit session ID from parent segment
+                is_manual: segment.is_manual, // Inherit is_manual flag from parent segment
             };
 
             println!(
