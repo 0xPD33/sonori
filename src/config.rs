@@ -97,8 +97,12 @@ pub struct ManualModeConfig {
     /// Whether to clear previous transcript when starting new session
     pub clear_on_new_session: bool,
 
+    /// Duration of each chunk in seconds (default: 29.0)
+    /// Note: 29s avoids edge case where duration == chunk_size hits token limits
+    pub chunk_duration_seconds: f32,
+
     /// Whether to enable chunk overlap for manual mode transcription (default: true)
-    /// When enabled, uses small overlap between 30-second chunks to catch boundary words
+    /// When enabled, uses small overlap between chunks to catch boundary words
     /// Overlap amount is controlled by chunk_overlap_seconds
     pub enable_chunk_overlap: bool,
 
@@ -108,7 +112,7 @@ pub struct ManualModeConfig {
     pub chunk_overlap_seconds: f32,
 
     /// EXPERIMENTAL: Disable chunking for manual mode transcription (default: false)
-    /// When enabled, processes entire recording as single segment (no 30-second limit)
+    /// When enabled, processes entire recording as single segment (no chunk limit)
     /// Note: May consume more memory for very long recordings
     /// Note: Whisper model was trained on 30-second chunks, very long audio may have issues
     pub disable_chunking: bool,
@@ -131,9 +135,10 @@ impl Default for ManualModeConfig {
         Self {
             max_recording_duration_secs: 120,
             clear_on_new_session: true,
-            enable_chunk_overlap: true, // Enable overlap by default
-            chunk_overlap_seconds: 0.5, // 0.5 second overlap (industry best practice)
-            disable_chunking: false,    // Chunking enabled by default
+            chunk_duration_seconds: 29.0, // 29s avoids edge case at exactly 30s boundary
+            enable_chunk_overlap: true,   // Enable overlap by default
+            chunk_overlap_seconds: 0.5,   // 0.5 second overlap (industry best practice)
+            disable_chunking: false,      // Chunking enabled by default
         }
     }
 }

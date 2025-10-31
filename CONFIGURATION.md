@@ -27,6 +27,7 @@ max_segment_count = 20            # Maximum number of speech segments to buffer
 [manual_mode_config]
 max_recording_duration_secs = 120 # Maximum recording time per session (2 minutes)
 clear_on_new_session = true       # Clear transcript when starting new session
+chunk_duration_seconds = 29.0     # Chunk size in seconds (29s recommended to avoid 30s boundary issues)
 enable_chunk_overlap = true       # Enable overlapping chunks for long sessions
 chunk_overlap_seconds = 0.5       # Overlap duration between chunks (seconds)
 disable_chunking = false          # Experimental: Disable chunking for no-limit mode
@@ -121,6 +122,27 @@ Recommended models:
 - `large-v3-turbo` - Fast large model (requires GPU acceleration enabled)
 
 For non-English languages, use the multilingual models (without `.en` suffix) and set the appropriate language code in the configuration.
+
+### Manual Mode Configuration
+
+Manual mode allows push-to-talk transcription with specialized chunking for longer recordings:
+
+#### Chunk Duration (`chunk_duration_seconds`)
+- **Default**: 29.0 seconds
+- **Recommended range**: 25-29 seconds
+- **Why not 30s?**: Whisper has a 224-token output limit per chunk. When recordings exactly match the chunk duration (30s), they can hit this limit with dense speech, causing transcription to cut off prematurely. Using 29s creates safer chunking boundaries.
+- **Effect**: Recordings longer than this value are automatically split into chunks for processing
+
+#### Chunk Overlap (`enable_chunk_overlap`, `chunk_overlap_seconds`)
+- **Purpose**: Prevents words at chunk boundaries from being cut off
+- **Default**: Enabled with 0.5 second overlap
+- **Recommended**: Keep enabled unless you experience repetition issues
+- **Range**: 0.1 to 1.0 seconds (avoid 2+ seconds to prevent hallucination)
+
+#### Other Options
+- `max_recording_duration_secs`: Maximum total recording length (default: 120 seconds)
+- `clear_on_new_session`: Whether to clear previous transcript when starting new session
+- `disable_chunking`: Experimental mode to process entire recording without chunks (may fail on long/dense speech)
 
 ### Display and Window Configuration
 

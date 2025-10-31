@@ -40,16 +40,17 @@ max_segment_count = 20                # Maximum number of speech segments to buf
 [manual_mode_config]
 max_recording_duration_secs = 120     # Maximum recording time per session (2 minutes)
 clear_on_new_session = true           # Clear transcript when starting new session
-enable_chunk_overlap = true            # Enable overlap between 30-second chunks (prevents word cutoff)
-chunk_overlap_seconds = 0.5            # Overlap duration in seconds (0.5s = industry best practice)
-disable_chunking = false               # EXPERIMENTAL: Process entire recording as single segment (no 30s limit)
+chunk_duration_seconds = 29.0         # Chunk size in seconds (see CONFIGURATION.md for why 29s vs 30s)
+enable_chunk_overlap = true           # Enable overlap between chunks (prevents word cutoff)
+chunk_overlap_seconds = 0.5           # Overlap duration in seconds
+disable_chunking = false              # EXPERIMENTAL: Process entire recording as single segment (no chunk limit)
 
 [vad_config]
 threshold = 0.10                      # Speech detection sensitivity (0.0-1.0, lower = more sensitive)
 speech_end_threshold = 0.08           # Lower threshold for speech continuation (hysteresis)
-hangbefore_frames = 5                 # Frames to wait before confirming speech start (50ms)
-hangover_frames = 30                  # Frames to wait after speech ends before cutting (300ms)
-silence_tolerance_frames = 8          # Frames of silence to tolerate during speech (80ms)
+hangbefore_frames = 5                 # Frames to wait before confirming speech start (1 frame = 10ms)
+hangover_frames = 30                  # Frames to wait after speech ends before cutting (1 frame = 10ms)
+silence_tolerance_frames = 8          # Frames of silence to tolerate during speech (1 frame = 10ms)
 speech_prob_smoothing = 0.3           # Exponential moving average smoothing factor
 
 [sound_config]
@@ -74,7 +75,7 @@ repetition_penalty = 1.25             # Penalty for repeated tokens
 [whisper_cpp_options]
 temperature = 0.2                     # Sampling temperature (0.0 = deterministic, higher = more creative)
 suppress_blank = true                 # Suppress blank outputs at beginning
-no_context = true                     # Disable context to prevent double transcriptions
+no_context = true                     # Disable context
 max_tokens = 0                        # Maximum tokens per segment (0 = auto)
 entropy_thold = 2.4                   # Entropy threshold for fallback sampling
 logprob_thold = -1.0                  # Log probability threshold for speech detection
@@ -122,7 +123,7 @@ normalize_whitespace = true           # Normalize whitespace (collapse multiple 
 
 [debug_config]
 log_stats_enabled = false             # Enable detailed performance logging
-save_manual_audio_debug = false        # Save manual mode audio to WAV files for debugging
+save_manual_audio_debug = true        # Save manual mode audio to WAV files for debugging
 
 # =============================================================================
 # EXAMPLE CONFIGURATIONS
