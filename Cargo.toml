@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 portaudio = "0.8.0"
-cpal = "0.15"
+cpal = "0.16"
 ct2rs = { version = "0.9.6", features = ["whisper"] }
 ndarray = "0.16.1"
 reqwest = { version = "0.12.14", features = ["stream", "json"] }
@@ -13,17 +13,17 @@ tokio = { version = "1.43.0", features = ["full"] }
 futures-util = "0.3.31"
 anyhow = "1.0.97"
 serde = { version = "1.0.218", features = ["derive"] }
-toml = "0.8.0"
+toml = "0.9.8"
 parking_lot = "0.12.1"
 clap = { version = "4.5.21", features = ["derive"] }
 winit = { version = "0.30.5", git = "https://github.com/SergioRibera/winit", branch = "layer_shell" }
-wgpu = "24.0.1"
-smithay-client-toolkit = "0.19.2"
+wgpu = "25.0.2"
+smithay-client-toolkit = "0.20.0"
 pollster = "0.4.0"
 rustfft = "6.1.0"
 bytemuck = { version = "1.18.0", features = ["derive"] }
-glyphon = "0.8.0"
-ashpd = { version = "0.11", default-features = false, features = ["tokio"] }
+glyphon = "0.9.0"
+ashpd = { version = "0.12", default-features = false, features = ["tokio"] }
 zbus = "5.0"
 xkbcommon = { version = "0.7", features = ["wayland"] }
 ort = { version = "2.0.0-rc.10", features = ["ndarray"] }

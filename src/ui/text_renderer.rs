@@ -140,7 +140,7 @@ impl TextRenderer {
         self.buffer.set_text(
             &mut self.font_system,
             text,
-            Attrs::new().family(Family::SansSerif).color(text_color),
+            &Attrs::new().family(Family::SansSerif).color(text_color),
             Shaping::Advanced,
         );
 

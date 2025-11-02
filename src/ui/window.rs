@@ -111,7 +111,7 @@ impl WindowState {
             compatible_surface: Some(&surface),
             force_fallback_adapter: false,
         }))
-        .unwrap_or_else(|| {
+        .unwrap_or_else(|_| {
             eprintln!("Failed to find a suitable GPU adapter");
             panic!("No suitable GPU adapter found");
         });
@@ -122,8 +122,8 @@ impl WindowState {
                 required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits::default(),
                 memory_hints: wgpu::MemoryHints::default(),
+                trace: wgpu::Trace::Off,
             },
-            None,
         ))
         .unwrap();
 
