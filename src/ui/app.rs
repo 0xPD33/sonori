@@ -4,18 +4,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use winit::{
     application::ApplicationHandler,
+    cursor::CursorIcon,
     dpi::{LogicalPosition, PhysicalSize},
     event::{ElementState, KeyEvent, Modifiers, WindowEvent},
     event_loop::{ActiveEventLoop, DeviceEvents, EventLoop},
     keyboard::{KeyCode, PhysicalKey},
-    monitor::VideoModeHandle,
-    platform::wayland::{
-        ActiveEventLoopExtWayland, MonitorHandleExtWayland, WindowAttributesExtWayland,
-    },
-    window::{CursorIcon, WindowAttributes, WindowId},
+    monitor::{MonitorHandle, VideoMode},
+    platform::wayland::ActiveEventLoopExtWayland,
+    window::{WindowAttributes, WindowId},
 };
 
-use smithay_client_toolkit::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
+use winit::platform::wayland::{Anchor, KeyboardInteractivity, Layer, WindowAttributesWayland};
 
 use super::common::AudioVisualizationData;
 use super::window::WindowState;
@@ -188,6 +187,7 @@ impl ApplicationHandler for WindowApp {
                 window_attributes.with_title("Sonori"),
                 1.0,
                 mode,
+                screen,
                 self.running.clone(),
                 self.recording.clone(),
                 *self.transcription_mode_ref.lock(),
@@ -303,7 +303,8 @@ fn create_window(
     ev: &dyn ActiveEventLoop,
     w: WindowAttributes,
     scale_factor: f64,
-    monitor_mode: VideoModeHandle,
+    monitor_mode: VideoMode,
+    monitor: MonitorHandle,
     running: Option<Arc<AtomicBool>>,
     recording: Option<Arc<AtomicBool>>,
     transcription_mode: crate::real_time_transcriber::TranscriptionMode,
@@ -338,33 +339,38 @@ fn create_window(
     let logical_size = dynamic_size.to_logical::<i32>(scale_factor);
 
     // Set the fixed size in the window attributes
-    let w = w.with_surface_size(logical_size);
+    let mut w = w.with_surface_size(logical_size);
 
     // TEMPORARY: Use OnDemand to restore Tab key functionality while debugging portal
     // TODO: Switch to None once portal works (None prevents window from stealing keys)
     let keyboard_mode = KeyboardInteractivity::OnDemand;
 
-    let w = if ev.is_wayland() {
-        // For Wayland, we need to specify the output (monitor)
-        w.with_anchor(Anchor::BOTTOM)
+    if ev.is_wayland() {
+        // For Wayland, create platform-specific attributes using WindowAttributesWayland
+        let wayland_attrs = WindowAttributesWayland::default()
+            .with_layer_shell()
+            .with_anchor(Anchor::BOTTOM)
             .with_layer(Layer::Overlay)
             .with_margin(MARGIN as i32, MARGIN as i32, MARGIN as i32, MARGIN as i32)
-            .with_output(monitor_mode.monitor().native_id())
-            .with_resizable(false)
-            .with_keyboard_interactivity(keyboard_mode)
+            .with_output(monitor.native_id())
+            .with_keyboard_interactivity(keyboard_mode);
+
+        w = w.with_platform_attributes(Box::new(wayland_attrs))
+            .with_resizable(false);
     } else {
-        w.with_position(LogicalPosition::new(0, 0))
+        w = w.with_position(LogicalPosition::new(0, 0))
             .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
             // Don't use fullscreen as it would override our fixed size
             // .with_fullscreen(Some(winit::window::Fullscreen::Borderless(None)))
-            .with_resizable(false)
-            .with_keyboard_interactivity(keyboard_mode)
-    };
+            .with_resizable(false);
+    }
+
+    w = w.with_cursor(CursorIcon::Default);
 
     ev.listen_device_events(DeviceEvents::Always);
 
     WindowState::new(
-        ev.create_window(w.with_cursor(CursorIcon::Default))
+        ev.create_window(w)
             .unwrap(),
         running,
         recording,
