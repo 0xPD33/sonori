@@ -61,20 +61,18 @@ impl ScrollState {
 
     /// Update scroll offset with auto-scroll animation
     ///
-    /// Smoothly interpolates scroll offset towards target when auto-scroll is enabled.
+    /// Smoothly interpolates scroll offset towards target.
+    /// When auto-scroll is enabled, target is set to max_scroll_offset.
     /// Returns true if scroll position changed.
     pub fn update_with_auto_scroll(&mut self) -> bool {
-        if !self.auto_scroll {
-            self.target_scroll_offset = self.scroll_offset;
-            return false;
-        }
-
         let old_offset = self.scroll_offset;
 
-        // Set target to bottom
-        self.target_scroll_offset = self.max_scroll_offset;
+        // Set target to bottom if auto-scroll is enabled
+        if self.auto_scroll {
+            self.target_scroll_offset = self.max_scroll_offset;
+        }
 
-        // Smoothly interpolate towards target (20% per frame)
+        // Always smoothly interpolate towards target (20% per frame)
         const LERP_FACTOR: f32 = 0.2;
         self.scroll_offset += (self.target_scroll_offset - self.scroll_offset) * LERP_FACTOR;
 

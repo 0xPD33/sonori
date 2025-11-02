@@ -431,6 +431,8 @@ impl WindowState {
                 is_speaking = is_recording && audio_data_lock.is_speaking; // Only show speaking state when recording
                 let transcript = audio_data_lock.transcript.clone();
                 display_text = self.text_processor.clean_whitespace(&transcript);
+
+
                 drop(audio_data_lock);
                 samples_clone
             } else {
@@ -547,7 +549,6 @@ impl WindowState {
                 self.config.width,
                 text_area_height,
                 self.gap,
-                &self.render_pipelines.hover_bind_group,
             );
         }
 
@@ -590,7 +591,7 @@ impl WindowState {
 
     pub fn handle_scroll(&mut self, delta: MouseScrollDelta) {
         self.event_handler
-            .handle_scroll(&mut self.scroll_state.scroll_offset, self.scroll_state.max_scroll_offset, delta);
+            .handle_scroll(&mut self.scroll_state.target_scroll_offset, self.scroll_state.max_scroll_offset, delta);
         self.scroll_state.auto_scroll = self.event_handler.auto_scroll;
         self.scrollbar.auto_scroll = self.scroll_state.auto_scroll;
         self.scrollbar.scroll_offset = self.scroll_state.scroll_offset;

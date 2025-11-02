@@ -5,13 +5,15 @@ pub const SCROLLBAR_WIDTH: u32 = 6;
 pub struct Scrollbar {
     pub vertices: wgpu::Buffer,
     pub pipeline: wgpu::RenderPipeline,
+    pub track_bind_group: wgpu::BindGroup,
+    pub thumb_bind_group: wgpu::BindGroup,
     pub scroll_offset: f32,
     pub max_scroll_offset: f32,
     pub auto_scroll: bool,
 }
 
 impl Scrollbar {
-    pub fn new(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration, hover_bind_group_layout: &wgpu::BindGroupLayout) -> Self {
+    pub fn new(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration, _hover_bind_group_layout: &wgpu::BindGroupLayout) -> Self {
         // Create vertices for the scrollbar
         let scrollbar_vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Scrollbar Vertices"),
@@ -30,16 +32,65 @@ impl Scrollbar {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
+        // Create bind group layout for color uniforms
+        let color_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Scrollbar Color Bind Group Layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+
+        // Create color buffers
+        // Track: dark semi-transparent
+        let track_color_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Scrollbar Track Color Buffer"),
+            contents: bytemuck::cast_slice(&[0.0f32, 0.0, 0.0, 0.15]), // Very dark, low opacity
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+
+        // Thumb: lighter and more visible
+        let thumb_color_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Scrollbar Thumb Color Buffer"),
+            contents: bytemuck::cast_slice(&[0.3f32, 0.3, 0.3, 0.5]), // Gray, medium opacity
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+
+        // Create bind groups
+        let track_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Scrollbar Track Bind Group"),
+            layout: &color_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: track_color_buffer.as_entire_binding(),
+            }],
+        });
+
+        let thumb_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Scrollbar Thumb Bind Group"),
+            layout: &color_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: thumb_color_buffer.as_entire_binding(),
+            }],
+        });
+
         // Create a pipeline for the scrollbar
         let scrollbar_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Scrollbar Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("rounded_rect.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("scrollbar.wgsl").into()),
         });
 
         let scrollbar_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Scrollbar Pipeline Layout"),
-                bind_group_layouts: &[hover_bind_group_layout],
+                bind_group_layouts: &[&color_bind_group_layout],
                 push_constant_ranges: &[],
             });
 
@@ -92,6 +143,8 @@ impl Scrollbar {
         Self {
             vertices: scrollbar_vertices,
             pipeline: scrollbar_pipeline,
+            track_bind_group,
+            thumb_bind_group,
             scroll_offset: 0.0,
             max_scroll_offset: 0.0,
             auto_scroll: true,
@@ -105,7 +158,6 @@ impl Scrollbar {
         window_width: u32,
         text_area_height: u32,
         gap: u32,
-        hover_bind_group: &wgpu::BindGroup,
     ) {
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Scrollbar Render Pass"),
@@ -136,7 +188,7 @@ impl Scrollbar {
 
         // Draw scrollbar track
         render_pass.set_pipeline(&self.pipeline);
-        render_pass.set_bind_group(0, hover_bind_group, &[]);
+        render_pass.set_bind_group(0, &self.track_bind_group, &[]);
         render_pass.set_vertex_buffer(0, self.vertices.slice(..4 * 8));
         render_pass.draw(0..4, 0..1);
 
@@ -175,7 +227,7 @@ impl Scrollbar {
 
         // Draw scrollbar thumb
         render_pass.set_pipeline(&self.pipeline);
-        render_pass.set_bind_group(0, hover_bind_group, &[]);
+        render_pass.set_bind_group(0, &self.thumb_bind_group, &[]);
         render_pass.set_vertex_buffer(0, self.vertices.slice(4 * 8..));
         render_pass.draw(0..4, 0..1);
 
@@ -191,7 +243,7 @@ impl Scrollbar {
             );
 
             render_pass.set_pipeline(&self.pipeline);
-            render_pass.set_bind_group(0, hover_bind_group, &[]);
+            render_pass.set_bind_group(0, &self.thumb_bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.vertices.slice(4 * 8..));
             render_pass.draw(0..4, 0..1);
         }

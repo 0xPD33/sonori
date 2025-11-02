@@ -45,31 +45,31 @@ impl EventHandler {
 
     pub fn handle_scroll(
         &mut self,
-        scroll_offset: &mut f32,
+        target_scroll_offset: &mut f32,
         max_scroll_offset: f32,
         delta: MouseScrollDelta,
     ) {
         let line_scroll_speed = 15.0;
         let pixel_scroll_multiplier = 0.75;
 
-        let prev_scroll_offset = *scroll_offset;
+        let prev_target_offset = *target_scroll_offset;
 
         match delta {
             MouseScrollDelta::LineDelta(_, y) => {
-                *scroll_offset = (*scroll_offset - y * line_scroll_speed)
+                *target_scroll_offset = (*target_scroll_offset + y * line_scroll_speed)
                     .max(0.0)
                     .min(max_scroll_offset);
             }
             MouseScrollDelta::PixelDelta(PhysicalPosition { y, .. }) => {
-                *scroll_offset = (*scroll_offset + y as f32 * pixel_scroll_multiplier)
+                *target_scroll_offset = (*target_scroll_offset - y as f32 * pixel_scroll_multiplier)
                     .max(0.0)
                     .min(max_scroll_offset);
             }
         }
 
-        if *scroll_offset < prev_scroll_offset {
+        if *target_scroll_offset < prev_target_offset {
             self.auto_scroll = false;
-        } else if (max_scroll_offset - *scroll_offset).abs() < 1.0 {
+        } else if (max_scroll_offset - *target_scroll_offset).abs() < 1.0 {
             self.auto_scroll = true;
         }
     }
