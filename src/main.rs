@@ -8,6 +8,7 @@ use sonori::copy;
 use sonori::download;
 use sonori::portal_input;
 use sonori::real_time_transcriber::{RealTimeTranscriber, TranscriptionMode};
+use sonori::ui::common::ProcessingState;
 use sonori::sound_player::SoundPlayer;
 use sonori::system_tray;
 use sonori::ui;

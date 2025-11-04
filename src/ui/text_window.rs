@@ -155,4 +155,74 @@ impl TextWindow {
             text_area_height,
         );
     }
+
+    /// Render only the background (without text)
+    pub fn render_background(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        text_area_width: u32,
+        text_area_height: u32,
+        gap: u32,
+        text_x: f32,
+        text_y: f32,
+        hover_bind_group: &wgpu::BindGroup,
+    ) {
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Text Window Background Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+
+        render_pass.set_viewport(
+            0.0,                             // x position
+            0.0,                             // y position
+            text_area_width as f32,          // width
+            (text_area_height - gap) as f32, // height
+            0.0,                             // min depth
+            1.0,                             // max depth
+        );
+
+        render_pass.set_pipeline(&self.pipeline);
+        render_pass.set_bind_group(0, hover_bind_group, &[]);
+        render_pass.set_vertex_buffer(0, self.vertices.slice(..));
+        render_pass.draw(0..4, 0..1);
+    }
+
+    /// Render only the text (without background)
+    pub fn render_text_only(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        text: &str,
+        text_area_width: u32,
+        text_area_height: u32,
+        gap: u32,
+        text_x: f32,
+        text_y: f32,
+        text_scale: f32,
+        text_color: [f32; 4],
+    ) {
+        // Render text
+        self.text_renderer.render_text(
+            view,
+            encoder,
+            text,
+            text_x,
+            text_y,
+            text_scale,
+            text_color,
+            text_area_width,
+            text_area_height,
+        );
+    }
 }

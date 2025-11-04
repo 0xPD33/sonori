@@ -16,6 +16,7 @@ use super::buttons::ButtonManager;
 use super::common::AudioVisualizationData;
 use super::event_handler::EventHandler;
 use super::layout_manager::LayoutManager;
+use super::loading_animation::LoadingAnimation;
 use super::render_pipeline::RenderPipelines;
 use super::scroll_state::ScrollState;
 use super::scrollbar::Scrollbar;
@@ -49,6 +50,7 @@ pub struct WindowState {
     pub scrollbar: Scrollbar,
     pub scroll_state: ScrollState,
     pub event_handler: EventHandler,
+    pub loading_animation: LoadingAnimation,
     pub running: Option<Arc<AtomicBool>>,
     pub recording: Option<Arc<AtomicBool>>,
     transcription_mode_ref:
@@ -237,6 +239,9 @@ impl WindowState {
         );
         let last_known_mode = transcription_mode;
 
+        // Create loading animation
+        let loading_animation = LoadingAnimation::new(&Arc::new(device.clone()), config.format);
+
         // Calculate target frame duration from display config
         let target_frame_duration =
             std::time::Duration::from_secs_f64(1.0 / display_config.target_fps as f64);
@@ -262,6 +267,9 @@ impl WindowState {
 
             // Event handler
             event_handler,
+
+            // Loading animation
+            loading_animation,
 
             // Transcriber state references
             running,
@@ -395,7 +403,7 @@ impl WindowState {
         // Get audio data once
         let mut display_text: String = String::new();
         let mut is_speaking: bool = false;
-        let empty_samples: Vec<f32> = Vec::new();
+        let empty_samples: Vec<f32> = vec![0.0; 1024]; // Buffer of silence for decay animation
 
         // Check recording state
         let is_recording = self
@@ -424,17 +432,18 @@ impl WindowState {
         // Render the spectrogram with either the available audio data or empty data
         if let Some(spectrogram) = &mut self.spectrogram {
             let samples = if let Some(audio_data) = &self.audio_data {
-                let audio_data_lock = audio_data.read();
-                // Always show the current samples - when paused, these will be the decaying samples
-                // The audio processor handles the decay animation, not the UI
-                let samples_clone = audio_data_lock.samples.clone();
-                is_speaking = is_recording && audio_data_lock.is_speaking; // Only show speaking state when recording
-                let transcript = audio_data_lock.transcript.clone();
-                display_text = self.text_processor.clean_whitespace(&transcript);
+                {
+                    let audio_data_lock = audio_data.read();
+                    // Always show the current samples - when paused, these will be the decaying samples
+                    // The audio processor handles the decay animation, not the UI
+                    is_speaking = is_recording && audio_data_lock.is_speaking; // Only show speaking state when recording
+                    let transcript_ref = &audio_data_lock.transcript;
+                    display_text = self.text_processor.clean_whitespace(transcript_ref);
 
-
-                drop(audio_data_lock);
-                samples_clone
+                    // Convert to owned vector before dropping the lock
+                    let samples_vec = audio_data_lock.samples.to_vec();
+                    samples_vec
+                }
             } else {
                 if is_recording {
                     display_text = "Sonori is ready".to_string();
@@ -445,7 +454,7 @@ impl WindowState {
                 text_area_width = self.layout_manager.calculate_text_area_width(false);
                 self.scrollbar.max_scroll_offset = 0.0;
                 self.scrollbar.scroll_offset = 0.0;
-                empty_samples.clone()
+                empty_samples.clone() // Use silence buffer for decay animation
             };
 
             // Always update and render the spectrogram
@@ -518,27 +527,89 @@ impl WindowState {
         let raw_scale = self.window_width as f32 / base_width;
         let text_scale = raw_scale.min(max_scale).max(0.85); // Increased minimum to 0.85x for better readability
 
+        // Check if we should show processing animation instead of text
+        let (should_show_animation, processing_state) = if let Some(audio_data) = &self.audio_data {
+            let audio_data_lock = audio_data.read();
+            let is_processing = audio_data_lock.is_processing();
+            let state = audio_data_lock.processing_state;
+            drop(audio_data_lock);
+            (is_processing && display_text.is_empty(), state)
+        } else {
+            (false, crate::ui::common::ProcessingState::Idle)
+        };
+
         // Choose text color based on speaking state
-        let text_color = if is_speaking {
+        let text_color = if should_show_animation {
+            self.loading_animation.get_processing_color(processing_state)
+        } else if is_speaking {
             [0.1, 0.9, 0.5, 1.0] // Brighter teal-green for better visibility
         } else {
             [1.0, 0.85, 0.15, 1.0] // Slightly warmer gold for better readability
         };
 
-        // Render text window (background and text)
-        self.text_window.render(
-            &mut encoder,
-            &view,
-            &display_text,
-            text_area_width,
-            text_area_height,
-            self.gap,
-            text_x,
-            text_y,
-            text_scale,
-            text_color,
-            &self.render_pipelines.hover_bind_group,
-        );
+        // Render loading animation if processing, otherwise render text
+        if should_show_animation {
+            // Update loading animation state
+            self.loading_animation.set_processing_state(processing_state);
+
+            // Render text window background first
+            self.text_window.render_background(
+                &mut encoder,
+                &view,
+                text_area_width,
+                text_area_height,
+                self.gap,
+                text_x,
+                text_y,
+                &self.render_pipelines.hover_bind_group,
+            );
+
+            // Render loading animation centered in the text area
+            let center_x = text_x + text_area_width as f32 / 2.0;
+            let center_y = text_y + text_area_height as f32 / 2.0;
+            let animation_size = text_area_height as f32 * 0.6; // 60% of text area height
+
+            self.loading_animation.render(
+                &mut encoder,
+                &view,
+                center_x,
+                center_y,
+                animation_size,
+                text_color,
+            );
+
+            // Render processing text below animation
+            let processing_text = self.loading_animation.get_processing_text(processing_state);
+            let text_y_for_status = center_y + animation_size * 0.8; // Position below animation
+
+            self.text_window.render_text_only(
+                &mut encoder,
+                &view,
+                processing_text,
+                text_area_width,
+                text_area_height,
+                self.gap,
+                text_x,
+                text_y_for_status,
+                text_scale * 0.8, // Slightly smaller text for status
+                text_color,
+            );
+        } else {
+            // Render text window (background and text) normally
+            self.text_window.render(
+                &mut encoder,
+                &view,
+                &display_text,
+                text_area_width,
+                text_area_height,
+                self.gap,
+                text_x,
+                text_y,
+                text_scale,
+                text_color,
+                &self.render_pipelines.hover_bind_group,
+            );
+        }
 
         // Draw scrollbar only if needed
         if need_scrollbar {

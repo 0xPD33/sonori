@@ -1,4 +1,4 @@
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -9,6 +9,7 @@ use crate::config::read_app_config;
 use crate::post_processor;
 use crate::silero_audio_processor::AudioSegment;
 use crate::transcription_stats::TranscriptionStats;
+use crate::ui::common::{AudioVisualizationData, ProcessingState};
 
 /// Handles the processing of audio segments for transcription
 pub struct TranscriptionProcessor {
@@ -18,6 +19,7 @@ pub struct TranscriptionProcessor {
     running: Arc<AtomicBool>,
     transcription_done_tx: mpsc::UnboundedSender<()>,
     transcription_stats: Arc<Mutex<TranscriptionStats>>,
+    audio_visualization_data: Arc<RwLock<AudioVisualizationData>>,
 }
 
 impl TranscriptionProcessor {
@@ -28,6 +30,7 @@ impl TranscriptionProcessor {
         running: Arc<AtomicBool>,
         transcription_done_tx: mpsc::UnboundedSender<()>,
         transcription_stats: Arc<Mutex<TranscriptionStats>>,
+        audio_visualization_data: Arc<RwLock<AudioVisualizationData>>,
     ) -> Self {
         Self {
             backend,
@@ -36,6 +39,7 @@ impl TranscriptionProcessor {
             running,
             transcription_done_tx,
             transcription_stats,
+            audio_visualization_data,
         }
     }
 
@@ -45,9 +49,16 @@ impl TranscriptionProcessor {
         segment: &AudioSegment,
         language: &str,
         stats: &Arc<Mutex<TranscriptionStats>>,
+        audio_visualization_data: &Arc<RwLock<AudioVisualizationData>>,
     ) -> String {
         let app_config = read_app_config();
         let log_stats_enabled = app_config.debug_config.log_stats_enabled;
+
+        // Set processing state to transcribing
+        {
+            let mut audio_data = audio_visualization_data.write();
+            audio_data.set_processing_state(ProcessingState::Transcribing);
+        }
 
         if log_stats_enabled {
             println!(
@@ -70,6 +81,12 @@ impl TranscriptionProcessor {
                     "Backend not available (checked in {:.2}s)",
                     total_duration.as_secs_f32()
                 );
+            }
+
+            // Set processing state back to idle on error
+            {
+                let mut audio_data = audio_visualization_data.write();
+                audio_data.set_processing_state(ProcessingState::Idle);
             }
 
             return "[backend not available]".to_string();
@@ -139,6 +156,12 @@ impl TranscriptionProcessor {
                     println!("Transcription (processed): '{}'", processed_transcription);
                 }
 
+                // Set processing state back to idle on success
+                {
+                    let mut audio_data = audio_visualization_data.write();
+                    audio_data.set_processing_state(ProcessingState::Idle);
+                }
+
                 processed_transcription
             }
             Err(e) => {
@@ -150,6 +173,12 @@ impl TranscriptionProcessor {
                         total_duration.as_secs_f32(),
                         e
                     );
+                }
+
+                // Set processing state to error on transcription error
+                {
+                    let mut audio_data = audio_visualization_data.write();
+                    audio_data.set_processing_state(ProcessingState::Error);
                 }
 
                 format!("[transcription error: {}]", e)
@@ -172,6 +201,7 @@ impl TranscriptionProcessor {
         let running = self.running.clone();
         let transcription_done_tx = self.transcription_done_tx.clone();
         let transcription_stats = self.transcription_stats.clone();
+        let audio_visualization_data = self.audio_visualization_data.clone();
 
         let app_config = read_app_config();
         let log_stats_enabled = app_config.debug_config.log_stats_enabled;
@@ -214,6 +244,7 @@ impl TranscriptionProcessor {
                         let backend_clone = backend.clone();
                         let language_clone = language.clone();
                         let stats_clone = transcription_stats.clone();
+                        let audio_viz_clone = audio_visualization_data.clone();
                         let tx_clone = transcript_tx.clone();
                         let session_id = segment.session_id.clone();
 
@@ -223,6 +254,7 @@ impl TranscriptionProcessor {
                                 &segment,
                                 &language_clone,
                                 &stats_clone,
+                                &audio_viz_clone,
                             );
 
                             if !transcription.is_empty() {
@@ -266,6 +298,7 @@ impl TranscriptionProcessor {
                         let backend_clone = backend.clone();
                         let language_clone = language.clone();
                         let stats_clone = transcription_stats.clone();
+                        let audio_viz_clone = audio_visualization_data.clone();
                         let tx_clone = transcript_tx.clone();
                         let session_id = segment.session_id.clone();
 
@@ -277,6 +310,7 @@ impl TranscriptionProcessor {
                                     &segment,
                                     &language_clone,
                                     &stats_clone,
+                                    &audio_viz_clone,
                                 );
 
                                 if !transcription.is_empty() {
@@ -301,6 +335,7 @@ impl TranscriptionProcessor {
                                     &segment,
                                     &language_clone,
                                     &stats_clone,
+                                    &audio_viz_clone,
                                 );
 
                                 if !transcription.is_empty() {
@@ -344,6 +379,7 @@ impl TranscriptionProcessor {
         segment: &AudioSegment,
         language: &str,
         stats: &Arc<Mutex<TranscriptionStats>>,
+        audio_visualization_data: &Arc<RwLock<AudioVisualizationData>>,
     ) -> String {
         let app_config = read_app_config();
         let start_time = Instant::now();
@@ -356,7 +392,7 @@ impl TranscriptionProcessor {
             println!(
                 "EXPERIMENTAL: Processing entire recording as single segment (chunking disabled)"
             );
-            let result = Self::transcribe_segment(backend, segment, language, stats);
+            let result = Self::transcribe_segment(backend, segment, language, stats, audio_visualization_data);
             let processing_time = start_time.elapsed();
             println!(
                 "Manual segment processing completed in {:.2}s",
@@ -370,11 +406,11 @@ impl TranscriptionProcessor {
         let chunk_threshold = app_config.manual_mode_config.chunk_duration_seconds as f64;
         if duration >= chunk_threshold {
             println!("Large manual segment detected, processing in chunks...");
-            return Self::process_large_manual_segment(backend, segment, language, stats);
+            return Self::process_large_manual_segment(backend, segment, language, stats, audio_visualization_data);
         }
 
         // Process normally for smaller manual segments
-        let result = Self::transcribe_segment(backend, segment, language, stats);
+        let result = Self::transcribe_segment(backend, segment, language, stats, audio_visualization_data);
 
         let processing_time = start_time.elapsed();
         println!(
@@ -391,11 +427,12 @@ impl TranscriptionProcessor {
         segment: &AudioSegment,
         language: &str,
         stats: &Arc<Mutex<TranscriptionStats>>,
+        audio_visualization_data: &Arc<RwLock<AudioVisualizationData>>,
     ) -> String {
         let app_config = read_app_config();
         let sample_rate = segment.sample_rate;
         let chunk_duration_seconds = app_config.manual_mode_config.chunk_duration_seconds;
-        let chunk_duration_samples = (chunk_duration_seconds * sample_rate as f32) as usize;
+        let chunk_duration_samples = (chunk_duration_seconds as f64 * sample_rate as f64).round() as usize;
 
         println!(
             "Using chunk duration of {:.1}s (config: chunk_duration_seconds={:.1})",
@@ -406,7 +443,7 @@ impl TranscriptionProcessor {
         let use_overlap = app_config.manual_mode_config.enable_chunk_overlap;
         let overlap_seconds = app_config.manual_mode_config.chunk_overlap_seconds;
         let overlap_samples = if use_overlap {
-            (overlap_seconds * sample_rate as f32) as usize
+            (overlap_seconds as f64 * sample_rate as f64).round() as usize
         } else {
             0
         };
@@ -433,7 +470,9 @@ impl TranscriptionProcessor {
             }
 
             if use_overlap {
-                start_idx = end_idx.saturating_sub(overlap_samples);
+                // Ensure we don't create negative indices or go backwards
+                let proposed_start = end_idx.saturating_sub(overlap_samples);
+                start_idx = proposed_start.max(start_idx + 1); // Always move forward at least 1 sample
             } else {
                 start_idx = end_idx;
             }
@@ -454,13 +493,29 @@ impl TranscriptionProcessor {
                 if last_len > 0 && last_len < min_chunk_samples {
                     let len = chunk_ranges.len();
                     if let Some(prev_range) = chunk_ranges.get_mut(len - 2) {
-                        println!(
-                            "Merging trailing {:.2}s remainder into previous chunk to avoid truncation",
-                            last_len as f64 / sample_rate as f64
-                        );
-                        prev_range.1 = last_end;
+                        // Validate that merging won't create an oversized chunk
+                        let merged_size = last_end - prev_range.0;
+                        let merged_duration = merged_size as f64 / sample_rate as f64;
+
+                        if merged_duration <= 60.0 {
+                            // Safe to merge - within backend limits
+                            println!(
+                                "Merging trailing {:.2}s remainder into previous chunk (merged total: {:.2}s)",
+                                last_len as f64 / sample_rate as f64,
+                                merged_duration
+                            );
+                            prev_range.1 = last_end;
+                            chunk_ranges.pop();
+                        } else {
+                            // Merged chunk would exceed 60s backend limit
+                            println!(
+                                "WARNING: Not merging {:.2}s trailing chunk - would create {:.2}s chunk exceeding 60s backend limit. Processing as separate chunk.",
+                                last_len as f64 / sample_rate as f64,
+                                merged_duration
+                            );
+                            // Keep the small chunk separate - backend will handle it
+                        }
                     }
-                    chunk_ranges.pop();
                 }
             }
         }
@@ -469,8 +524,8 @@ impl TranscriptionProcessor {
 
         for (start_idx, end_idx) in chunk_ranges {
             let chunk_audio = segment.samples[start_idx..end_idx].to_vec();
-            let chunk_start_time = start_idx as f64 / sample_rate as f64;
-            let chunk_end_time = end_idx as f64 / sample_rate as f64;
+            let chunk_start_time = segment.start_time + (start_idx as f64 / sample_rate as f64);
+            let chunk_end_time = segment.start_time + (end_idx as f64 / sample_rate as f64);
 
             let chunk_segment = AudioSegment {
                 samples: chunk_audio,
@@ -487,7 +542,7 @@ impl TranscriptionProcessor {
             );
 
             let chunk_transcription =
-                Self::transcribe_segment(backend, &chunk_segment, language, stats);
+                Self::transcribe_segment(backend, &chunk_segment, language, stats, audio_visualization_data);
 
             if !chunk_transcription.is_empty() {
                 transcriptions.push(chunk_transcription.trim().to_string());

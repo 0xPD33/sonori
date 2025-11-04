@@ -5,30 +5,55 @@ use wgpu::{util::DeviceExt, Buffer, Device, Queue, RenderPipeline, TextureView};
 use winit::dpi::PhysicalSize;
 
 
-// Configuration constants
-const FFT_SIZE: usize = 512; // Number of FFT bins
-const ANIMATION_SPEED: f32 = 0.85; // Slightly faster animation for more responsive feel
-const MIN_AMPLITUDE: f32 = 0.025; // Slightly higher minimum for better visibility
-const MAX_AMPLITUDE: f32 = 1.0; // Maximum allowed amplitude
-const SPEAKING_THRESHOLD: f32 = 0.2; // Threshold to determine if audio contains speech
-const MIN_OPACITY: f32 = 0.15; // Higher minimum opacity for better visibility
+/// Configuration for spectrogram visualization parameters
+#[derive(Debug, Clone)]
+pub struct SpectrogramConfig {
+    pub fft_size: usize,
+    pub animation_speed: f32,
+    pub min_amplitude: f32,
+    pub max_amplitude: f32,
+    pub speaking_threshold: f32,
+    pub min_opacity: f32,
+    pub max_bar_height: f32,
+    pub sample_amplification: f32,
+    pub scaled_amplification: f32,
+    pub min_diff_threshold: f32,
+    pub prev_bar_weight: f32,
+    pub current_bar_weight: f32,
+    pub next_bar_weight: f32,
+    pub min_edge_factor: f32,
+    pub edge_factor_range: f32,
+}
 
-// Bar scaling constants
-const MAX_BAR_HEIGHT: f32 = 0.9; // Maximum height cap for bars
-const SAMPLE_AMPLIFICATION: f32 = 1.1; // Amplification factor for samples
-const SCALED_AMPLIFICATION: f32 = 1.5; // Amplification factor for scaled values
-const MIN_DIFF_THRESHOLD: f32 = 0.001; // Threshold for animation transitions
+impl Default for SpectrogramConfig {
+    fn default() -> Self {
+        Self {
+            fft_size: 512,
+            animation_speed: 0.85,
+            min_amplitude: 0.025,
+            max_amplitude: 1.0,
+            speaking_threshold: 0.2,
+            min_opacity: 0.15,
+            max_bar_height: 0.9,
+            sample_amplification: 1.1,
+            scaled_amplification: 1.5,
+            min_diff_threshold: 0.001,
+            prev_bar_weight: 0.2,
+            current_bar_weight: 0.6,
+            next_bar_weight: 0.2,
+            min_edge_factor: 0.75,
+            edge_factor_range: 0.25,
+        }
+    }
+}
 
-// Smoothing filter weights (must sum to 1.0)
-const PREV_BAR_WEIGHT: f32 = 0.2;
-const CURRENT_BAR_WEIGHT: f32 = 0.6;
-const NEXT_BAR_WEIGHT: f32 = 0.2;
-
-// Edge tapering constants
-const MIN_EDGE_FACTOR: f32 = 0.75; // Slightly higher minimum for more uniform appearance
-const EDGE_FACTOR_RANGE: f32 = 0.25; // Reduced range for smoother gradient
+// Legacy constants for backward compatibility (will be removed in future)
+const FFT_SIZE: usize = 512;
 
 pub struct Spectrogram {
+    // Configuration
+    config: SpectrogramConfig,
+
     // WGPU resources
     device: Arc<Device>,
     queue: Arc<Queue>,
@@ -212,9 +237,10 @@ impl Spectrogram {
         let target_bar_data = vec![0.0; num_bins];
 
         // Pre-compute bar instance templates
-        let bar_instance_template = create_bar_instance_template(num_bins, size.width);
+        let config = SpectrogramConfig::default();
+        let bar_instance_template = create_bar_instance_template(num_bins, size.width, &config);
 
-        let instances = create_bar_instances(&bar_data, &bar_instance_template, size.height);
+        let instances = create_bar_instances(&bar_data, &bar_instance_template, size.height, &config);
         let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Instance Buffer"),
             contents: bytemuck::cast_slice(&instances),
@@ -237,6 +263,7 @@ impl Spectrogram {
             .collect();
 
         let mut spectrogram = Self {
+            config: SpectrogramConfig::default(),
             device,
             queue,
             render_pipeline,
@@ -282,7 +309,7 @@ impl Spectrogram {
 
                 // Update the bar instance template for the new width
                 self.bar_instance_template =
-                    create_bar_instance_template(optimal_bins, new_size.width);
+                    create_bar_instance_template(optimal_bins, new_size.width, &self.config);
             }
         }
 
@@ -297,8 +324,13 @@ impl Spectrogram {
     pub fn update(&mut self, audio_samples: &[f32]) {
         let num_bars = self.bar_data.len();
 
-        if audio_samples.is_empty() {
+        // Check if we have silent audio (all zeros or empty)
+        let is_silent = audio_samples.is_empty() || audio_samples.iter().all(|&x| x == 0.0);
+
+        if is_silent {
             self.is_speaking = false;
+            // Set target bars to zero for decay animation
+            self.target_bar_data.fill(0.0);
             self.animate_bars();
             return;
         }
@@ -315,12 +347,7 @@ impl Spectrogram {
             sum / count as f32
         };
 
-        self.is_speaking = audio_energy > SPEAKING_THRESHOLD;
-
-        if !self.is_speaking && audio_samples.is_empty() {
-            self.animate_bars();
-            return;
-        }
+        self.is_speaking = audio_energy > self.config.speaking_threshold;
 
         // Pre-allocate a working buffer for smoothing to avoid allocation in hot path
         let mut smoothed_data = std::mem::take(&mut self.target_bar_data);
@@ -340,7 +367,7 @@ impl Spectrogram {
                 };
 
                 // Apply a non-linear scaling (capped at MAX_BAR_HEIGHT)
-                smoothed_data[i] = (sample * SAMPLE_AMPLIFICATION).min(MAX_BAR_HEIGHT);
+                smoothed_data[i] = (sample * self.config.sample_amplification).min(self.config.max_bar_height);
             }
         } else {
             // Optimize for more samples than bars
@@ -361,9 +388,9 @@ impl Spectrogram {
                     let avg = sum / segment_len as f32;
 
                     // Apply non-linear scaling
-                    smoothed_data[i] = (avg.sqrt() * SCALED_AMPLIFICATION).min(MAX_BAR_HEIGHT);
+                    smoothed_data[i] = (avg.sqrt() * self.config.scaled_amplification).min(self.config.max_bar_height);
                 } else {
-                    smoothed_data[i] = MIN_AMPLITUDE;
+                    smoothed_data[i] = self.config.min_amplitude;
                 }
             }
         }
@@ -372,11 +399,11 @@ impl Spectrogram {
         // Handle edge cases separately
         if num_bars > 2 {
             // Apply filter to first element
-            let first = smoothed_data[0] * CURRENT_BAR_WEIGHT + smoothed_data[1] * NEXT_BAR_WEIGHT;
+            let first = smoothed_data[0] * self.config.current_bar_weight + smoothed_data[1] * self.config.next_bar_weight;
 
             // Apply filter to last element
-            let last = smoothed_data[num_bars - 2] * PREV_BAR_WEIGHT
-                + smoothed_data[num_bars - 1] * CURRENT_BAR_WEIGHT;
+            let last = smoothed_data[num_bars - 2] * self.config.prev_bar_weight
+                + smoothed_data[num_bars - 1] * self.config.current_bar_weight;
 
             // Save temporary values for each bar to avoid allocation
             let mut prev_val = smoothed_data[0];
@@ -389,9 +416,9 @@ impl Spectrogram {
                 } else {
                     0.0
                 };
-                let smoothed = prev_val * PREV_BAR_WEIGHT
-                    + curr_val * CURRENT_BAR_WEIGHT
-                    + next_val * NEXT_BAR_WEIGHT;
+                let smoothed = prev_val * self.config.prev_bar_weight
+                    + curr_val * self.config.current_bar_weight
+                    + next_val * self.config.next_bar_weight;
 
                 prev_val = curr_val;
                 curr_val = next_val;
@@ -423,13 +450,13 @@ impl Spectrogram {
         // to create a more natural-looking visualization
         let (rise_speed, fall_speed, idle_decay) = if self.is_speaking {
             // When speaking: fast rise, moderate fall
-            (ANIMATION_SPEED * 4.0, ANIMATION_SPEED * 2.0, 0.0)
+            (self.config.animation_speed * 4.0, self.config.animation_speed * 2.0, 0.0)
         } else {
             // When silent: gentle decay toward minimum
             (
-                ANIMATION_SPEED * 2.0,
-                ANIMATION_SPEED * 3.0,
-                ANIMATION_SPEED * 0.5,
+                self.config.animation_speed * 2.0,
+                self.config.animation_speed * 3.0,
+                self.config.animation_speed * 0.5,
             )
         };
 
@@ -449,17 +476,17 @@ impl Spectrogram {
                 *bar += diff * speed_factor;
             } else {
                 // When silent, animate toward minimum with gentle decay
-                if diff.abs() > MIN_DIFF_THRESHOLD {
+                if diff.abs() > self.config.min_diff_threshold {
                     *bar += diff * fall_factor;
                 } else {
                     // Apply exponential decay
                     *bar *= decay_factor;
-                    *bar = (*bar).max(MIN_AMPLITUDE);
+                    *bar = (*bar).max(self.config.min_amplitude);
                 }
             }
 
             // Keep values in valid range
-            *bar = (*bar).clamp(MIN_AMPLITUDE, MAX_AMPLITUDE);
+            *bar = (*bar).clamp(self.config.min_amplitude, self.config.max_amplitude);
         }
 
         self.update_instance_buffer();
@@ -471,6 +498,7 @@ impl Spectrogram {
             &self.bar_data,
             &self.bar_instance_template,
             self.size.height,
+            &self.config,
         );
         self.queue
             .write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&instances));
@@ -518,7 +546,7 @@ impl Spectrogram {
 ///
 /// This function calculates position-dependent values that don't change
 /// with bar height, significantly reducing per-frame calculations.
-fn create_bar_instance_template(num_bars: usize, width: u32) -> Vec<BarInstanceTemplate> {
+fn create_bar_instance_template(num_bars: usize, width: u32, config: &SpectrogramConfig) -> Vec<BarInstanceTemplate> {
     let total_width = width as f32;
     let bar_width = total_width / num_bars as f32;
 
@@ -537,8 +565,8 @@ fn create_bar_instance_template(num_bars: usize, width: u32) -> Vec<BarInstanceT
 
             // Edge tapering creates a bell curve effect for the visualization
             // with bars at the center being taller than those at the edges
-            let edge_factor = MIN_EDGE_FACTOR
-                + EDGE_FACTOR_RANGE * (std::f32::consts::PI * (position_factor - 0.5)).cos();
+            let edge_factor = config.min_edge_factor
+                + config.edge_factor_range * (std::f32::consts::PI * (position_factor - 0.5)).cos();
 
             // Pre-compute normalized X position to avoid division later
             let norm_x = x / width as f32 * 2.0 - 1.0;
@@ -559,6 +587,7 @@ fn create_bar_instances(
     bar_data: &[f32],
     templates: &[BarInstanceTemplate],
     height: u32,
+    config: &SpectrogramConfig,
 ) -> Vec<BarInstance> {
     bar_data
         .iter()
@@ -576,7 +605,7 @@ fn create_bar_instances(
 
             // Ensure a minimum opacity so bars are always visible
             // Use MIN_OPACITY constant for consistent minimum values
-            let color = [1.0, 1.0, 1.0, adjusted_amplitude.max(MIN_OPACITY)];
+            let color = [1.0, 1.0, 1.0, adjusted_amplitude.max(config.min_opacity)];
 
             BarInstance {
                 position: [template.norm_x, norm_y],

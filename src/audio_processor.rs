@@ -3,7 +3,7 @@ use parking_lot::{Mutex, RwLock};
 use std::collections::VecDeque;
 use std::fs;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::time::Duration;
@@ -39,6 +39,9 @@ pub struct AudioProcessor {
     debug_config: crate::config::DebugConfig,
 
     sample_rate: usize,
+
+    // Sample tracking for drain detection
+    samples_received: Arc<AtomicUsize>,
 }
 
 impl AudioProcessor {
@@ -83,6 +86,7 @@ impl AudioProcessor {
             current_session_id: Arc::new(RwLock::new(initial_session_id)),
             debug_config: app_config.debug_config.clone(),
             sample_rate: app_config.audio_processor_config.sample_rate,
+            samples_received: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -102,6 +106,7 @@ impl AudioProcessor {
         let transcription_stats = self.transcription_stats.clone();
         let session_id_ref = self.current_session_id.clone();
         let sample_rate = self.sample_rate;
+        let samples_received = self.samples_received.clone();
 
         // Create thread-local buffer
         let mut audio_buffer = Vec::with_capacity(buffer_size);
@@ -167,6 +172,9 @@ impl AudioProcessor {
                 // When recording is active, try to receive audio data with timeout
                 match tokio::time::timeout(Duration::from_millis(50), rx.recv()).await {
                     Ok(Some(samples)) => {
+                        // Increment received counter
+                        samples_received.fetch_add(1, Ordering::Release);
+
                         // Reuse buffer by clearing and extending
                         audio_buffer.clear();
                         audio_buffer.extend_from_slice(&samples);
@@ -506,6 +514,11 @@ impl AudioProcessor {
     /// Get a reference to the current session ID (for cloning into async tasks)
     pub fn get_session_id_ref(&self) -> Arc<RwLock<Option<String>>> {
         self.current_session_id.clone()
+    }
+
+    /// Gets the count of audio samples received from the channel
+    pub fn get_samples_received_count(&self) -> Arc<AtomicUsize> {
+        self.samples_received.clone()
     }
 
     /// Save audio to WAV file in the configured directory (only if debug flag is enabled)

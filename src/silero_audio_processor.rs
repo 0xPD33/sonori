@@ -321,6 +321,10 @@ impl SileroVad {
             return;
         }
 
+        // Update time_offset BEFORE extracting segment so calculations are correct
+        let old_time_offset = self.time_offset;
+        self.time_offset = new_time_offset;
+
         if let Some(start_time) = self.speech_start_time {
             if start_time < new_time_offset {
                 // Create a segment for the part being trimmed
@@ -347,7 +351,6 @@ impl SileroVad {
 
         // Use drain for efficiency
         self.sample_buffer.drain(0..trim_samples);
-        self.time_offset = new_time_offset;
     }
 
     /// Update the VAD state based on speech probability
@@ -490,7 +493,6 @@ impl SileroVad {
         let sample_idx_converter = |time: f64| -> usize { (time * self.sample_rate_f64) as usize };
 
         let start_idx = sample_idx_converter(adjusted_start)
-            .saturating_sub(context_samples)
             .min(self.sample_buffer.len());
 
         let end_idx = sample_idx_converter(adjusted_end).min(self.sample_buffer.len());

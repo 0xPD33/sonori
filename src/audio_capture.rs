@@ -1,6 +1,6 @@
 use anyhow;
 use portaudio as pa;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -13,6 +13,7 @@ pub struct AudioCapture {
     pa_stream: Option<pa::Stream<pa::NonBlocking, pa::Input<f32>>>,
     pa: Option<pa::PortAudio>,
     input_settings: Option<pa::InputStreamSettings<f32>>,
+    samples_sent: Arc<AtomicUsize>,
 }
 
 impl AudioCapture {
@@ -22,6 +23,7 @@ impl AudioCapture {
             pa_stream: None,
             pa: None,
             input_settings: None,
+            samples_sent: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -75,6 +77,7 @@ impl AudioCapture {
         // Clone the recording Arc before moving it into the closure
         let recording_for_callback = recording.clone();
         let stats_for_callback = transcription_stats.clone();
+        let samples_sent_for_callback = self.samples_sent.clone();
 
         let callback = move |pa::InputStreamCallbackArgs { buffer, .. }| {
             // Only send samples when recording is active
@@ -86,6 +89,9 @@ impl AudioCapture {
                         let total = stats.record_audio_drop(1);
                         eprintln!("Audio channel drop recorded (total: {})", total);
                     }
+                } else {
+                    // Increment counter after successful send
+                    samples_sent_for_callback.fetch_add(1, Ordering::Release);
                 }
             }
 
@@ -134,6 +140,11 @@ impl AudioCapture {
             }
         }
         Ok(())
+    }
+
+    /// Gets the count of audio samples sent through the channel
+    pub fn get_samples_sent_count(&self) -> Arc<AtomicUsize> {
+        self.samples_sent.clone()
     }
 
     /// Temporarily pauses audio capture without closing the stream

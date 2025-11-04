@@ -21,3 +21,6 @@ Cargo.lock
 # LLM stuff
 .claude
 .cursor
+
+# recordings
+recordings/

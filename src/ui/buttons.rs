@@ -23,6 +23,7 @@ const ANIMATION_DURATION: f32 = 0.15; // Slightly longer for smoother feel
 const HOVER_SCALE: f32 = 1.15; // More noticeable hover effect
 const PRESS_SCALE: f32 = 0.95; // Less aggressive press for better feel
 const HOVER_ROTATION: f32 = 0.261799; // 15 degrees in radians (π/12)
+const ANIMATION_SPEED: f32 = 1.0 / ANIMATION_DURATION; // Pre-calculated animation speed
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ButtonType {
@@ -43,6 +44,15 @@ enum ButtonState {
     Normal,
     Hover,
     Pressed,
+}
+
+/// Layout parameters for button positioning and sizing
+#[derive(Debug, Clone, Copy)]
+struct ButtonLayoutParams {
+    regular_button_size: u32,
+    close_button_size: u32,
+    margin: u32,
+    spacing: u32,
 }
 
 pub struct Button {
@@ -347,110 +357,67 @@ impl Button {
         }
     }
 
-    // Simplified update_animation method
+    // Simplified update_animation method using smooth interpolation
     fn update_animation(&mut self) {
         if !self.animation_active {
             return;
         }
 
-        // Calculate animation progress
+        // Calculate animation progress with easing
         let elapsed = self.animation_start_time.elapsed().as_secs_f32();
-        let duration = ANIMATION_DURATION; // Use the same duration for all states
-
-        self.animation_progress = (elapsed / duration).min(1.0);
+        self.animation_progress = (elapsed * ANIMATION_SPEED).min(1.0);
 
         if self.animation_progress >= 1.0 {
             self.animation_active = false;
-
-            // Set final values based on current state
-            if self.button_type == ButtonType::Close && self.state == ButtonState::Hover {
-                // For close button hover, set rotation
-                self.rotation = HOVER_ROTATION;
-                self.scale = 1.0; // Keep scale at normal
-            } else {
-                // For other buttons or states, use scaling
-                self.scale = match self.state {
-                    ButtonState::Normal => 1.0,
-                    ButtonState::Hover => {
-                        if self.button_type == ButtonType::Close {
-                            1.0
-                        } else {
-                            HOVER_SCALE
-                        }
-                    }
-                    ButtonState::Pressed => PRESS_SCALE,
-                };
-
-                // Reset rotation for non-hover close button
-                if self.button_type == ButtonType::Close && self.state != ButtonState::Hover {
-                    self.rotation = 0.0;
-                }
-            }
+            self.set_final_animation_values();
         } else {
-            // Linear interpolation for animations
-            if self.button_type == ButtonType::Close {
-                // Special case for close button
-                if self.state == ButtonState::Hover {
-                    // Hovering - rotate
-                    let start_rotation = if self.previous_state == ButtonState::Hover {
-                        HOVER_ROTATION
-                    } else {
-                        0.0
-                    };
-                    self.rotation = start_rotation
-                        + self.animation_progress * (HOVER_ROTATION - start_rotation);
-                    self.scale = 1.0; // Keep scale normal during hover
-                } else if self.state == ButtonState::Pressed {
-                    // Pressing - scale down (like other buttons)
-                    let start_scale = if self.previous_state == ButtonState::Pressed {
-                        PRESS_SCALE
-                    } else {
-                        1.0
-                    };
-                    self.scale =
-                        start_scale + self.animation_progress * (PRESS_SCALE - start_scale);
+            self.interpolate_animation_values();
+        }
+    }
 
-                    // Gradually reset rotation if we were hovering before
-                    let start_rotation = if self.previous_state == ButtonState::Hover {
-                        HOVER_ROTATION
-                    } else {
-                        0.0
-                    };
-                    self.rotation = start_rotation * (1.0 - self.animation_progress);
-                } else {
-                    // Back to normal
-                    let start_scale = match self.previous_state {
-                        ButtonState::Normal => 1.0,
-                        ButtonState::Hover => 1.0, // Was hovering, keep scale normal
-                        ButtonState::Pressed => PRESS_SCALE,
-                    };
-                    self.scale = start_scale + self.animation_progress * (1.0 - start_scale);
-
-                    // Reset rotation
-                    let start_rotation = if self.previous_state == ButtonState::Hover {
-                        HOVER_ROTATION
-                    } else {
-                        0.0
-                    };
-                    self.rotation = start_rotation * (1.0 - self.animation_progress);
-                }
-            } else {
-                // Standard scale animation for other buttons
-                let start_scale = match self.previous_state {
-                    ButtonState::Normal => 1.0,
-                    ButtonState::Hover => HOVER_SCALE,
-                    ButtonState::Pressed => PRESS_SCALE,
-                };
-
-                let end_scale = match self.state {
-                    ButtonState::Normal => 1.0,
-                    ButtonState::Hover => HOVER_SCALE,
-                    ButtonState::Pressed => PRESS_SCALE,
-                };
-
-                // Linear interpolation for scale
-                self.scale = start_scale + self.animation_progress * (end_scale - start_scale);
+    // Set final target values based on current state
+    fn set_final_animation_values(&mut self) {
+        match (self.button_type, self.state) {
+            (ButtonType::Close, ButtonState::Hover) => {
+                self.rotation = HOVER_ROTATION;
+                self.scale = 1.0;
             }
+            (ButtonType::Close, _) => {
+                self.rotation = 0.0;
+                self.scale = 1.0;
+            }
+            (_, ButtonState::Hover) => {
+                self.scale = HOVER_SCALE;
+                self.rotation = 0.0;
+            }
+            (_, ButtonState::Pressed) => {
+                self.scale = PRESS_SCALE;
+                self.rotation = 0.0;
+            }
+            (_, ButtonState::Normal) => {
+                self.scale = 1.0;
+                self.rotation = 0.0;
+            }
+        }
+    }
+
+    // Smooth interpolation between states
+    fn interpolate_animation_values(&mut self) {
+        let (target_scale, target_rotation) = self.get_target_values();
+
+        // Simple linear interpolation
+        self.scale += (target_scale - self.scale) * 0.2; // Smooth factor
+        self.rotation += (target_rotation - self.rotation) * 0.2;
+    }
+
+    // Get target values for current state
+    fn get_target_values(&self) -> (f32, f32) {
+        match (self.button_type, self.state) {
+            (ButtonType::Close, ButtonState::Hover) => (1.0, HOVER_ROTATION),
+            (ButtonType::Close, _) => (1.0, 0.0),
+            (_, ButtonState::Hover) => (HOVER_SCALE, 0.0),
+            (_, ButtonState::Pressed) => (PRESS_SCALE, 0.0),
+            (_, ButtonState::Normal) => (1.0, 0.0),
         }
     }
 
@@ -538,21 +505,108 @@ impl Button {
 }
 
 impl ButtonManager {
-    /// Calculate dynamic button size based on window dimensions
+    /// Calculate dynamic button layout parameters based on window dimensions
+    fn calculate_layout_params(window_width: u32) -> ButtonLayoutParams {
+        let scale_factor = (window_width as f32 / 240.0).max(0.7).min(1.2);
+
+        ButtonLayoutParams {
+            regular_button_size: (COPY_BUTTON_BASE_SIZE * scale_factor) as u32,
+            close_button_size: (CLOSE_BUTTON_BASE_SIZE * scale_factor) as u32,
+            margin: ((window_width as f32) * BUTTON_MARGIN_RATIO).max(6.0).min(16.0) as u32,
+            spacing: ((window_width as f32) * BUTTON_SPACING_RATIO).max(4.0).min(12.0) as u32,
+        }
+    }
+
+    /// Calculate button layout for a set of button types
+    fn calculate_button_layout(&self, button_types: &[ButtonType]) -> Vec<(ButtonType, (u32, u32))> {
+        let params = Self::calculate_layout_params(self.window_width);
+        let bottom_buttons: Vec<_> = button_types
+            .iter()
+            .filter(|&&bt| bt != ButtonType::Close)
+            .cloned()
+            .collect();
+
+        if bottom_buttons.is_empty() {
+            return Vec::new();
+        }
+
+        let button_count = bottom_buttons.len();
+        let total_width = (button_count as u32) * params.regular_button_size
+            + (button_count.saturating_sub(1) as u32) * params.spacing;
+        let start_x = self.window_width / 2 - total_width / 2;
+
+        let mut layout = Vec::new();
+
+        // Calculate positions for bottom buttons
+        for (i, &button_type) in bottom_buttons.iter().enumerate() {
+            let button_x = start_x + (i as u32) * (params.regular_button_size + params.spacing);
+            let button_y = (self.text_area_height as f32 * 0.95) as u32 - params.regular_button_size - params.margin;
+            layout.push((button_type, (button_x, button_y)));
+        }
+
+        // Add close button position if it exists
+        if button_types.contains(&ButtonType::Close) {
+            let close_x = self.window_width - 4 - params.margin - params.close_button_size;
+            let close_y = params.margin;
+            layout.push((ButtonType::Close, (close_x, close_y)));
+        }
+
+        layout
+    }
+
+    /// Update all button positions based on current transcription mode
+    fn update_all_button_positions(&mut self) {
+        let button_types = match self.transcription_mode {
+            TranscriptionMode::RealTime => vec![
+                ButtonType::Pause,
+                ButtonType::Copy,
+                ButtonType::Reset,
+                ButtonType::ModeToggle,
+                ButtonType::Close,
+            ],
+            TranscriptionMode::Manual => vec![
+                ButtonType::RecordToggle,
+                ButtonType::Copy,
+                ButtonType::Reset,
+                ButtonType::ModeToggle,
+                ButtonType::Close,
+            ],
+        };
+
+        let layout = self.calculate_button_layout(&button_types);
+        let params = Self::calculate_layout_params(self.window_width);
+
+        for (button_type, (x, y)) in layout {
+            if let Some(button) = self.buttons.get_mut(&button_type) {
+                button.position = (x, y);
+                let size = if button_type == ButtonType::Close {
+                    params.close_button_size
+                } else {
+                    params.regular_button_size
+                };
+                button.size = (size, size);
+            }
+        }
+    }
+
+    /// Calculate dynamic button size based on window dimensions (legacy method for compatibility)
     fn calculate_button_size(window_width: u32, is_close: bool) -> u32 {
-        let base_size = if is_close { CLOSE_BUTTON_BASE_SIZE } else { COPY_BUTTON_BASE_SIZE };
-        let scale_factor = (window_width as f32 / 240.0).max(0.7).min(1.2); // Reduced max scale from 1.5 to 1.2 for smaller buttons
-        (base_size * scale_factor) as u32
+        let params = Self::calculate_layout_params(window_width);
+        if is_close {
+            params.close_button_size
+        } else {
+            params.regular_button_size
+        }
     }
 
-    /// Calculate dynamic button margin based on window dimensions
+    /// Calculate dynamic button margin based on window dimensions (legacy method for compatibility)
     fn calculate_button_margin(window_width: u32) -> u32 {
-        ((window_width as f32) * BUTTON_MARGIN_RATIO).max(6.0).min(16.0) as u32 // Reduced max from 20 to 16
+        Self::calculate_layout_params(window_width).margin
     }
 
-    /// Calculate dynamic button spacing based on window dimensions
+    /// Calculate dynamic button spacing based on window dimensions (legacy method for compatibility)
     fn calculate_button_spacing(window_width: u32) -> u32 {
-        ((window_width as f32) * BUTTON_SPACING_RATIO).max(4.0).min(12.0) as u32 // Reduced max from 16 to 12
+        Self::calculate_layout_params(window_width).spacing
     }
 
     pub fn new(
@@ -663,6 +717,40 @@ impl ButtonManager {
         }
     }
 
+    /// Helper function to load a single texture and assign it to the corresponding button
+    fn load_single_texture(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        image_bytes: &[u8],
+        texture_name: &str,
+        button_type: ButtonType,
+        format: wgpu::TextureFormat,
+    ) {
+        if let Ok(texture) = ButtonTexture::from_bytes(
+            device,
+            queue,
+            image_bytes,
+            Some(texture_name),
+            format,
+        ) {
+            // Store the texture in the appropriate cache field
+            match button_type {
+                ButtonType::Copy => self.copy_texture = Some(texture.clone()),
+                ButtonType::Reset => self.reset_texture = Some(texture.clone()),
+                ButtonType::Pause => self.pause_texture = Some(texture.clone()),
+                ButtonType::Play => self.play_texture = Some(texture.clone()),
+                ButtonType::Accept => self.accept_texture = Some(texture.clone()),
+                _ => {} // Other buttons don't have texture cache fields
+            }
+
+            // Assign the texture to the button if it exists
+            if let Some(button) = self.buttons.get_mut(&button_type) {
+                button.texture = Some(texture);
+            }
+        }
+    }
+
     pub fn load_textures(
         &mut self,
         device: &wgpu::Device,
@@ -674,84 +762,25 @@ impl ButtonManager {
         accept_image_bytes: Option<&[u8]>,
         format: wgpu::TextureFormat,
     ) {
-        // Load copy button texture
+        // Load all button textures using the helper function
         if let Some(image_bytes) = copy_image_bytes {
-            if let Ok(texture) = ButtonTexture::from_bytes(
-                device,
-                queue,
-                image_bytes,
-                Some("Copy Button Texture"),
-                format,
-            ) {
-                self.copy_texture = Some(texture.clone());
-                if let Some(button) = self.buttons.get_mut(&ButtonType::Copy) {
-                    button.texture = Some(texture);
-                }
-            }
+            self.load_single_texture(device, queue, image_bytes, "Copy Button Texture", ButtonType::Copy, format);
         }
 
-        // Load reset button texture
         if let Some(image_bytes) = reset_image_bytes {
-            if let Ok(texture) = ButtonTexture::from_bytes(
-                device,
-                queue,
-                image_bytes,
-                Some("Reset Button Texture"),
-                format,
-            ) {
-                self.reset_texture = Some(texture.clone());
-                if let Some(button) = self.buttons.get_mut(&ButtonType::Reset) {
-                    button.texture = Some(texture);
-                }
-            }
+            self.load_single_texture(device, queue, image_bytes, "Reset Button Texture", ButtonType::Reset, format);
         }
 
-        // Load pause button texture
         if let Some(image_bytes) = pause_image_bytes {
-            if let Ok(texture) = ButtonTexture::from_bytes(
-                device,
-                queue,
-                image_bytes,
-                Some("Pause Button Texture"),
-                format,
-            ) {
-                self.pause_texture = Some(texture.clone());
-                if let Some(button) = self.buttons.get_mut(&ButtonType::Pause) {
-                    button.texture = Some(texture);
-                }
-            }
+            self.load_single_texture(device, queue, image_bytes, "Pause Button Texture", ButtonType::Pause, format);
         }
 
-        // Load play button texture
         if let Some(image_bytes) = play_image_bytes {
-            if let Ok(texture) = ButtonTexture::from_bytes(
-                device,
-                queue,
-                image_bytes,
-                Some("Play Button Texture"),
-                format,
-            ) {
-                self.play_texture = Some(texture.clone());
-                if let Some(button) = self.buttons.get_mut(&ButtonType::Play) {
-                    button.texture = Some(texture);
-                }
-            }
+            self.load_single_texture(device, queue, image_bytes, "Play Button Texture", ButtonType::Play, format);
         }
 
-        // Load accept button texture
         if let Some(image_bytes) = accept_image_bytes {
-            if let Ok(texture) = ButtonTexture::from_bytes(
-                device,
-                queue,
-                image_bytes,
-                Some("Accept Button Texture"),
-                format,
-            ) {
-                self.accept_texture = Some(texture.clone());
-                if let Some(button) = self.buttons.get_mut(&ButtonType::Accept) {
-                    button.texture = Some(texture);
-                }
-            }
+            self.load_single_texture(device, queue, image_bytes, "Accept Button Texture", ButtonType::Accept, format);
         }
 
         // Manual mode buttons use play/pause textures:

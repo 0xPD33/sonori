@@ -16,7 +16,7 @@ use crate::silero_audio_processor::{AudioSegment, SileroVad};
 use crate::stats_reporter::StatsReporter;
 use crate::transcription_processor::TranscriptionProcessor;
 use crate::transcription_stats::TranscriptionStats;
-use crate::ui::common::AudioVisualizationData;
+use crate::ui::common::{AudioVisualizationData, ProcessingState};
 
 /// Transcription mode enumeration
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -142,6 +142,24 @@ pub enum ManualSessionCommand {
     SwitchMode(TranscriptionMode),
 }
 
+/// RAII guard to automatically reset finalizing flag when dropped
+struct FinalizingGuard {
+    flag: Arc<AtomicBool>,
+}
+
+impl FinalizingGuard {
+    fn new(flag: Arc<AtomicBool>) -> Self {
+        flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        Self { flag }
+    }
+}
+
+impl Drop for FinalizingGuard {
+    fn drop(&mut self) {
+        self.flag.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 /// Main transcription coordinator that integrates all components
 pub struct RealTimeTranscriber {
     // Audio capture (wrapped in Arc<Mutex> for sharing with command processor)
@@ -243,12 +261,7 @@ impl RealTimeTranscriber {
         let backend = Arc::new(Mutex::new(None));
         let transcription_stats = Arc::new(Mutex::new(TranscriptionStats::new()));
 
-        let audio_visualization_data = Arc::new(RwLock::new(AudioVisualizationData {
-            samples: Vec::new(),
-            is_speaking: false,
-            transcript: String::new(),
-            reset_requested: false,
-        }));
+        let audio_visualization_data = Arc::new(RwLock::new(AudioVisualizationData::with_capacity(1024)));
 
         let audio_processor = match SileroVad::new(
             (
@@ -277,6 +290,13 @@ impl RealTimeTranscriber {
         let backend_type = app_config.backend_config.backend.clone();
         let backend_config = app_config.backend_config.clone();
 
+        // Set initial processing state for loading
+        {
+            let mut audio_data = audio_visualization_data.write();
+            audio_data.set_processing_state(ProcessingState::Loading);
+        }
+
+        let audio_visualization_data_for_load = audio_visualization_data.clone();
         tokio::spawn(async move {
             println!(
                 "INFO: Loading {} backend with model at {:?}",
@@ -302,10 +322,18 @@ impl RealTimeTranscriber {
                     *backend_clone.lock() = Some(b);
                     backend_ready_for_task.store(true, Ordering::Relaxed);
                     println!("Backend ready for transcription");
+
+                    // Set processing state to idle after successful load
+                    let mut audio_data = audio_visualization_data_for_load.write();
+                    audio_data.set_processing_state(ProcessingState::Idle);
                 }
                 Err(e) => {
                     eprintln!("ERROR: Failed to load backend: {}", e);
                     eprintln!("Backend will not be available for transcription");
+
+                    // Set processing state to error on load failure
+                    let mut audio_data = audio_visualization_data_for_load.write();
+                    audio_data.set_processing_state(ProcessingState::Error);
                 }
             }
         });
@@ -389,6 +417,7 @@ impl RealTimeTranscriber {
             self.running.clone(),
             self.transcription_done_tx.clone(),
             self.transcription_stats.clone(),
+            self.audio_visualization_data.clone(),
         );
 
         // Get config
@@ -447,6 +476,7 @@ impl RealTimeTranscriber {
         let audio_processor_ref = self.audio_processor_ref.clone();
         let audio_capture = self.audio_capture.clone(); // Share audio capture for stream control
         let sound_player = self.sound_player.clone(); // Clone sound player for audio feedback
+        let transcription_stats = self.transcription_stats.clone(); // For drain detection
         let app_config = read_app_config();
         let manual_mode_config = app_config.manual_mode_config.clone();
         let sample_rate = app_config.audio_processor_config.sample_rate;
@@ -565,8 +595,8 @@ impl RealTimeTranscriber {
                                 ManualSessionCommand::StopSession { mut responder } => {
                                     let current_mode = *transcription_mode.lock();
                                     if current_mode == TranscriptionMode::Manual {
-                                        // Set finalizing flag to prevent new sessions from starting
-                                        finalizing_manual_session.store(true, Ordering::Relaxed);
+                                        // Create RAII guard to automatically manage finalizing flag
+                                        let _guard = FinalizingGuard::new(finalizing_manual_session.clone());
 
                                         // Move active session into processing state so a new one can begin immediately
                                         let session_id_opt = Self::move_session_to_processing(
@@ -601,7 +631,6 @@ impl RealTimeTranscriber {
                                                     Some(session_id)
                                                 } else {
                                                     eprintln!("No active session to stop");
-                                                    finalizing_manual_session.store(false, Ordering::Relaxed);
                                                     if let Some(responder) = responder.take() {
                                                         let _ = responder
                                                             .send(Err(anyhow::anyhow!("No active manual session to stop")));
@@ -617,16 +646,52 @@ impl RealTimeTranscriber {
                                                 let processing_manual_session =
                                                     processing_manual_session.clone();
                                                 let sound_player_for_task = sound_player.clone();
+                                                let audio_viz_data = audio_visualization_data.clone();
                                                 let captured_session_id = session_id.clone(); // Capture before spawning
                                                 let recording_for_task = recording.clone();
-                                                let finalizing_for_task = finalizing_manual_session.clone();
+                                                let audio_capture_for_drain = audio_capture.clone();
+                                                let transcription_stats_for_drain = transcription_stats.clone();
                                                 tokio::spawn(async move {
-                                                    // Wait for any in-flight audio samples to be processed
-                                                    // During this time, recording=true allows channel to drain
-                                                    tokio::time::sleep(Duration::from_millis(100)).await;
+                                                    // Wait for channel to drain using sample counters
+                                                    let sent_count = audio_capture_for_drain.lock().get_samples_sent_count();
+                                                    let received_count = audio_processor.get_samples_received_count();
+
+                                                    let start_time = tokio::time::Instant::now();
+                                                    let max_wait = Duration::from_millis(2000); // 2-second timeout
+
+                                                    loop {
+                                                        let sent = sent_count.load(Ordering::Acquire);
+                                                        let received = received_count.load(Ordering::Acquire);
+
+                                                        if received >= sent {
+                                                            println!("Channel drained: {} samples processed", received);
+                                                            break;
+                                                        }
+
+                                                        if start_time.elapsed() > max_wait {
+                                                            let lost = sent - received;
+                                                            eprintln!(
+                                                                "Warning: Channel drain timeout - {} samples still in flight",
+                                                                lost
+                                                            );
+                                                            // Update stats
+                                                            if let Some(mut stats) = transcription_stats_for_drain.try_lock() {
+                                                                stats.record_audio_drop(lost as u64);
+                                                            }
+                                                            break;
+                                                        }
+
+                                                        tokio::time::sleep(Duration::from_millis(10)).await;
+                                                    }
 
                                                     // NOW set recording=false after channel has drained
                                                     recording_for_task.store(false, Ordering::Relaxed);
+
+                                                    // Set processing state to transcribing for manual session
+                                                    {
+                                                        let mut audio_data = audio_viz_data.write();
+                                                        audio_data.set_processing_state(ProcessingState::Transcribing);
+                                                    }
 
                                                     if let Err(e) = audio_processor
                                                         .trigger_manual_transcription(sample_rate, Some(captured_session_id.clone()))
@@ -640,6 +705,12 @@ impl RealTimeTranscriber {
                                                             &processing_manual_session,
                                                             &session_id,
                                                         );
+
+                                                        // Set processing state to error on manual transcription failure
+                                                        {
+                                                            let mut audio_data = audio_viz_data.write();
+                                                            audio_data.set_processing_state(ProcessingState::Error);
+                                                        }
                                                     } else if Self::clear_processing_session_if_matches(
                                                         &processing_manual_session,
                                                         &session_id,
@@ -648,10 +719,20 @@ impl RealTimeTranscriber {
                                                         if let Some(player) = &sound_player_for_task {
                                                             player.play(crate::sound_generator::SoundType::SessionComplete);
                                                         }
-                                                    }
 
-                                                    // Clear finalizing flag - new sessions can now start
-                                                    finalizing_for_task.store(false, Ordering::Relaxed);
+                                                        // Set processing state to completed on successful manual transcription
+                                                        {
+                                                            let mut audio_data = audio_viz_data.write();
+                                                            audio_data.set_processing_state(ProcessingState::Completed);
+                                                        }
+
+                                                        // Brief delay then return to idle
+                                                        tokio::time::sleep(Duration::from_millis(2000)).await;
+                                                        {
+                                                            let mut audio_data = audio_viz_data.write();
+                                                            audio_data.set_processing_state(ProcessingState::Idle);
+                                                        }
+                                                    }
                                                 });
                                                 if let Some(responder) = responder.take() {
                                                     let _ = responder.send(Ok(()));
@@ -662,7 +743,6 @@ impl RealTimeTranscriber {
                                                     &processing_manual_session,
                                                     &session_id,
                                                 );
-                                                finalizing_manual_session.store(false, Ordering::Relaxed);
                                                 if let Some(responder) = responder.take() {
                                                     let _ = responder.send(Err(anyhow::anyhow!(
                                                         "Audio processor unavailable for manual transcription"
@@ -670,7 +750,6 @@ impl RealTimeTranscriber {
                                                 }
                                             }
                                         } else {
-                                            finalizing_manual_session.store(false, Ordering::Relaxed);
                                             if let Some(responder) = responder.take() {
                                                 let _ = responder.send(Err(anyhow::anyhow!(
                                                     "No active manual session to stop"
@@ -1101,6 +1180,12 @@ impl RealTimeTranscriber {
     /// Get the current transcription mode
     pub fn get_transcription_mode(&self) -> TranscriptionMode {
         *self.transcription_mode.lock()
+    }
+
+    /// Set processing state in the audio visualization data
+    pub fn set_processing_state(&self, state: ProcessingState) {
+        let mut audio_data = self.audio_visualization_data.write();
+        audio_data.set_processing_state(state);
     }
 
     pub fn get_manual_session_sender(&self) -> mpsc::Sender<ManualSessionCommand> {
