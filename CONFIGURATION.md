@@ -2,6 +2,92 @@
 
 This document provides comprehensive configuration options for Sonori. The application uses a `config.toml` file in the same directory as the executable. If not present, a default configuration is used.
 
+**Important:** Most users don't need to change many settings! The defaults work well for everyone. You typically only need to adjust 2-3 settings based on your needs.
+
+## Quick Start Examples
+
+Here are the most common configurations. Just copy the relevant sections into your `config.toml`:
+
+### 🚀 Fast & Lightweight (Good for older computers)
+```toml
+[general_config]
+model = "base.en"                    # Fast, decent quality
+language = "en"                     # Change to your language
+transcription_mode = "manual"       # Push-to-talk style
+
+[backend_config]
+backend = "whisper_cpp"              # Recommended backend
+gpu_enabled = false                 # CPU-only for compatibility
+quantization_level = "medium"        # Good balance
+```
+
+### ⚖️ Balanced Performance (Good default for most users)
+```toml
+[general_config]
+model = "small.en"                   # Better accuracy, still fast
+language = "en"                     # Change to your language
+transcription_mode = "manual"       # Push-to-talk style
+
+[backend_config]
+backend = "whisper_cpp"              # Recommended backend
+gpu_enabled = true                  # Use GPU if available
+quantization_level = "medium"        # Good balance
+```
+
+### 🎯 High Quality (Powerful computers with GPU)
+```toml
+[general_config]
+model = "large-v3-turbo"             # Excellent accuracy
+language = "en"                     # Change to your language
+transcription_mode = "manual"       # Push-to-talk style
+
+[backend_config]
+backend = "whisper_cpp"              # Recommended backend
+gpu_enabled = true                  # GPU highly recommended
+quantization_level = "high"          # Maximum quality
+```
+
+### 🎤 Real-Time Transcription (Live as you speak)
+```toml
+[general_config]
+model = "small.en"                   # Fast enough for real-time
+language = "en"                     # Change to your language
+transcription_mode = "realtime"     # Live transcription
+
+[backend_config]
+backend = "whisper_cpp"              # Recommended backend
+gpu_enabled = true                  # GPU required for real-time
+quantization_level = "medium"        # Good balance
+```
+
+### 🌍 Multilingual Support (Non-English languages)
+```toml
+[general_config]
+model = "small"                      # No .en suffix = multilingual
+language = "es"                     # Change: es, fr, de, it, pt, etc.
+transcription_mode = "manual"       # Push-to-talk style
+
+[backend_config]
+backend = "whisper_cpp"              # Recommended backend
+gpu_enabled = true                  # GPU helps with multiple languages
+quantization_level = "medium"        # Good balance
+```
+
+## Common Questions
+
+**Do I need to change all these settings?** No! The examples above cover 95% of use cases. Just pick one and you're good to go.
+
+**What's the difference between manual and realtime?**
+- **Manual**: Record your speech, then transcribe. Good for longer speech, less resource intensive
+- **Realtime**: Transcribes as you speak. Good for short phrases, more resource intensive
+
+**Should I use GPU acceleration?** If you have a decent GPU (NVIDIA, AMD, Intel), yes. If you're on an older laptop or having issues, set `gpu_enabled = false`.
+
+**What model should I use?**
+- `base.en` or `small.en` for most users
+- `large-v3-turbo` for best accuracy (requires good GPU)
+- Models without `.en` support multiple languages
+
 ## Complete Configuration Example
 
 ```toml

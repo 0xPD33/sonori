@@ -175,33 +175,24 @@ For headless usage or terminal-based transcription:
 
 ## Configuration
 
-Sonori uses a `config.toml` file for configuration. See [CONFIGURATION.md](./CONFIGURATION.md) for complete configuration options and examples.
+Sonori uses a `config.toml` file for configuration. The defaults work well for most users - you typically only need to change 2-3 settings.
 
-### Quick Start Configuration
+**Quick Setup**: Most users just need to choose a configuration from the [Configuration Guide](./CONFIGURATION.md) and copy it to `config.toml`.
 
-A minimal config to get started:
+### Common Choices:
+- **Fast & Lightweight**: Good for older computers
+- **Balanced Performance**: Recommended for most users
+- **High Quality**: For powerful computers with GPU
+- **Real-Time**: Live transcription as you speak
+- **Multilingual**: For non-English languages
 
-```toml
-[general_config]
-model = "base.en"
-language = "en"
-transcription_mode = "realtime"
-
-[backend_config]
-backend = "whisper_cpp"
-gpu_enabled = false
-
-[sound_config]
-enabled = true
-```
-
-For detailed configuration options, backend selection, and performance tuning, see the [complete configuration guide](./CONFIGURATION.md).
+See the [complete configuration guide](./CONFIGURATION.md) for all examples and advanced settings.
 
 ## Known Issues
 
 - The application might not work with all Wayland compositors (I only tested it with KDE Plasma and KWin).
 - The transcriptions are not 100% accurate and might contain errors. This is closely related to the whisper model that is used.
-- Sometimes the last word of a "segment" is cut off. This is probably an issue with processing the audio data.
+- **30-second transcription truncation**: Recordings exactly 30 seconds long may get truncated. This is a known architectural limitation of Whisper models, not a bug. Whisper uses 30-second processing windows with a 448 token limit - dense speech can exhaust this limit before the full 30 seconds are transcribed. See Troubleshooting section for solutions.
 - The CPU usage is too high, even when idle. This might be related to bad code on my side or some overhead of the models. I already identified that changing the buffer size will help (or make it worse).
 
 ## Troubleshooting
@@ -251,6 +242,31 @@ pip install -U ctranslate2 huggingface_hub torch transformers
 ct2-transformers-converter --model your-model --output_dir ~/.cache/whisper/your-model --copy_files preprocessor_config.json tokenizer.json
 ```
 
+### 30-Second Transcription Truncation
+
+If you experience transcription cutoffs with recordings exactly 30 seconds long, this is due to Whisper's architectural limitations:
+
+**Root Cause**: Whisper models process audio in 30-second windows with a 448 token limit. Dense speech can exhaust this limit before the full 30 seconds are transcribed.
+
+**Solutions**:
+
+1. **Keep recordings under 30 seconds** (simplest): For manual mode, try to keep your recordings around 25 seconds or less to avoid this boundary entirely.
+
+2. **Adjust chunk settings** (recommended):
+```toml
+[manual_mode_config]
+chunk_duration_seconds = 20.0    # Experiment with values between 15-25
+chunk_overlap_seconds = 2.0      # Overlap helps prevent word cutoff
+```
+
+3. **Switch to CTranslate2 backend**:
+```toml
+[backend_config]
+backend = "ctranslate2"
+```
+
+Try different `chunk_duration_seconds` values to find what works best for your speech patterns and content density.
+
 ## Platform Support
 
 - **Linux**: Supported (tested on Wayland using KDE Plasma and KWin)
@@ -270,4 +286,16 @@ ct2-transformers-converter --model your-model --output_dir ~/.cache/whisper/your
 
 ## License
 
-[MIT](LICENSE)
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+
+### Contributing
+
+Contributions are welcome and encouraged! Whether you're fixing bugs, adding features, improving documentation, or testing on different distributions, your help is appreciated.
+
+**Getting Started:**
+- Check out [ARCHITECTURE.md](./ARCHITECTURE.md) to understand the codebase structure
+- Look at the planned features and known issues below for ideas
+- Test your changes on your distribution (we aim to support NixOS and other major distros)
+- Open an issue or PR - no formal guidelines yet, just make sure it works!
+
+**Note:** The application is in active development. You may encounter bugs or instability as new features are added.
