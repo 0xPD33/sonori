@@ -107,6 +107,7 @@ impl AudioProcessor {
         let session_id_ref = self.current_session_id.clone();
         let sample_rate = self.sample_rate;
         let samples_received = self.samples_received.clone();
+        let manual_session_tx = self.manual_session_tx.clone();
 
         // Create thread-local buffer
         let mut audio_buffer = Vec::with_capacity(buffer_size);
@@ -207,7 +208,7 @@ impl AudioProcessor {
                                 .await;
                             }
                             TranscriptionMode::Manual => {
-                                Self::process_manual_audio(
+                                let buffer_overflow = Self::process_manual_audio(
                                     &audio_buffer,
                                     &manual_audio_buffer,
                                     &audio_visualization_data,
@@ -217,6 +218,16 @@ impl AudioProcessor {
                                     sample_rate,
                                 )
                                 .await;
+
+                                // If buffer overflow occurred, automatically trigger session stop
+                                // to transcribe the accumulated audio
+                                if buffer_overflow {
+                                    let _ = manual_session_tx.send(
+                                        crate::real_time_transcriber::ManualSessionCommand::StopSession {
+                                            responder: None,
+                                        }
+                                    ).await;
+                                }
                             }
                         }
                     }
@@ -355,7 +366,7 @@ impl AudioProcessor {
         manual_buffer_max_size: usize,
         recording: &Arc<AtomicBool>,
         sample_rate: usize,
-    ) {
+    ) -> bool {
         // Update visualization data
         if let Some(mut audio_data) = audio_visualization_data.try_write() {
             let new_samples: Vec<f32> = audio_buffer.iter().take(buffer_size).copied().collect();
@@ -390,8 +401,12 @@ impl AudioProcessor {
             if space_remaining > 0 {
                 manual_buffer.extend_from_slice(&audio_buffer[..space_remaining]);
             }
+
+            // Return true to indicate overflow occurred
+            true
         } else {
             manual_buffer.extend_from_slice(audio_buffer);
+            false
         }
     }
 

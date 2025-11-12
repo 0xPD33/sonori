@@ -3,6 +3,7 @@ pub mod button_panel;
 pub mod button_texture;
 pub mod buttons;
 pub mod common;
+pub mod tooltip;
 pub mod event_handler;
 pub mod gpu_utils;
 pub mod layout_manager;
@@ -15,6 +16,7 @@ pub mod spectogram;
 pub mod text_processor;
 pub mod text_renderer;
 pub mod text_window;
+pub mod timer_badge;
 pub mod viewport;
 pub mod window;
 

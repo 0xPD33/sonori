@@ -14,6 +14,7 @@ use winit::{
 use super::button_panel::ButtonPanel;
 use super::buttons::ButtonManager;
 use super::common::AudioVisualizationData;
+use super::tooltip::Tooltip;
 use super::event_handler::EventHandler;
 use super::layout_manager::LayoutManager;
 use super::loading_animation::LoadingAnimation;
@@ -23,6 +24,7 @@ use super::scrollbar::Scrollbar;
 use super::spectogram::Spectrogram;
 use super::text_processor::TextProcessor;
 use super::text_window::TextWindow;
+use super::timer_badge::TimerBadge;
 use parking_lot::RwLock;
 
 pub const SPECTROGRAM_WIDTH: u32 = 240; // Width of the spectrogram
@@ -45,12 +47,14 @@ pub struct WindowState {
     pub text_window: TextWindow,
     pub button_manager: ButtonManager,
     pub button_panel: ButtonPanel,
+    pub tooltip: Tooltip,
     pub text_processor: TextProcessor,
     pub layout_manager: LayoutManager,
     pub scrollbar: Scrollbar,
     pub scroll_state: ScrollState,
     pub event_handler: EventHandler,
     pub loading_animation: LoadingAnimation,
+    pub timer_badge: TimerBadge,
     pub running: Option<Arc<AtomicBool>>,
     pub recording: Option<Arc<AtomicBool>>,
     transcription_mode_ref:
@@ -213,6 +217,13 @@ impl WindowState {
             &render_pipelines.hover_bind_group_layout,
         );
 
+        // Create the tooltip
+        let tooltip = Tooltip::new(
+            device.clone(),
+            queue.clone(),
+            config.format,
+        );
+
         // Create the scrollbar
         let scrollbar = Scrollbar::new(&device, &config, &render_pipelines.hover_bind_group_layout);
 
@@ -242,6 +253,9 @@ impl WindowState {
         // Create loading animation
         let loading_animation = LoadingAnimation::new(&Arc::new(device.clone()), config.format);
 
+        // Create timer badge
+        let timer_badge = TimerBadge::new(&Arc::new(device.clone()), &Arc::new(queue.clone()), config.format);
+
         // Calculate target frame duration from display config
         let target_frame_duration =
             std::time::Duration::from_secs_f64(1.0 / display_config.target_fps as f64);
@@ -258,6 +272,7 @@ impl WindowState {
             text_window,
             button_manager,
             button_panel,
+            tooltip,
             text_processor,
             layout_manager,
 
@@ -270,6 +285,9 @@ impl WindowState {
 
             // Loading animation
             loading_animation,
+
+            // Timer badge
+            timer_badge,
 
             // Transcriber state references
             running,
@@ -412,6 +430,13 @@ impl WindowState {
             .map(|rec| rec.load(Ordering::Relaxed))
             .unwrap_or(false);
 
+        // Update timer badge based on recording state
+        if is_recording && !self.timer_badge.is_recording() {
+            self.timer_badge.start_recording();
+        } else if !is_recording && self.timer_badge.is_recording() {
+            self.timer_badge.stop_recording();
+        }
+
         // Determine if scrollbar is needed and the actual width to use for text area
         let mut need_scrollbar: bool = false;
         let mut text_area_width: u32;
@@ -527,13 +552,27 @@ impl WindowState {
         let raw_scale = self.window_width as f32 / base_width;
         let text_scale = raw_scale.min(max_scale).max(0.85); // Increased minimum to 0.85x for better readability
 
+        // Get current transcription mode
+        let transcription_mode = *self.transcription_mode_ref.lock();
+
         // Check if we should show processing animation instead of text
         let (should_show_animation, processing_state) = if let Some(audio_data) = &self.audio_data {
             let audio_data_lock = audio_data.read();
-            let is_processing = audio_data_lock.is_processing();
             let state = audio_data_lock.processing_state;
+            let is_empty = display_text.is_empty();
             drop(audio_data_lock);
-            (is_processing && display_text.is_empty(), state)
+
+            // Simplified visibility logic - only show loading animation
+            let should_show = match (state, is_empty) {
+                // Show loading animation when loading
+                (crate::ui::common::ProcessingState::Loading, _) => true,
+                // Show loading animation when transcribing with no text yet
+                (crate::ui::common::ProcessingState::Transcribing, true) => true,
+                // Don't show animations for any other states
+                _ => false,
+            };
+
+            (should_show, state)
         } else {
             (false, crate::ui::common::ProcessingState::Idle)
         };
@@ -579,7 +618,7 @@ impl WindowState {
             );
 
             // Render processing text below animation
-            let processing_text = self.loading_animation.get_processing_text(processing_state);
+            let processing_text = self.loading_animation.get_processing_text(processing_state, transcription_mode);
             let text_y_for_status = center_y + animation_size * 0.8; // Position below animation
 
             self.text_window.render_text_only(
@@ -633,6 +672,10 @@ impl WindowState {
             // Update RecordToggle button texture based on recording state
             self.button_manager.update_record_toggle_button_texture();
 
+            // Update tooltip state
+            let hovered_button = self.button_manager.get_hovered_button();
+            self.tooltip.update(hovered_button);
+
             // Get button panel bounds from button manager
             let bottom_button_bounds = self.button_manager.get_button_panel_bounds();
             let close_button_bounds = self.button_manager.get_close_button_panel_bounds();
@@ -644,7 +687,26 @@ impl WindowState {
 
             // Only render buttons when hovering over transcript area
             (&mut self.button_manager).render(&view, &mut encoder, true, &self.queue);
+
+            // Render tooltip (after buttons, so it appears on top)
+            self.tooltip.render(&view, &mut encoder, self.window_width, self.window_height);
+        } else {
+            // Not hovering, hide tooltip
+            self.tooltip.update(None);
         }
+
+        // Render timer badge overlay (bottom-right of text area)
+        self.timer_badge.render(
+            &mut encoder,
+            &view,
+            &self.queue,
+            text_x,
+            text_y,
+            text_area_width as f32,
+            text_area_height as f32,
+            self.config.width,
+            self.config.height,
+        );
 
         // Submit all rendering commands
         self.queue.submit(std::iter::once(encoder.finish()));

@@ -4,6 +4,7 @@ use winit::dpi::PhysicalSize;
 
 use super::gpu_utils::GpuQuadRenderer;
 use super::common::ProcessingState;
+use crate::real_time_transcriber::TranscriptionMode;
 
 /// Loading animation component for transcription processing
 pub struct LoadingAnimation {
@@ -24,6 +25,10 @@ enum AnimationState {
     Success,
     /// Error animation (for errors)
     Error,
+    /// Idle animation (gentle pulsing dot)
+    Idle,
+    /// Paused animation (pause bars)
+    Paused,
 }
 
 impl LoadingAnimation {
@@ -49,7 +54,8 @@ impl LoadingAnimation {
             ProcessingState::Loading | ProcessingState::Transcribing => AnimationState::Dots,
             ProcessingState::Completed => AnimationState::Success,
             ProcessingState::Error => AnimationState::Error,
-            ProcessingState::Idle => AnimationState::Dots, // Default to dots
+            ProcessingState::Idle => AnimationState::Idle,
+            ProcessingState::Paused => AnimationState::Paused,
         };
 
         if state_changed {
@@ -76,6 +82,8 @@ impl LoadingAnimation {
             AnimationState::Spinner => self.render_spinner_animation(encoder, view, center_x, center_y, size, color, progress),
             AnimationState::Success => self.render_success_animation(encoder, view, center_x, center_y, size, color),
             AnimationState::Error => self.render_error_animation(encoder, view, center_x, center_y, size, color),
+            AnimationState::Idle => self.render_idle_animation(encoder, view, center_x, center_y, size, color, progress),
+            AnimationState::Paused => self.render_paused_animation(encoder, view, center_x, center_y, size, color),
         }
     }
 
@@ -246,14 +254,94 @@ impl LoadingAnimation {
         );
     }
 
+    /// Render idle animation (gentle pulsing dot)
+    fn render_idle_animation(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        center_x: f32,
+        center_y: f32,
+        size: f32,
+        color: [f32; 4],
+        progress: f32,
+    ) {
+        // Single dot that gently pulses
+        let dot_size = size * 0.12;
+        let scale = 0.8 + 0.2 * (std::f32::consts::PI * progress).sin().abs(); // 0.8 to 1.0
+        let actual_size = dot_size * scale;
+
+        self.renderer.render_quad(
+            encoder,
+            view,
+            center_x - actual_size / 2.0,
+            center_y - actual_size / 2.0,
+            actual_size,
+            actual_size,
+            &[],
+            "Idle Dot",
+        );
+    }
+
+    /// Render paused animation (pause bars)
+    fn render_paused_animation(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        center_x: f32,
+        center_y: f32,
+        size: f32,
+        color: [f32; 4],
+    ) {
+        // Two vertical bars (pause icon)
+        let bar_width = size * 0.12;
+        let bar_height = size * 0.4;
+        let spacing = size * 0.08;
+
+        // Left bar
+        self.renderer.render_quad(
+            encoder,
+            view,
+            center_x - spacing - bar_width,
+            center_y - bar_height / 2.0,
+            bar_width,
+            bar_height,
+            &[],
+            "Pause Bar Left",
+        );
+
+        // Right bar
+        self.renderer.render_quad(
+            encoder,
+            view,
+            center_x + spacing,
+            center_y - bar_height / 2.0,
+            bar_width,
+            bar_height,
+            &[],
+            "Pause Bar Right",
+        );
+    }
+
     /// Get appropriate text for the current processing state
-    pub fn get_processing_text(&self, processing_state: ProcessingState) -> &'static str {
-        match processing_state {
-            ProcessingState::Loading => "Loading model...",
-            ProcessingState::Transcribing => "Transcribing...",
-            ProcessingState::Completed => "Transcription complete",
-            ProcessingState::Error => "Transcription failed",
-            ProcessingState::Idle => "Ready",
+    pub fn get_processing_text(&self, processing_state: ProcessingState, transcription_mode: TranscriptionMode) -> &'static str {
+        match (transcription_mode, processing_state) {
+            // Loading is same for both modes
+            (_, ProcessingState::Loading) => "Loading model...",
+
+            // Real-time mode messages
+            (TranscriptionMode::RealTime, ProcessingState::Idle) => "Press Space to start • Ready to transcribe",
+            (TranscriptionMode::RealTime, ProcessingState::Paused) => "Paused • Press Space to resume",
+            (TranscriptionMode::RealTime, ProcessingState::Transcribing) => "Transcribing...",
+
+            // Manual mode messages
+            (TranscriptionMode::Manual, ProcessingState::Idle) => "Press Space to record • Ready",
+            (TranscriptionMode::Manual, ProcessingState::Transcribing) => "Transcribing...",
+            (TranscriptionMode::Manual, ProcessingState::Completed) => "Complete • Press Space for new recording",
+            (TranscriptionMode::Manual, ProcessingState::Error) => "Transcription failed • Try again",
+            (TranscriptionMode::Manual, ProcessingState::Paused) => "Paused • Press Space to resume",
+
+            // Fallback
+            _ => "Ready",
         }
     }
 
@@ -265,6 +353,7 @@ impl LoadingAnimation {
             ProcessingState::Completed => [0.2, 0.8, 0.2, 0.7],   // More translucent green
             ProcessingState::Error => [0.9, 0.2, 0.2, 0.7],     // More translucent red
             ProcessingState::Idle => [1.0, 0.85, 0.15, 0.6],    // More translucent gold
+            ProcessingState::Paused => [0.9, 0.6, 0.1, 0.6],    // More translucent orange
         }
     }
 }

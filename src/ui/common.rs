@@ -7,6 +7,8 @@ pub enum ProcessingState {
     Loading,
     /// Currently transcribing audio
     Transcribing,
+    /// Recording paused
+    Paused,
     /// Processing completed successfully
     Completed,
     /// Error occurred during processing
@@ -69,9 +71,9 @@ impl AudioVisualizationData {
         }
     }
 
-    /// Check if currently processing (loading or transcribing)
+    /// Check if currently processing (loading, transcribing, or paused)
     pub fn is_processing(&self) -> bool {
-        matches!(self.processing_state, ProcessingState::Loading | ProcessingState::Transcribing)
+        matches!(self.processing_state, ProcessingState::Loading | ProcessingState::Transcribing | ProcessingState::Paused)
     }
 
     /// Get duration since processing state changed

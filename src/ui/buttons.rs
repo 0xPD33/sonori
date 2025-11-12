@@ -1343,4 +1343,18 @@ impl ButtonManager {
 
         Some((panel_x, panel_y, panel_width, panel_height))
     }
+
+    /// Get currently hovered button info for tooltip
+    /// Returns (button_type, center_x, top_y, bottom_y, left_x) if a button is hovered
+    pub fn get_hovered_button(&self) -> Option<(ButtonType, f32, f32, f32, f32)> {
+        let button_type = self.active_button?;
+        let button = self.buttons.get(&button_type)?;
+
+        let center_x = button.position.0 as f32 + (button.size.0 as f32 / 2.0);
+        let top_y = button.position.1 as f32;
+        let bottom_y = button.position.1 as f32 + button.size.1 as f32;
+        let left_x = button.position.0 as f32;
+
+        Some((button_type, center_x, top_y, bottom_y, left_x))
+    }
 }
