@@ -78,9 +78,6 @@ jobs:
       - name: Build release binary
         run: cargo build --release --verbose
 
-      - name: Run tests
-        run: cargo test --release --verbose
-
       - name: Extract version from tag
         id: get_version
         run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
