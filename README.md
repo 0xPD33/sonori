@@ -55,9 +55,11 @@ Contributions are welcome and encouraged! Whether you're fixing bugs, adding fea
 
 ## Requirements
 
+**Platform:** Linux only (x86_64, aarch64)
+
 ### Dependencies
 
-**Note:** While primarily tested on NixOS, the application should work on other Linux distributions with the proper dependencies installed. Feedback on other distros is welcome!
+**Note:** Primarily tested on NixOS, but should work on other Linux distributions with proper dependencies installed. Feedback on other distros is welcome!
 
 For Debian/Ubuntu-based distributions:
 
@@ -121,15 +123,73 @@ Sonori needs models to function properly, depending on the selected backend:
 
 ## Installation
 
+### NixOS (Recommended)
+
+**Try without installing:**
+```bash
+nix run github:0xPD33/sonori
+```
+
+**Install to profile:**
+```bash
+nix profile install github:0xPD33/sonori
+```
+
+**Add to configuration.nix:**
+```nix
+{
+  inputs.sonori.url = "github:0xPD33/sonori";
+
+  # In your system configuration:
+  environment.systemPackages = [ inputs.sonori.packages.${system}.default ];
+}
+```
+
+### From Releases
+
+1. Download the latest tarball from [GitHub Releases](https://github.com/0xPD33/sonori/releases)
+2. Extract: `tar -xzf sonori-*.tar.gz`
+3. Run: `./sonori-*/sonori`
+
 ### Building from Source
 
-1. Install Rust and Cargo (https://rustup.rs/) and make sure the dependencies are installed
-2. Clone this repository
-3. Build the application:
-   ```bash
-   cargo build --release
-   ```
-4. The executable will be in `target/release/sonori`
+**Requirements:** Install Rust and Cargo from https://rustup.rs/
+
+#### Arch/Manjaro
+```bash
+sudo pacman -S base-devel portaudio clang pkgconf wl-copy \
+  libxkbcommon wayland libx11 libxcursor libxi libxrandr alsa-lib openssl fftw curl cmake \
+  vulkan-headers vulkan-tools blas shaderc
+```
+
+#### Fedora/RHEL
+```bash
+sudo dnf install gcc gcc-c++ portaudio-devel clang-devel pkg-config wl-copy \
+  libxkbcommon-devel wayland-devel libX11-devel libXcursor-devel libXi-devel libXrandr-devel \
+  alsa-lib-devel openssl-devel fftw-devel curl cmake vulkan-loader-devel vulkan-headers \
+  openblas-devel shaderc
+```
+
+#### Debian/Ubuntu
+```bash
+sudo apt install build-essential portaudio19-dev libclang-dev pkg-config wl-copy \
+  libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev \
+  libasound2-dev libssl-dev libfftw3-dev curl cmake libvulkan-dev vulkan-headers \
+  libopenblas-dev shaderc
+```
+
+#### NixOS
+```bash
+nix develop
+```
+
+**Build:**
+```bash
+git clone https://github.com/0xPD33/sonori
+cd sonori
+cargo build --release
+./target/release/sonori
+```
 
 ## Usage
 
@@ -269,8 +329,20 @@ Try different `chunk_duration_seconds` values to find what works best for your s
 
 ## Platform Support
 
-- **Linux**: Supported (tested on Wayland using KDE Plasma and KWin)
-- **Windows/macOS**: Not officially supported or tested
+**Supported:**
+- Linux x86_64 (64-bit Intel/AMD)
+- Linux aarch64 (64-bit ARM)
+
+**Tested on:**
+- NixOS with KDE Plasma/KWin (Wayland)
+- Other major Linux distributions should work with proper dependencies
+
+**Not supported:**
+- Windows
+- macOS
+- 32-bit architectures
+
+**Note:** While primarily developed and tested on NixOS, Sonori should work on other Linux distributions with the proper dependencies installed. Feedback and testing on other distros is welcome!
 
 ## Credits
 

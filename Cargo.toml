@@ -1,6 +1,6 @@
 [package]
 name = "sonori"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 
 [dependencies]
@@ -37,3 +37,10 @@ hound = "3.5"
 # Enable runtime CPU feature detection
 std = ["std_detect"]
 std_detect = []
+
+[package.metadata.release]
+publish = false          # Don't publish to crates.io
+push = true              # Push automatically
+sign-tag = false         # No GPG signing
+tag-message = "Release {{version}}"
+pre-release-commit-message = "chore: release sonori version {{version}}"

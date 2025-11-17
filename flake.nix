@@ -100,13 +100,19 @@
         };
 
         packages = let
+          cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
           sonoriPkg = pkgs.rustPlatform.buildRustPackage rec {
             pname = "sonori";
-            version = "0.2.0";  # Match Cargo.toml
+            version = cargoToml.package.version;
 
-            src = pkgs.lib.cleanSource ./.;
+            src = ./.;
 
-            cargoLock = { lockFile = ./Cargo.lock; };
+            cargoLock = {
+              lockFile = ./Cargo.lock;
+              outputHashes = {
+                "dpi-0.1.2" = "sha256-7DW0eaqJ5S0ixl4aio+cAE8qnq77tT9yzbemJJOGDX0=";
+              };
+            };
 
             nativeBuildInputs = with pkgs; [
               pkg-config
@@ -114,6 +120,9 @@
               (pkgs.lib.optionals stdenv.isLinux mold)
               clang
               llvmPackages.libclang.lib  # For whisper-rs-sys bindgen
+              vulkan-headers
+              shaderc
+              git
             ];
 
             buildInputs = with pkgs; [
@@ -136,7 +145,21 @@
               sentencepiece
               wtype
               vulkan-loader
+              vulkan-headers
+              openblas
+              openblas.dev
+              onnxruntime
             ];
+
+            # Environment variable to point ort-sys to system ONNX Runtime
+            ORT_STRATEGY = "system";
+
+            LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
+            BLAS_INCLUDE_DIRS = "${pkgs.openblas.dev}/include";
+            OPENBLAS_PATH = "${pkgs.openblas}";
+
+            # Skip tests in Nix build (CI will run them)
+            doCheck = false;
 
             postInstall = ''
               mkdir -p $out/share/applications
@@ -152,10 +175,30 @@
               StartupNotify=true
               EOF
             '';
+
+            meta = with pkgs.lib; {
+              description = "Real-time speech transcription application with GPU-accelerated rendering";
+              homepage = "https://github.com/0xPD33/sonori";
+              license = licenses.mit;
+              maintainers = [ ];
+              platforms = [ "x86_64-linux" "aarch64-linux" ];
+              mainProgram = "sonori";
+            };
           };
         in {
           sonori = sonoriPkg;
           default = sonoriPkg;
+        };
+
+        apps = {
+          sonori = {
+            type = "app";
+            program = "${self.packages.${system}.sonori}/bin/sonori";
+          };
+          default = {
+            type = "app";
+            program = "${self.packages.${system}.sonori}/bin/sonori";
+          };
         };
       });
 }
