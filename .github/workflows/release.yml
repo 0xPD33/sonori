@@ -58,7 +58,7 @@ jobs:
             cmake \
             libvulkan-dev \
             libopenblas-dev \
-            glslang-tools
+            libshaderc-dev
 
       - name: Build release binary
         env:

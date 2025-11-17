@@ -67,7 +67,7 @@ For Debian/Ubuntu-based distributions:
 sudo apt install build-essential portaudio19-dev libclang-dev pkg-config wl-copy \
   libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev \
   libasound2-dev libssl-dev libfftw3-dev curl cmake libvulkan-dev \
-  libopenblas-dev glslang-tools
+  libopenblas-dev libshaderc-dev
 ```
 
 For Fedora/RHEL-based distributions:
@@ -175,7 +175,7 @@ sudo dnf install gcc gcc-c++ portaudio-devel clang-devel pkg-config wl-copy \
 sudo apt install build-essential portaudio19-dev libclang-dev pkg-config wl-copy \
   libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev \
   libasound2-dev libssl-dev libfftw3-dev curl cmake libvulkan-dev \
-  libopenblas-dev glslang-tools
+  libopenblas-dev libshaderc-dev
 ```
 
 #### NixOS
