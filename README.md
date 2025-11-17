@@ -120,6 +120,16 @@ Sonori needs models to function properly, depending on the selected backend:
 ### Additional Requirements
 
 - **ONNX Runtime**: Required for the Silero VAD model
+  - **Ubuntu/Debian**: Not available in standard repos. Download from [GitHub releases](https://github.com/microsoft/onnxruntime/releases):
+    ```bash
+    ONNX_VERSION=1.20.0
+    wget https://github.com/microsoft/onnxruntime/releases/download/v${ONNX_VERSION}/onnxruntime-linux-x64-${ONNX_VERSION}.tgz
+    tar -xzf onnxruntime-linux-x64-${ONNX_VERSION}.tgz
+    sudo cp -r onnxruntime-linux-x64-${ONNX_VERSION}/include/* /usr/local/include/
+    sudo cp -r onnxruntime-linux-x64-${ONNX_VERSION}/lib/* /usr/local/lib/
+    sudo ldconfig
+    ```
+  - **NixOS**: Included in development environment via `nix develop`
 - **CTranslate2**: Used for CTranslate2 backend inference
 - **whisper-rs**: Used for Whisper.cpp backend inference
 - **OpenBLAS**: Required for Whisper.cpp CPU optimization. For better performance on modern CPUs, ensure this is installed
@@ -187,7 +197,9 @@ sudo apt install build-essential portaudio19-dev libclang-dev pkg-config wl-copy
   libopenblas-dev glslc
 ```
 
-**Ubuntu 22.04:** See note above about glslc availability
+Then install ONNX Runtime (see Additional Requirements section above).
+
+**Ubuntu 22.04:** See notes above about glslc availability and ONNX Runtime installation
 
 #### NixOS
 ```bash

@@ -60,10 +60,21 @@ jobs:
             libopenblas-dev \
             glslc
 
+      - name: Install ONNX Runtime
+        run: |
+          ONNX_VERSION=1.20.0
+          wget https://github.com/microsoft/onnxruntime/releases/download/v${ONNX_VERSION}/onnxruntime-linux-x64-${ONNX_VERSION}.tgz
+          tar -xzf onnxruntime-linux-x64-${ONNX_VERSION}.tgz
+          sudo cp -r onnxruntime-linux-x64-${ONNX_VERSION}/include/* /usr/local/include/
+          sudo cp -r onnxruntime-linux-x64-${ONNX_VERSION}/lib/* /usr/local/lib/
+          sudo ldconfig
+
       - name: Build release binary
         env:
           BLAS_INCLUDE_DIRS: /usr/include/x86_64-linux-gnu
           OPENBLAS_PATH: /usr
+          ORT_STRATEGY: system
+          ORT_LIB_LOCATION: /usr/local/lib
         run: cargo build --release --verbose
 
       - name: Run tests
