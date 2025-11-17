@@ -57,9 +57,8 @@ jobs:
             curl \
             cmake \
             libvulkan-dev \
-            vulkan-headers \
             libopenblas-dev \
-            shaderc
+            glslang-tools
 
       - name: Build release binary
         run: cargo build --release --verbose
