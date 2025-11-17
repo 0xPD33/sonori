@@ -63,12 +63,19 @@ Contributions are welcome and encouraged! Whether you're fixing bugs, adding fea
 
 For Debian/Ubuntu-based distributions:
 
+**Ubuntu 24.04+ (Noble and later):**
 ```bash
 sudo apt install build-essential portaudio19-dev libclang-dev pkg-config wl-copy \
   libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev \
   libasound2-dev libssl-dev libfftw3-dev curl cmake libvulkan-dev \
-  libopenblas-dev libshaderc-dev
+  libopenblas-dev glslc
 ```
+
+**Ubuntu 22.04 and earlier:**
+Note: `glslc` is not available in standard repositories. You'll need to either:
+- Upgrade to Ubuntu 24.04, or
+- Download glslc from [LunarG Vulkan SDK](https://vulkan.lunarg.com/), or
+- Build shaderc from [source](https://github.com/google/shaderc)
 
 For Fedora/RHEL-based distributions:
 
@@ -171,12 +178,16 @@ sudo dnf install gcc gcc-c++ portaudio-devel clang-devel pkg-config wl-copy \
 ```
 
 #### Debian/Ubuntu
+
+**Ubuntu 24.04+:**
 ```bash
 sudo apt install build-essential portaudio19-dev libclang-dev pkg-config wl-copy \
   libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev \
   libasound2-dev libssl-dev libfftw3-dev curl cmake libvulkan-dev \
-  libopenblas-dev libshaderc-dev
+  libopenblas-dev glslc
 ```
+
+**Ubuntu 22.04:** See note above about glslc availability
 
 #### NixOS
 ```bash
