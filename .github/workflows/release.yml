@@ -61,6 +61,9 @@ jobs:
             glslang-tools
 
       - name: Build release binary
+        env:
+          BLAS_INCLUDE_DIRS: /usr/include/x86_64-linux-gnu
+          OPENBLAS_PATH: /usr
         run: cargo build --release --verbose
 
       - name: Run tests
