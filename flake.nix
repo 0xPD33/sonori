@@ -162,22 +162,21 @@
             doCheck = false;
 
             postInstall = ''
+              # Install desktop file
               mkdir -p $out/share/applications
-              cat > $out/share/applications/dev.paddy.sonori.desktop <<EOF
-              [Desktop Entry]
-              Type=Application
-              Name=Sonori
-              Comment=Real-time speech transcription with Whisper
-              Exec=$out/bin/sonori
-              Icon=sonori
-              Terminal=false
-              Categories=Utility;AudioVideo;
-              StartupNotify=true
-              EOF
+              install -m 644 ${./desktop/sonori.desktop} $out/share/applications/
+
+              # Install AppStream metadata
+              mkdir -p $out/share/metainfo
+              install -m 644 ${./desktop/com.github.0xPD33.sonori.metainfo.xml} $out/share/metainfo/
+
+              # Install icon
+              mkdir -p $out/share/icons/hicolor/scalable/apps
+              install -m 644 ${./desktop/icons/hicolor/scalable/apps/sonori.svg} $out/share/icons/hicolor/scalable/apps/
             '';
 
             meta = with pkgs.lib; {
-              description = "Real-time speech transcription application with GPU-accelerated rendering";
+              description = "Local AI-powered speech transcription for Linux";
               homepage = "https://github.com/0xPD33/sonori";
               license = licenses.mit;
               maintainers = [ ];

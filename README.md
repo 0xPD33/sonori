@@ -1,6 +1,6 @@
 # Sonori
 
-A lightweight, transparent overlay application that displays real-time transcriptions of your speech using multiple AI backends on Linux.
+A lightweight, transparent overlay application for local AI-powered speech transcription on Linux. Choose between real-time or on-demand manual transcription modes.
 
 ## Contributing
 
@@ -18,10 +18,10 @@ Contributions are welcome and encouraged! Whether you're fixing bugs, adding fea
 
 ### Current
 
-- **Multi-Backend Support**: Choose between CTranslate2, Whisper.cpp, and other transcription backends
+- **Local AI Processing**: All transcription happens on your device - no cloud services required
+- **Multi-Backend Support**: Choose between CTranslate2, Whisper.cpp, and other local AI backends
+- **Dual Transcription Modes**: Real-time continuous transcription or manual on-demand sessions
 - **GPU Acceleration**: Accelerate transcription using Vulkan (no CUDA yet and only works using the `whisper_cpp` backend)
-- **Real-Time Transcription**: Transcribes your speech in real-time using configurable AI models
-- **Manual Transcription Mode**: Accumulate audio in sessions for on-demand batch transcription (toggle with --manual or UI button)
 - **Voice Activity Detection**: Uses Silero VAD for accurate speech detection
 - **Transparent Overlay**: Non-intrusive overlay that sits at the bottom of your screen
 - **Audio Visualization**: Visual feedback when speaking with a spectrogram display
@@ -44,9 +44,9 @@ Contributions are welcome and encouraged! Whether you're fixing bugs, adding fea
 
 - **Better error handling**: Handle errors gracefully and provide useful error messages
 - **Better UI**: A better UI with a focus on more usability
-- **Cloud API Support**: Integration with cloud providers (Deepgram, OpenAI) for higher accuracy and speed
-- **Additional Backends**: Support for other specialized transcription models
+- **Additional Local AI Backends**: Support for other specialized local transcription models
 - **CUDA Support**: Enhanced GPU acceleration across all backends
+- **Cloud API Support**: Optional integration with cloud providers (Deepgram, OpenAI) for users who prefer cloud processing
 
 ### NOT Planned
 
@@ -213,6 +213,28 @@ cd sonori
 cargo build --release
 ./target/release/sonori
 ```
+
+### Desktop Integration
+
+To integrate Sonori with your application menu and system:
+
+**For NixOS:** Desktop integration is automatic via the Nix flake.
+
+**For other distributions:**
+```bash
+# User installation (recommended)
+./install-desktop.sh --user
+
+# System-wide installation (requires root)
+sudo ./install-desktop.sh --system
+```
+
+This installs:
+- Application menu entry (.desktop file)
+- AppStream metadata for software centers
+- Application icon
+
+See [desktop/README.md](desktop/README.md) for detailed instructions and manual installation steps.
 
 ## Usage
 
