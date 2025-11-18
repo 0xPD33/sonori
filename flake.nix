@@ -101,6 +101,16 @@
 
         packages = let
           cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
+
+          # Override sentencepiece to use the same protobuf as onnxruntime
+          # to avoid ABI conflicts
+          sentencepieceFixed = pkgs.sentencepiece.overrideAttrs (old: {
+            buildInputs = (old.buildInputs or []) ++ [ pkgs.protobuf ];
+            cmakeFlags = (old.cmakeFlags or []) ++ [
+              "-DSPM_USE_BUILTIN_PROTOBUF=OFF"
+            ];
+          });
+
           sonoriPkg = pkgs.rustPlatform.buildRustPackage rec {
             pname = "sonori";
             version = cargoToml.package.version;
@@ -123,6 +133,7 @@
               vulkan-headers
               shaderc
               git
+              makeWrapper  # For wrapping binary with library paths
             ];
 
             buildInputs = with pkgs; [
@@ -142,16 +153,16 @@
               fftw
               curl
               ctranslate2
-              sentencepiece
               wtype
               vulkan-loader
               vulkan-headers
               openblas
               openblas.dev
               onnxruntime
-            ];
+              protobuf  # Ensure consistent protobuf version
+            ] ++ [ sentencepieceFixed ];  # Use our fixed sentencepiece
 
-            # Environment variable to point ort-sys to system ONNX Runtime
+            # Use system ONNX Runtime for Silero VAD
             ORT_STRATEGY = "system";
 
             LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
@@ -162,6 +173,22 @@
             doCheck = false;
 
             postInstall = ''
+              # Wrap binary with required library paths
+              wrapProgram $out/bin/sonori \
+                --prefix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath [
+                  pkgs.libxkbcommon
+                  pkgs.wayland
+                  pkgs.xorg.libX11
+                  pkgs.xorg.libXcursor
+                  pkgs.xorg.libXi
+                  pkgs.xorg.libXrandr
+                  pkgs.vulkan-loader
+                  pkgs.openblas
+                  pkgs.onnxruntime
+                  pkgs.alsa-lib
+                  pkgs.portaudio
+                ]}
+
               # Install desktop file
               mkdir -p $out/share/applications
               install -m 644 ${./desktop/sonori.desktop} $out/share/applications/
