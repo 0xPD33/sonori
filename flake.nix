@@ -15,10 +15,28 @@
   outputs = { self, nixpkgs, rust-overlay, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        # Pkgs for default shell
+        # Pkgs for default shell with sentencepiece override
         pkgs = import nixpkgs {
           inherit system;
-          overlays = [ (import rust-overlay) ];
+          overlays = [
+            (import rust-overlay)
+            # Override sentencepiece to use system protobuf instead of embedded version
+            # This prevents protobuf ABI conflicts with onnxruntime
+            (final: prev: {
+              sentencepiece = prev.sentencepiece.overrideAttrs (old: {
+                buildInputs = (old.buildInputs or []) ++ [
+                  final.protobuf
+                  final.abseil-cpp
+                ];
+                cmakeFlags = (old.cmakeFlags or []) ++ [
+                  # Use modern CMake provider flags (replaces legacy SPM_USE_BUILTIN_PROTOBUF)
+                  "-DSPM_PROTOBUF_PROVIDER=package"
+                  "-DSPM_ABSL_PROVIDER=package"
+                  "-DSPM_BUILD_TEST=OFF"
+                ];
+              });
+            })
+          ];
         };
 
         # Toolchain for default shell
@@ -102,15 +120,6 @@
         packages = let
           cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
 
-          # Override sentencepiece to use the same protobuf as onnxruntime
-          # to avoid ABI conflicts
-          sentencepieceFixed = pkgs.sentencepiece.overrideAttrs (old: {
-            buildInputs = (old.buildInputs or []) ++ [ pkgs.protobuf ];
-            cmakeFlags = (old.cmakeFlags or []) ++ [
-              "-DSPM_USE_BUILTIN_PROTOBUF=OFF"
-            ];
-          });
-
           sonoriPkg = pkgs.rustPlatform.buildRustPackage rec {
             pname = "sonori";
             version = cargoToml.package.version;
@@ -123,6 +132,29 @@
                 "dpi-0.1.2" = "sha256-7DW0eaqJ5S0ixl4aio+cAE8qnq77tT9yzbemJJOGDX0=";
               };
             };
+
+            # Force vendored sentencepiece-sys to use system libsentencepiece
+            # This prevents it from building its own copy with embedded protobuf
+            postPatch = ''
+              # Find all vendored sentencepiece crates and enable the system feature
+              for manifest in $(find . -path "*/sentencepiece*/Cargo.toml" -o -path "*/sentencepiece-sys*/Cargo.toml"); do
+                echo "Patching $manifest to use system sentencepiece"
+
+                # If there's already a sentencepiece-sys dependency, add system feature
+                if grep -q 'sentencepiece-sys.*version' "$manifest"; then
+                  sed -i 's/sentencepiece-sys = { version = "\([^"]*\)"[^}]*/sentencepiece-sys = { version = "\1", features = ["system"]/' "$manifest"
+                fi
+
+                # If it's the sentencepiece-sys crate itself, ensure system feature exists and is default
+                if echo "$manifest" | grep -q "sentencepiece-sys"; then
+                  # Add system to default features if not already there
+                  if grep -q '^\[features\]' "$manifest"; then
+                    sed -i '/^\[features\]/a system = []' "$manifest"
+                    sed -i 's/^default = \[\(.*\)\]/default = [\1, "system"]/' "$manifest"
+                  fi
+                fi
+              done
+            '';
 
             nativeBuildInputs = with pkgs; [
               pkg-config
@@ -153,14 +185,16 @@
               fftw
               curl
               ctranslate2
+              sentencepiece  # Overridden via overlay to use system protobuf
+              abseil-cpp     # Required by sentencepiece with package provider
               wtype
               vulkan-loader
               vulkan-headers
               openblas
               openblas.dev
               onnxruntime
-              protobuf  # Ensure consistent protobuf version
-            ] ++ [ sentencepieceFixed ];  # Use our fixed sentencepiece
+              protobuf  # Ensure consistent protobuf version across all C++ libs
+            ];
 
             # Use system ONNX Runtime for Silero VAD
             ORT_STRATEGY = "system";
@@ -184,7 +218,7 @@
                   pkgs.xorg.libXrandr
                   pkgs.vulkan-loader
                   pkgs.openblas
-                  pkgs.onnxruntime
+                  pkgs.onnxruntime  # Uses same protobuf as sentencepiece (unified via overlay)
                   pkgs.alsa-lib
                   pkgs.portaudio
                 ]}
