@@ -75,6 +75,13 @@ jobs:
           sudo cp -r onnxruntime-linux-x64-${ONNX_VERSION}/lib/* /usr/local/lib/
           sudo ldconfig
 
+      - name: Install git-cliff
+        run: |
+          wget https://github.com/orhun/git-cliff/releases/download/v2.7.0/git-cliff-2.7.0-x86_64-unknown-linux-gnu.tar.gz
+          tar -xzf git-cliff-2.7.0-x86_64-unknown-linux-gnu.tar.gz
+          sudo mv git-cliff-2.7.0/git-cliff /usr/local/bin/
+          git-cliff --version
+
       - name: Build release binary
         run: cargo build --release --verbose
 
@@ -96,29 +103,41 @@ jobs:
         id: release_notes
         run: |
           VERSION=${{ steps.get_version.outputs.VERSION }}
-          echo "RELEASE_NOTES<<EOF" >> $GITHUB_OUTPUT
-          echo "## Sonori v${VERSION}" >> $GITHUB_OUTPUT
-          echo "" >> $GITHUB_OUTPUT
-          echo "### Installation" >> $GITHUB_OUTPUT
-          echo "" >> $GITHUB_OUTPUT
-          echo "**NixOS (Recommended):**" >> $GITHUB_OUTPUT
-          echo '```bash' >> $GITHUB_OUTPUT
-          echo "nix run github:0xPD33/sonori" >> $GITHUB_OUTPUT
-          echo "# or" >> $GITHUB_OUTPUT
-          echo "nix profile install github:0xPD33/sonori" >> $GITHUB_OUTPUT
-          echo '```' >> $GITHUB_OUTPUT
-          echo "" >> $GITHUB_OUTPUT
-          echo "**From Release Tarball:**" >> $GITHUB_OUTPUT
-          echo "1. Download \`sonori-${VERSION}-x86_64-linux.tar.gz\`" >> $GITHUB_OUTPUT
-          echo "2. Extract: \`tar -xzf sonori-${VERSION}-x86_64-linux.tar.gz\`" >> $GITHUB_OUTPUT
-          echo "3. Run: \`./sonori-${VERSION}-x86_64-linux/sonori\`" >> $GITHUB_OUTPUT
-          echo "" >> $GITHUB_OUTPUT
-          echo "See README.md for building from source on other distributions." >> $GITHUB_OUTPUT
-          echo "" >> $GITHUB_OUTPUT
-          echo "### Changes" >> $GITHUB_OUTPUT
-          echo "" >> $GITHUB_OUTPUT
-          git log --pretty=format:"- %s" $(git describe --tags --abbrev=0 HEAD^)..HEAD >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+
+          # Generate changelog using git-cliff
+          if [ -n "$PREV_TAG" ]; then
+            CHANGELOG=$(git-cliff --strip all ${PREV_TAG}..HEAD)
+          else
+            CHANGELOG=$(git-cliff --strip all HEAD)
+          fi
+
+          # Build release notes
+          {
+            echo "RELEASE_NOTES<<EOF"
+            echo "## Sonori v${VERSION}"
+            echo ""
+            echo "### Installation"
+            echo ""
+            echo "**NixOS (Recommended):**"
+            echo '```bash'
+            echo "nix run github:0xPD33/sonori"
+            echo "# or"
+            echo "nix profile install github:0xPD33/sonori"
+            echo '```'
+            echo ""
+            echo "**From Release Tarball:**"
+            echo "1. Download \`sonori-${VERSION}-x86_64-linux.tar.gz\`"
+            echo "2. Extract: \`tar -xzf sonori-${VERSION}-x86_64-linux.tar.gz\`"
+            echo "3. Run: \`./sonori-${VERSION}-x86_64-linux/sonori\`"
+            echo ""
+            echo "See README.md for building from source on other distributions."
+            echo ""
+            echo "### Changes"
+            echo ""
+            echo "${CHANGELOG}"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
