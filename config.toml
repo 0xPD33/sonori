@@ -4,7 +4,7 @@
 # These are the most important settings you'll likely want to change
 
 [general_config]
-model = "large-v3-turbo"               # Whisper model size (tiny, base, small, medium, large, large-v2, large-v3, large-v3-turbo)
+model = "small.en"                     # Whisper model size (tiny, base, small, medium, large, large-v2, large-v3, large-v3-turbo)
                                         # Most users can stick with "base.en" or "small.en" for good performance
 language = "en"                        # Transcription language (use "auto" for auto-detect)
                                         # Change this if you speak a different language
@@ -172,7 +172,7 @@ normalize_whitespace = true           # Normalize whitespace (collapse multiple 
 [debug_config]
 log_stats_enabled = false             # Enable detailed performance logging
                                         # Keep disabled unless you're troubleshooting performance issues
-save_manual_audio_debug = true        # Save manual mode audio to WAV files for debugging
+save_manual_audio_debug = false       # Save manual mode audio to WAV files for debugging
                                         # Keep enabled - useful for debugging transcription issues
 recording_dir = "recordings"          # Directory to save debug recordings
                                         # Keep this default unless you prefer a different location

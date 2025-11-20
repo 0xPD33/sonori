@@ -103,7 +103,7 @@ impl Default for BackendConfig {
         Self {
             backend: BackendType::default(),
             threads: num_cpus::get().min(4), // Cap at 4 threads for efficiency
-            gpu_enabled: false,              // Default to CPU for compatibility
+            gpu_enabled: true,               // Default to GPU for better performance
             quantization_level: QuantizationLevel::Medium,
         }
     }

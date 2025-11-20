@@ -115,7 +115,7 @@ max_recording_duration_secs = 120 # Maximum recording time per session (2 minute
 clear_on_new_session = true       # Clear transcript when starting new session
 chunk_duration_seconds = 29.0     # Chunk size in seconds (29s recommended to avoid 30s boundary issues)
 enable_chunk_overlap = true       # Enable overlapping chunks for long sessions
-chunk_overlap_seconds = 0.5       # Overlap duration between chunks (seconds)
+chunk_overlap_seconds = 2.0       # Overlap duration between chunks (seconds)
 disable_chunking = false          # Experimental: Disable chunking for no-limit mode
 
 [vad_config]
@@ -221,9 +221,9 @@ Manual mode allows push-to-talk transcription with specialized chunking for long
 
 #### Chunk Overlap (`enable_chunk_overlap`, `chunk_overlap_seconds`)
 - **Purpose**: Prevents words at chunk boundaries from being cut off
-- **Default**: Enabled with 0.5 second overlap
-- **Recommended**: Keep enabled unless you experience repetition issues
-- **Range**: 0.1 to 1.0 seconds (avoid 2+ seconds to prevent hallucination)
+- **Default**: Enabled with 2.0 second overlap
+- **Recommended**: Keep enabled; if you notice repetition, reduce overlap to 0.5-1.0 seconds
+- **Range**: 0.5 to 2.0 seconds (reduce overlap if you see boundary repeats)
 
 #### Other Options
 - `max_recording_duration_secs`: Maximum total recording length (default: 120 seconds)

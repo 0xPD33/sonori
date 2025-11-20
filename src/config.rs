@@ -137,7 +137,7 @@ impl Default for ManualModeConfig {
             clear_on_new_session: true,
             chunk_duration_seconds: 29.0, // 29s avoids edge case at exactly 30s boundary
             enable_chunk_overlap: true,   // Enable overlap by default
-            chunk_overlap_seconds: 0.5,   // 0.5 second overlap (industry best practice)
+            chunk_overlap_seconds: 2.0,   // 2.0 second overlap (matches packaged config)
             disable_chunking: false,      // Chunking enabled by default
         }
     }
@@ -400,9 +400,9 @@ pub struct WhisperCppOptions {
 impl Default for WhisperCppOptions {
     fn default() -> Self {
         Self {
-            temperature: 0.0,     // Deterministic
+            temperature: 0.2,     // Gentle sampling bump to match packaged config
             suppress_blank: true, // Skip blank segments
-            no_context: false,    // Use context for better accuracy
+            no_context: true,     // Disable context to prevent double transcriptions
             max_tokens: 0,        // No limit
             entropy_thold: 2.4,   // Default whisper.cpp value
             logprob_thold: -1.0,  // Default whisper.cpp value
@@ -432,11 +432,11 @@ pub struct VadConfigSerde {
 impl Default for VadConfigSerde {
     fn default() -> Self {
         Self {
-            threshold: 0.15,             // Lower threshold to detect quieter speech
+            threshold: 0.10,             // Lower threshold to detect quieter speech
             hangbefore_frames: 5,        // Increased to 50ms - capture more lead-in audio
             hangover_frames: 30,         // Increased to 300ms - keep more trailing audio
             silence_tolerance_frames: 8, // Increased to 80ms - tolerate more pauses
-            speech_end_threshold: 0.1,   // Lower threshold for continuation
+            speech_end_threshold: 0.08,  // Lower threshold for continuation
             speech_prob_smoothing: 0.3,  // EMA smoothing factor (production standard)
         }
     }
@@ -534,6 +534,17 @@ impl AppConfig {
                 self.compute_type = None;
                 self.device = None;
             }
+        }
+
+        // Ensure whisper.cpp does not reuse context across sessions (prevents duplicate transcriptions)
+        if !self.whisper_cpp_options.no_context {
+            println!("Enabling whisper_cpp_options.no_context to prevent cross-session duplication");
+            self.whisper_cpp_options.no_context = true;
+        }
+
+        // Bring legacy configs up to current default temperature if they were using the old default
+        if (self.whisper_cpp_options.temperature - 0.0).abs() < f32::EPSILON {
+            self.whisper_cpp_options.temperature = 0.2;
         }
     }
 }
