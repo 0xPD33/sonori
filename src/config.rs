@@ -568,6 +568,21 @@ impl CT2Options {
 fn find_config_path() -> Option<std::path::PathBuf> {
     use std::path::PathBuf;
 
+    // 0. Explicit override for debugging or custom layouts
+    if let Ok(custom_path) = std::env::var("SONORI_CONFIG_PATH") {
+        let path = PathBuf::from(custom_path);
+        if path.exists() {
+            println!("Loading configuration from SONORI_CONFIG_PATH: {}", path.display());
+            return Some(path);
+        } else {
+            eprintln!(
+                "Warning: SONORI_CONFIG_PATH set to {} but file does not exist. Falling back to defaults.",
+                path.display()
+            );
+            return None;
+        }
+    }
+
     // 1. Check ~/.config/sonori/config.toml (user config)
     if let Some(config_home) = std::env::var_os("XDG_CONFIG_HOME") {
         let path = PathBuf::from(config_home).join("sonori").join("config.toml");
@@ -581,12 +596,7 @@ fn find_config_path() -> Option<std::path::PathBuf> {
         }
     }
 
-    // 2. Check current directory (for development)
-    let cwd_path = PathBuf::from("config.toml");
-    if cwd_path.exists() {
-        return Some(cwd_path);
-    }
-
+    // 2. No config found
     None
 }
 
@@ -631,6 +641,12 @@ fn ensure_user_config() {
 
 /// Helper function to read the application configuration
 pub fn read_app_config() -> AppConfig {
+    let (config, _path) = read_app_config_with_path();
+    config
+}
+
+/// Helper function to read the application configuration and return the path used (if any)
+pub fn read_app_config_with_path() -> (AppConfig, Option<std::path::PathBuf>) {
     // Ensure user has a config file (copy from system on first run)
     ensure_user_config();
 
@@ -643,17 +659,17 @@ pub fn read_app_config() -> AppConfig {
                 Ok(content) => content,
                 Err(e) => {
                     println!("Failed to read config from {}: {}. Using default configuration.", path.display(), e);
-                    return AppConfig::default();
+                    return (AppConfig::default(), None);
                 }
             }
         }
         None => {
             println!("No config.toml found. Using default configuration.");
-            return AppConfig::default();
+            return (AppConfig::default(), None);
         }
     };
 
-    match toml::from_str::<AppConfig>(&config_str) {
+    let config = match toml::from_str::<AppConfig>(&config_str) {
         Ok(mut config) => {
             // Migrate legacy configuration if needed
             config.migrate_legacy_config();
@@ -663,5 +679,7 @@ pub fn read_app_config() -> AppConfig {
             println!("Failed to parse config.toml: {}. Using default configuration.", e);
             AppConfig::default()
         }
-    }
+    };
+
+    (config, config_path)
 }

@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 // Use library modules (the binary should not redeclare modules)
-use sonori::config::{read_app_config, AppConfig};
+use sonori::config::{read_app_config_with_path, AppConfig};
 use sonori::copy;
 use sonori::download;
 use sonori::portal_input;
@@ -55,7 +55,11 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     println!("Loading configuration...");
-    let mut app_config = read_app_config();
+    let (mut app_config, config_path) = read_app_config_with_path();
+    match &config_path {
+        Some(path) => println!("Configuration loaded from {}", path.display()),
+        None => println!("Configuration: using defaults (no config file found)"),
+    }
 
     // Set stable portal App ID env var early for consistent identity across launches
     let app_id_str = app_config.portal_config.application_id.clone();

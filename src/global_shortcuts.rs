@@ -81,11 +81,13 @@ impl GlobalShortcutsManager {
         // Check what was actually bound
         let shortcuts = response.shortcuts();
 
-        if shortcuts
+        let bound = shortcuts
             .iter()
             .find(|s| s.id() == "toggle_manual")
-            .is_none()
-        {
+            .map(|s| s.triggers().unwrap_or_default().to_vec())
+            .unwrap_or_default();
+
+        if bound.is_empty() {
             // User likely declined the portal dialog or binding was rejected
             eprintln!(
                 "Shortcut '{}' was not bound by portal - user may have declined permission",

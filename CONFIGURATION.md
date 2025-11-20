@@ -1,6 +1,6 @@
 # Sonori Configuration Guide
 
-This document provides comprehensive configuration options for Sonori. The application uses a `config.toml` file in the same directory as the executable. If not present, a default configuration is used.
+This document provides comprehensive configuration options for Sonori. The application always loads `~/.config/sonori/config.toml` (or `$XDG_CONFIG_HOME/sonori/config.toml`); set `SONORI_CONFIG_PATH` to override. If not present, a default configuration is created.
 
 **Important:** Most users don't need to change many settings! The defaults work well for everyone. You typically only need to adjust 2-3 settings based on your needs.
 
