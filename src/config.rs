@@ -123,7 +123,7 @@ impl Default for PortalConfig {
         Self {
             enable_xdg_portal: true, // Default to enabled for better UX
             enable_global_shortcuts: true,
-            manual_toggle_accelerator: "<Super>Tab".to_string(),
+            manual_toggle_accelerator: "<Super>backslash".to_string(),
             application_id: "dev.sonori".to_string(),
             paste_shortcut: "ctrl_shift_v".to_string(), // Default: Ctrl+Shift+V (works in terminals)
         }
