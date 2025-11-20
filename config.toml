@@ -144,7 +144,7 @@ enable_global_shortcuts = true        # Enable global shortcuts via desktop port
                                         # Keep enabled for global hotkeys, disable if not working or not needed
 manual_toggle_accelerator = "<Super>backslash"  # Global hotkey for manual mode toggle
                                         # Change this if Super+backslash conflicts with other apps
-application_id = "com.github.0xPD33.sonori"   # Application ID for desktop portal registration
+application_id = "dev.sonori"   # Application ID for desktop portal registration
                                         # Keep this default unless you're developing your own fork
 paste_shortcut = "ctrl_shift_v"       # Paste method: "ctrl_shift_v" (terminals) or "ctrl_v" (apps)
                                         # Change to "ctrl_v" if you're mostly using regular applications

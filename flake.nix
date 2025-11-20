@@ -227,19 +227,15 @@
 
               # Install desktop file
               mkdir -p $out/share/applications
-              install -m 644 ${./desktop/com.github.0xPD33.sonori.desktop} $out/share/applications/
+              install -m 644 ${./desktop/dev.sonori.desktop} $out/share/applications/
 
               # Install AppStream metadata
               mkdir -p $out/share/metainfo
-              install -m 644 ${./desktop/com.github.0xPD33.sonori.metainfo.xml} $out/share/metainfo/
+              install -m 644 ${./desktop/dev.sonori.metainfo.xml} $out/share/metainfo/
 
               # Install icon
               mkdir -p $out/share/icons/hicolor/scalable/apps
               install -m 644 ${./desktop/icons/hicolor/scalable/apps/sonori.svg} $out/share/icons/hicolor/scalable/apps/
-
-              # Install example config
-              mkdir -p $out/share/sonori
-              install -m 644 ${./config.toml} $out/share/sonori/config.toml
             '';
 
             meta = with pkgs.lib; {

@@ -124,7 +124,7 @@ impl Default for PortalConfig {
             enable_xdg_portal: true, // Default to enabled for better UX
             enable_global_shortcuts: true,
             manual_toggle_accelerator: "<Super>Tab".to_string(),
-            application_id: "com.github.0xPD33.sonori".to_string(),
+            application_id: "dev.sonori".to_string(),
             paste_shortcut: "ctrl_shift_v".to_string(), // Default: Ctrl+Shift+V (works in terminals)
         }
     }
@@ -576,20 +576,10 @@ fn find_config_path() -> Option<std::path::PathBuf> {
         return Some(cwd_path);
     }
 
-    // 3. Check system install location
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(prefix) = exe_path.parent().and_then(|p| p.parent()) {
-            let system_path = prefix.join("share").join("sonori").join("config.toml");
-            if system_path.exists() {
-                return Some(system_path);
-            }
-        }
-    }
-
     None
 }
 
-/// Copy system config to user config directory on first run
+/// Create default config in user config directory on first run
 fn ensure_user_config() {
     use std::path::PathBuf;
 
@@ -609,33 +599,22 @@ fn ensure_user_config() {
         return;
     }
 
-    // Find system config
-    let system_config_path = if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(prefix) = exe_path.parent().and_then(|p| p.parent()) {
-            let path = prefix.join("share").join("sonori").join("config.toml");
-            if path.exists() {
-                Some(path)
-            } else {
-                None
+    // Create config directory
+    if let Err(e) = std::fs::create_dir_all(&user_config_dir) {
+        eprintln!("Failed to create config directory: {}", e);
+        return;
+    }
+
+    // Write default config as TOML
+    let default_config = AppConfig::default();
+    match toml::to_string_pretty(&default_config) {
+        Ok(toml_string) => {
+            match std::fs::write(&user_config_path, toml_string) {
+                Ok(_) => println!("Created default config at: {}", user_config_path.display()),
+                Err(e) => eprintln!("Failed to write default config: {}", e),
             }
-        } else {
-            None
         }
-    } else {
-        None
-    };
-
-    // Copy system config to user config
-    if let Some(sys_path) = system_config_path {
-        if let Err(e) = std::fs::create_dir_all(&user_config_dir) {
-            eprintln!("Failed to create config directory: {}", e);
-            return;
-        }
-
-        match std::fs::copy(&sys_path, &user_config_path) {
-            Ok(_) => println!("Created user config at: {}", user_config_path.display()),
-            Err(e) => eprintln!("Failed to copy system config: {}", e),
-        }
+        Err(e) => eprintln!("Failed to serialize default config: {}", e),
     }
 }
 

@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright 2024 0xPD33 -->
+<component type="desktop-application">
+  <id>dev.sonori</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+
+  <name>Sonori</name>
+  <summary>Local AI-powered speech transcription for Linux</summary>
+
+  <description>
+    <p>
+      Sonori is a lightweight, transparent overlay application for local AI-powered speech
+      transcription on Linux. All processing happens on your device with no cloud services
+      required, ensuring complete privacy. Perfect for accessibility, note-taking, or live captioning.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Local AI Processing: All transcription happens on your device - no cloud services required</li>
+      <li>Multi-Backend Support: Choose between CTranslate2, Whisper.cpp, and other local AI backends</li>
+      <li>Dual Transcription Modes: Real-time continuous transcription or manual on-demand sessions</li>
+      <li>GPU Acceleration: Accelerate transcription using Vulkan (Whisper.cpp backend)</li>
+      <li>Voice Activity Detection: Uses Silero VAD for accurate speech detection</li>
+      <li>Transparent Overlay: Non-intrusive overlay at the bottom of your screen</li>
+      <li>Audio Visualization: Visual feedback with spectrogram display</li>
+      <li>Wayland and X11 Support: Works with modern Linux desktop environments</li>
+      <li>CLI Mode: Run without GUI for headless usage</li>
+      <li>Global Shortcuts: System-wide hotkeys via XDG Desktop Portal</li>
+      <li>System Tray Integration: Quick access with window control</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">sonori.desktop</launchable>
+
+  <screenshots>
+    <!-- TODO: Add actual screenshots -->
+    <screenshot type="default">
+      <caption>Sonori main overlay showing real-time transcription</caption>
+      <!-- <image>https://raw.githubusercontent.com/0xPD33/sonori/master/docs/screenshots/main.png</image> -->
+    </screenshot>
+  </screenshots>
+
+  <url type="homepage">https://github.com/0xPD33/sonori</url>
+  <url type="bugtracker">https://github.com/0xPD33/sonori/issues</url>
+  <url type="vcs-browser">https://github.com/0xPD33/sonori</url>
+
+  <developer id="com.github.0xPD33">
+    <name>0xPD33</name>
+  </developer>
+
+  <content_rating type="oars-1.1" />
+
+  <releases>
+    <release version="0.4.0" date="2024-01-15">
+      <description>
+        <p>Current release with multi-backend support and system tray integration</p>
+      </description>
+    </release>
+  </releases>
+
+  <provides>
+    <binary>sonori</binary>
+  </provides>
+
+  <categories>
+    <category>AudioVideo</category>
+    <category>Audio</category>
+    <category>Utility</category>
+    <category>Accessibility</category>
+  </categories>
+
+  <keywords>
+    <keyword>transcription</keyword>
+    <keyword>speech</keyword>
+    <keyword>voice</keyword>
+    <keyword>recognition</keyword>
+    <keyword>whisper</keyword>
+    <keyword>audio</keyword>
+    <keyword>accessibility</keyword>
+    <keyword>local</keyword>
+    <keyword>AI</keyword>
+    <keyword>privacy</keyword>
+    <keyword>offline</keyword>
+  </keywords>
+
+  <requires>
+    <display_length compare="ge">768</display_length>
+  </requires>
+
+  <recommends>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </recommends>
+
+  <supports>
+    <internet>offline-only</internet>
+  </supports>
+
+  <custom>
+    <value key="privacy::privacy-policy">No data is collected or transmitted. All processing happens locally.</value>
+  </custom>
+</component>
