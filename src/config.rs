@@ -652,10 +652,10 @@ pub fn read_app_config_with_path() -> (AppConfig, Option<std::path::PathBuf>) {
 
     let config_path = find_config_path();
 
-    let config_str = match config_path {
+    let config_str = match config_path.as_ref() {
         Some(path) => {
             println!("Loading configuration from: {}", path.display());
-            match std::fs::read_to_string(&path) {
+            match std::fs::read_to_string(path) {
                 Ok(content) => content,
                 Err(e) => {
                     println!("Failed to read config from {}: {}. Using default configuration.", path.display(), e);
