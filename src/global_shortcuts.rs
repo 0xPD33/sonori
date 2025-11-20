@@ -114,7 +114,7 @@ impl GlobalShortcutsManager {
 
         // Process signals concurrently - keep session alive until shutdown
         loop {
-            if self.shutdown.load(Ordering::Relaxed) {
+            if !self.shutdown.load(Ordering::Relaxed) {
                 break;
             }
 
