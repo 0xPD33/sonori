@@ -553,28 +553,124 @@ impl CT2Options {
     }
 }
 
+/// Helper function to find config file path
+fn find_config_path() -> Option<std::path::PathBuf> {
+    use std::path::PathBuf;
+
+    // 1. Check ~/.config/sonori/config.toml (user config)
+    if let Some(config_home) = std::env::var_os("XDG_CONFIG_HOME") {
+        let path = PathBuf::from(config_home).join("sonori").join("config.toml");
+        if path.exists() {
+            return Some(path);
+        }
+    } else if let Some(home) = std::env::var_os("HOME") {
+        let path = PathBuf::from(home).join(".config").join("sonori").join("config.toml");
+        if path.exists() {
+            return Some(path);
+        }
+    }
+
+    // 2. Check current directory (for development)
+    let cwd_path = PathBuf::from("config.toml");
+    if cwd_path.exists() {
+        return Some(cwd_path);
+    }
+
+    // 3. Check system install location
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(prefix) = exe_path.parent().and_then(|p| p.parent()) {
+            let system_path = prefix.join("share").join("sonori").join("config.toml");
+            if system_path.exists() {
+                return Some(system_path);
+            }
+        }
+    }
+
+    None
+}
+
+/// Copy system config to user config directory on first run
+fn ensure_user_config() {
+    use std::path::PathBuf;
+
+    // Determine user config path
+    let user_config_dir = if let Some(config_home) = std::env::var_os("XDG_CONFIG_HOME") {
+        PathBuf::from(config_home).join("sonori")
+    } else if let Some(home) = std::env::var_os("HOME") {
+        PathBuf::from(home).join(".config").join("sonori")
+    } else {
+        return; // Can't determine config dir
+    };
+
+    let user_config_path = user_config_dir.join("config.toml");
+
+    // Skip if user config already exists
+    if user_config_path.exists() {
+        return;
+    }
+
+    // Find system config
+    let system_config_path = if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(prefix) = exe_path.parent().and_then(|p| p.parent()) {
+            let path = prefix.join("share").join("sonori").join("config.toml");
+            if path.exists() {
+                Some(path)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // Copy system config to user config
+    if let Some(sys_path) = system_config_path {
+        if let Err(e) = std::fs::create_dir_all(&user_config_dir) {
+            eprintln!("Failed to create config directory: {}", e);
+            return;
+        }
+
+        match std::fs::copy(&sys_path, &user_config_path) {
+            Ok(_) => println!("Created user config at: {}", user_config_path.display()),
+            Err(e) => eprintln!("Failed to copy system config: {}", e),
+        }
+    }
+}
+
 /// Helper function to read the application configuration
 pub fn read_app_config() -> AppConfig {
-    match std::fs::read_to_string("config.toml") {
-        Ok(config_str) => match toml::from_str::<AppConfig>(&config_str) {
-            Ok(mut config) => {
-                // Migrate legacy configuration if needed
-                config.migrate_legacy_config();
-                config
+    // Ensure user has a config file (copy from system on first run)
+    ensure_user_config();
+
+    let config_path = find_config_path();
+
+    let config_str = match config_path {
+        Some(path) => {
+            println!("Loading configuration from: {}", path.display());
+            match std::fs::read_to_string(&path) {
+                Ok(content) => content,
+                Err(e) => {
+                    println!("Failed to read config from {}: {}. Using default configuration.", path.display(), e);
+                    return AppConfig::default();
+                }
             }
-            Err(e) => {
-                println!(
-                    "Failed to parse config.toml: {}. Using default configuration.",
-                    e
-                );
-                AppConfig::default()
-            }
-        },
+        }
+        None => {
+            println!("No config.toml found. Using default configuration.");
+            return AppConfig::default();
+        }
+    };
+
+    match toml::from_str::<AppConfig>(&config_str) {
+        Ok(mut config) => {
+            // Migrate legacy configuration if needed
+            config.migrate_legacy_config();
+            config
+        }
         Err(e) => {
-            println!(
-                "Failed to read config.toml: {}. Using default configuration.",
-                e
-            );
+            println!("Failed to parse config.toml: {}. Using default configuration.", e);
             AppConfig::default()
         }
     }

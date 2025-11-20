@@ -236,6 +236,10 @@
               # Install icon
               mkdir -p $out/share/icons/hicolor/scalable/apps
               install -m 644 ${./desktop/icons/hicolor/scalable/apps/sonori.svg} $out/share/icons/hicolor/scalable/apps/
+
+              # Install example config
+              mkdir -p $out/share/sonori
+              install -m 644 ${./config.toml} $out/share/sonori/config.toml
             '';
 
             meta = with pkgs.lib; {
