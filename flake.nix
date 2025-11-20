@@ -207,7 +207,7 @@
             doCheck = false;
 
             postInstall = ''
-              # Wrap binary with required library paths
+              # Wrap binary with required library paths and Vulkan environment
               wrapProgram $out/bin/sonori \
                 --prefix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath [
                   pkgs.libxkbcommon
@@ -221,11 +221,13 @@
                   pkgs.onnxruntime  # Uses same protobuf as sentencepiece (unified via overlay)
                   pkgs.alsa-lib
                   pkgs.portaudio
-                ]}
+                ]} \
+                --prefix VK_DRIVER_FILES : /run/opengl-driver/share/vulkan/icd.d/nvidia_icd.x86_64.json:/run/opengl-driver/share/vulkan/icd.d/radeon_icd.x86_64.json:/run/opengl-driver/share/vulkan/icd.d/intel_icd.x86_64.json:/run/opengl-driver/share/vulkan/icd.d/intel_hasvk_icd.x86_64.json \
+                --prefix VK_ICD_FILENAMES : /run/opengl-driver/share/vulkan/icd.d/nvidia_icd.x86_64.json:/run/opengl-driver/share/vulkan/icd.d/radeon_icd.x86_64.json:/run/opengl-driver/share/vulkan/icd.d/intel_icd.x86_64.json:/run/opengl-driver/share/vulkan/icd.d/intel_hasvk_icd.x86_64.json
 
               # Install desktop file
               mkdir -p $out/share/applications
-              install -m 644 ${./desktop/sonori.desktop} $out/share/applications/
+              install -m 644 ${./desktop/com.github.0xPD33.sonori.desktop} $out/share/applications/
 
               # Install AppStream metadata
               mkdir -p $out/share/metainfo

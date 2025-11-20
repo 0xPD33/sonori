@@ -8,6 +8,7 @@ Comment=Local AI-powered speech transcription with real-time and manual modes
 X-GNOME-FullName=Sonori Local AI Speech Transcription
 
 # Command to execute (supports both GUI and CLI modes)
+# Vulkan environment variables are set by the Nix wrapper
 Exec=sonori
 TryExec=sonori
 

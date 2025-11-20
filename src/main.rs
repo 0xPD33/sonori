@@ -63,6 +63,15 @@ async fn main() -> anyhow::Result<()> {
         std::env::set_var("XDG_DESKTOP_PORTAL_APPLICATION_ID", &app_id_str);
     }
 
+    // Register with the portal system for persistent permissions
+    // This is critical for GlobalShortcuts and other portals to recognize the app across launches
+    let app_id = AppID::try_from(app_id_str.as_str())
+        .expect("Invalid application ID in configuration");
+    if let Err(e) = register_host_app(app_id).await {
+        eprintln!("Warning: Failed to register host app with portals: {}", e);
+        eprintln!("Portal permissions may not persist across restarts.");
+    }
+
     // Override transcription mode from CLI arguments
     let transcription_mode = if args.manual {
         TranscriptionMode::Manual

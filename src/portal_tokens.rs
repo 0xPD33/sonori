@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 pub struct PortalTokens {
     pub remote_keyboard: Option<String>,
     pub remote_screencast: Option<String>,
+    pub global_shortcuts: Option<String>,
 }
 
 impl PortalTokens {
