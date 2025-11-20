@@ -404,15 +404,3 @@ Try different `chunk_duration_seconds` values to find what works best for your s
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
-
-### Contributing
-
-Contributions are welcome and encouraged! Whether you're fixing bugs, adding features, improving documentation, or testing on different distributions, your help is appreciated.
-
-**Getting Started:**
-- Check out [ARCHITECTURE.md](./ARCHITECTURE.md) to understand the codebase structure
-- Look at the planned features and known issues below for ideas
-- Test your changes on your distribution (we aim to support NixOS and other major distros)
-- Open an issue or PR - no formal guidelines yet, just make sure it works!
-
-**Note:** The application is in active development. You may encounter bugs or instability as new features are added.
