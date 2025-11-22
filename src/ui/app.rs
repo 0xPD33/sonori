@@ -14,7 +14,7 @@ use winit::{
     window::{WindowAttributes, WindowId},
 };
 
-use winit::platform::wayland::{Anchor, KeyboardInteractivity, Layer, WindowAttributesWayland};
+use winit::platform::wayland::{KeyboardInteractivity, Layer, WindowAttributesWayland};
 
 use super::common::AudioVisualizationData;
 use super::window::WindowState;
@@ -347,9 +347,12 @@ fn create_window(
 
     if ev.is_wayland() {
         // For Wayland, create platform-specific attributes using WindowAttributesWayland
+        // Get anchor from display configuration
+        let anchor = display_config.window_position.to_wayland_anchor();
+
         let wayland_attrs = WindowAttributesWayland::default()
             .with_layer_shell()
-            .with_anchor(Anchor::BOTTOM)
+            .with_anchor(anchor)
             .with_layer(Layer::Overlay)
             .with_margin(MARGIN as i32, MARGIN as i32, MARGIN as i32, MARGIN as i32)
             .with_output(monitor.native_id())

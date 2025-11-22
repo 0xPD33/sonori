@@ -209,6 +209,47 @@ impl Default for SoundConfig {
     }
 }
 
+/// Window position presets for layer-shell anchoring
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum WindowPosition {
+    BottomLeft,
+    BottomCenter,
+    BottomRight,
+    TopLeft,
+    TopCenter,
+    TopRight,
+    MiddleLeft,
+    MiddleCenter,
+    MiddleRight,
+}
+
+impl Default for WindowPosition {
+    fn default() -> Self {
+        WindowPosition::BottomCenter
+    }
+}
+
+impl WindowPosition {
+    /// Convert window position to Wayland layer-shell anchor flags
+    /// Returns the anchor flags used to position the window at the desired location
+    #[cfg(target_os = "linux")]
+    pub fn to_wayland_anchor(&self) -> winit::platform::wayland::Anchor {
+        use winit::platform::wayland::Anchor;
+
+        match self {
+            WindowPosition::BottomLeft => Anchor::BOTTOM | Anchor::LEFT,
+            WindowPosition::BottomCenter => Anchor::BOTTOM,
+            WindowPosition::BottomRight => Anchor::BOTTOM | Anchor::RIGHT,
+            WindowPosition::TopLeft => Anchor::TOP | Anchor::LEFT,
+            WindowPosition::TopCenter => Anchor::TOP,
+            WindowPosition::TopRight => Anchor::TOP | Anchor::RIGHT,
+            WindowPosition::MiddleLeft => Anchor::LEFT,
+            WindowPosition::MiddleCenter => Anchor::empty(), // No anchors = centered
+            WindowPosition::MiddleRight => Anchor::RIGHT,
+        }
+    }
+}
+
 /// Configuration for display and rendering settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -223,6 +264,11 @@ pub struct DisplayConfig {
 
     /// Target FPS when vsync is disabled (prevents unbounded frame rates)
     pub target_fps: u32,
+
+    /// Window position on screen (layer-shell anchor configuration)
+    /// Available positions: BottomLeft, BottomCenter, BottomRight,
+    /// TopLeft, TopCenter, TopRight, MiddleLeft, MiddleCenter, MiddleRight
+    pub window_position: WindowPosition,
 }
 
 /// Configuration for system tray behavior
@@ -238,6 +284,7 @@ impl Default for DisplayConfig {
         Self {
             vsync_mode: "Enabled".to_string(), // Default to traditional vsync
             target_fps: 60,                    // Cap at 60 FPS when vsync disabled
+            window_position: WindowPosition::default(),
         }
     }
 }

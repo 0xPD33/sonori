@@ -127,6 +127,11 @@ vsync_mode = "Enabled"                # VSync: "Auto", "Enabled", "Adaptive", "D
                                         # Keep "Enabled" unless you're experiencing tearing or performance issues
 target_fps = 60                       # Target FPS when vsync is disabled
                                         # Keep this default - higher values use more CPU for minimal benefit
+window_position = "BottomCenter"      # Window position on screen
+                                        # Available: BottomLeft, BottomCenter, BottomRight,
+                                        #            TopLeft, TopCenter, TopRight,
+                                        #            MiddleLeft, MiddleCenter, MiddleRight
+                                        # Change this to position the window where you want it
 
 [window_behavior_config]
 show_in_system_tray = true            # Show icon in system tray
