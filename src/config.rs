@@ -4,14 +4,14 @@ use ct2rs::WhisperOptions;
 use serde::{Deserialize, Serialize};
 use winit::keyboard::KeyCode;
 
+/// Audio sample rate in Hz - hardcoded to 16000 (required by Silero VAD)
+pub const SAMPLE_RATE: usize = 16000;
+
 /// Audio processor configuration parameters for general audio processing
 /// This is separate from the VAD-specific settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AudioProcessorConfig {
-    /// Audio sample rate in Hz (must be 8000 or 16000 for Silero VAD)
-    /// This value is used throughout the application for audio processing
-    pub sample_rate: usize,
     /// The global buffer size used throughout the application
     /// This is the fundamental audio processing block size in samples
     /// Also used for visualization sample count
@@ -21,7 +21,6 @@ pub struct AudioProcessorConfig {
 impl Default for AudioProcessorConfig {
     fn default() -> Self {
         Self {
-            sample_rate: 16000,
             buffer_size: 1024,
         }
     }
@@ -49,6 +48,9 @@ impl Default for GeneralConfig {
     }
 }
 
+/// Application ID for portal registration - hardcoded app identifier
+pub const APPLICATION_ID: &str = "dev.sonori";
+
 /// Configuration for XDG Desktop Portal features
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -60,8 +62,6 @@ pub struct PortalConfig {
     pub enable_global_shortcuts: bool,
     /// Accelerator string for manual toggle (e.g., "<Super>Tab")
     pub manual_toggle_accelerator: String,
-    /// Application ID used to register with xdg-desktop-portal (stable name)
-    pub application_id: String,
     /// Paste shortcut to use: "ctrl_shift_v" (default, works in terminals) or "ctrl_v"
     pub paste_shortcut: String,
 }
@@ -124,7 +124,6 @@ impl Default for PortalConfig {
             enable_xdg_portal: true, // Default to enabled for better UX
             enable_global_shortcuts: true,
             manual_toggle_accelerator: "<Super>backslash".to_string(),
-            application_id: "dev.sonori".to_string(),
             paste_shortcut: "ctrl_shift_v".to_string(), // Default: Ctrl+Shift+V (works in terminals)
         }
     }
@@ -205,6 +204,43 @@ impl Default for SoundConfig {
         Self {
             enabled: true,
             volume: 0.5,
+        }
+    }
+}
+
+/// VAD sensitivity presets for different acoustic environments
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum VadSensitivity {
+    /// Less sensitive - reduces false positives in noisy environments
+    Low,
+    /// Balanced - good for most environments (default)
+    Medium,
+    /// More sensitive - catches quiet speech, may trigger on background noise
+    High,
+}
+
+impl Default for VadSensitivity {
+    fn default() -> Self {
+        VadSensitivity::Medium
+    }
+}
+
+impl VadSensitivity {
+    /// Get the speech detection threshold for this sensitivity level
+    pub fn threshold(&self) -> f32 {
+        match self {
+            VadSensitivity::Low => 0.15,
+            VadSensitivity::Medium => 0.10,
+            VadSensitivity::High => 0.05,
+        }
+    }
+
+    /// Get the speech end threshold (hysteresis) for this sensitivity level
+    pub fn speech_end_threshold(&self) -> f32 {
+        match self {
+            VadSensitivity::Low => 0.12,
+            VadSensitivity::Medium => 0.08,
+            VadSensitivity::High => 0.03,
         }
     }
 }
@@ -431,6 +467,11 @@ impl Default for CT2Options {
     }
 }
 
+/// Whisper.cpp internal thresholds - hardcoded to whisper.cpp defaults
+pub const WHISPER_ENTROPY_THOLD: f32 = 2.4;
+pub const WHISPER_LOGPROB_THOLD: f32 = -1.0;
+pub const WHISPER_NO_SPEECH_THOLD: f32 = 0.6;
+
 /// Whisper.cpp-specific transcription options
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -439,9 +480,6 @@ pub struct WhisperCppOptions {
     pub suppress_blank: bool,
     pub no_context: bool,
     pub max_tokens: i32,
-    pub entropy_thold: f32,
-    pub logprob_thold: f32,
-    pub no_speech_thold: f32,
 }
 
 impl Default for WhisperCppOptions {
@@ -451,9 +489,6 @@ impl Default for WhisperCppOptions {
             suppress_blank: true, // Skip blank segments
             no_context: true,     // Disable context to prevent double transcriptions
             max_tokens: 0,        // No limit
-            entropy_thold: 2.4,   // Default whisper.cpp value
-            logprob_thold: -1.0,  // Default whisper.cpp value
-            no_speech_thold: 0.6, // Default whisper.cpp value
         }
     }
 }
@@ -462,16 +497,17 @@ impl Default for WhisperCppOptions {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct VadConfigSerde {
-    /// Probability threshold for speech detection (0.0-1.0)
-    pub threshold: f32,
+    /// VAD sensitivity preset for different acoustic environments
+    /// Low: Reduces false positives in noisy environments
+    /// Medium: Balanced for most environments (default)
+    /// High: Catches quiet speech, may trigger on background noise
+    pub sensitivity: VadSensitivity,
     /// Number of frames before confirming speech
     pub hangbefore_frames: usize,
     /// Number of frames after speech before ending segment
     pub hangover_frames: usize,
     /// Number of non-speech frames to tolerate in PossibleSpeech before giving up
     pub silence_tolerance_frames: usize,
-    /// Lower threshold for speech continuation (hysteresis)
-    pub speech_end_threshold: f32,
     /// Exponential moving average smoothing factor (0.0-1.0)
     pub speech_prob_smoothing: f32,
 }
@@ -479,12 +515,11 @@ pub struct VadConfigSerde {
 impl Default for VadConfigSerde {
     fn default() -> Self {
         Self {
-            threshold: 0.10,             // Lower threshold to detect quieter speech
-            hangbefore_frames: 5,        // Increased to 50ms - capture more lead-in audio
-            hangover_frames: 30,         // Increased to 300ms - keep more trailing audio
-            silence_tolerance_frames: 8, // Increased to 80ms - tolerate more pauses
-            speech_end_threshold: 0.08,  // Lower threshold for continuation
-            speech_prob_smoothing: 0.3,  // EMA smoothing factor (production standard)
+            sensitivity: VadSensitivity::default(), // Medium sensitivity (threshold: 0.10, speech_end: 0.08)
+            hangbefore_frames: 5,                   // 50ms - capture more lead-in audio
+            hangover_frames: 30,                    // 300ms - keep more trailing audio
+            silence_tolerance_frames: 8,            // 80ms - tolerate more pauses
+            speech_prob_smoothing: 0.3,             // EMA smoothing factor (production standard)
         }
     }
 }
@@ -497,7 +532,7 @@ impl SileroVadConfig {
         sample_rate: usize,
     ) -> Self {
         Self {
-            threshold: vad_config.threshold,
+            threshold: vad_config.sensitivity.threshold(),
             frame_size: 512,
             sample_rate,
             hangbefore_frames: vad_config.hangbefore_frames,
@@ -507,7 +542,7 @@ impl SileroVadConfig {
                 as usize,
             max_segment_count: realtime_config.max_segment_count,
             silence_tolerance_frames: vad_config.silence_tolerance_frames,
-            speech_end_threshold: vad_config.speech_end_threshold,
+            speech_end_threshold: vad_config.sensitivity.speech_end_threshold(),
             speech_prob_smoothing: vad_config.speech_prob_smoothing,
         }
     }
@@ -523,7 +558,7 @@ impl From<(VadConfigSerde, RealtimeModeConfig, usize, usize)> for SileroVadConfi
         ),
     ) -> Self {
         Self {
-            threshold: config.threshold,
+            threshold: config.sensitivity.threshold(),
             frame_size: 512,
             sample_rate,
             hangbefore_frames: config.hangbefore_frames,
@@ -533,7 +568,7 @@ impl From<(VadConfigSerde, RealtimeModeConfig, usize, usize)> for SileroVadConfi
                 as usize,
             max_segment_count: realtime_config.max_segment_count,
             silence_tolerance_frames: config.silence_tolerance_frames,
-            speech_end_threshold: config.speech_end_threshold,
+            speech_end_threshold: config.sensitivity.speech_end_threshold(),
             speech_prob_smoothing: config.speech_prob_smoothing,
         }
     }

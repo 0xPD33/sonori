@@ -129,9 +129,11 @@ impl WhisperCppBackend {
         if options.max_tokens > 0 {
             params.set_max_tokens(options.max_tokens);
         }
-        params.set_entropy_thold(options.entropy_thold);
-        params.set_logprob_thold(options.logprob_thold);
-        params.set_no_speech_thold(options.no_speech_thold);
+
+        // Use hardcoded whisper.cpp internal thresholds (whisper.cpp defaults)
+        params.set_entropy_thold(crate::config::WHISPER_ENTROPY_THOLD);
+        params.set_logprob_thold(crate::config::WHISPER_LOGPROB_THOLD);
+        params.set_no_speech_thold(crate::config::WHISPER_NO_SPEECH_THOLD);
 
         // Adaptive segmentation: Use single_segment for short audio (<=30s), multi-segment for longer
         // The Whisper model was trained on 30-second chunks, so longer audio benefits from chunking

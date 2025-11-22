@@ -44,7 +44,7 @@ impl AudioCapture {
 
         let input_settings = pa::InputStreamSettings::new(
             input_params,
-            config.audio_processor_config.sample_rate as f64,
+            crate::config::SAMPLE_RATE as f64,
             config.audio_processor_config.buffer_size as u32,
         );
 

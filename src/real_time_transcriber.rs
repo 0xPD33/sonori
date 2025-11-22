@@ -268,7 +268,7 @@ impl RealTimeTranscriber {
                 app_config.vad_config.clone(),
                 app_config.realtime_mode_config.clone(),
                 app_config.audio_processor_config.buffer_size,
-                app_config.audio_processor_config.sample_rate,
+                crate::config::SAMPLE_RATE,
             )
                 .into(),
             &silero_model_path,
@@ -479,7 +479,7 @@ impl RealTimeTranscriber {
         let transcription_stats = self.transcription_stats.clone(); // For drain detection
         let app_config = read_app_config();
         let manual_mode_config = app_config.manual_mode_config.clone();
-        let sample_rate = app_config.audio_processor_config.sample_rate;
+        let sample_rate = crate::config::SAMPLE_RATE;
 
         tokio::spawn(async move {
             while running.load(Ordering::Relaxed) {

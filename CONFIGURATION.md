@@ -88,6 +88,8 @@ quantization_level = "medium"        # Good balance
 - `large-v3-turbo` for best accuracy (requires good GPU)
 - Models without `.en` support multiple languages
 
+**How do I change where the window appears?** Add `window_position` to the `[display_config]` section. Available positions: `BottomLeft`, `BottomCenter` (default), `BottomRight`, `TopLeft`, `TopCenter`, `TopRight`, `MiddleLeft`, `MiddleCenter`, `MiddleRight`.
+
 ## Complete Configuration Example
 
 ```toml
@@ -103,8 +105,8 @@ gpu_enabled = true                # Enable GPU acceleration (CUDA/Metal/Vulkan)
 quantization_level = "medium"     # Precision: "high" (full), "medium" (q8_0), "low" (q5_1)
 
 [audio_processor_config]
-sample_rate = 16000               # Audio sample rate in Hz
 buffer_size = 1024                # Audio buffer size (also used for visualization)
+                                   # Note: Sample rate is hardcoded to 16000 Hz (Silero VAD requirement)
 
 [realtime_mode_config]
 max_buffer_duration_sec = 30.0    # Maximum audio buffer duration for VAD history
@@ -119,8 +121,10 @@ chunk_overlap_seconds = 2.0       # Overlap duration between chunks (seconds)
 disable_chunking = false          # Experimental: Disable chunking for no-limit mode
 
 [vad_config]
-threshold = 0.10                  # Speech detection sensitivity (0.0-1.0, lower = more sensitive)
-speech_end_threshold = 0.08       # Lower threshold for speech continuation (hysteresis)
+sensitivity = "Medium"            # Voice Activity Detection sensitivity preset
+                                   # Low: Reduces false positives in noisy environments
+                                   # Medium: Balanced for most environments (recommended)
+                                   # High: Catches quiet speech, may trigger on background noise
 hangbefore_frames = 5             # Frames to wait before confirming speech start (50ms)
 hangover_frames = 30              # Frames to wait after speech ends before cutting (300ms)
 silence_tolerance_frames = 8      # Frames of silence to tolerate during speech (80ms)
@@ -142,9 +146,7 @@ temperature = 0.2                 # Sampling temperature (0.0 = deterministic, h
 suppress_blank = true             # Suppress blank outputs at beginning
 no_context = true                 # Disable context to prevent double transcriptions
 max_tokens = 0                    # Maximum tokens per segment (0 = auto)
-entropy_thold = 2.4               # Entropy threshold for fallback sampling
-logprob_thold = -1.0              # Log probability threshold for speech detection
-no_speech_thold = 0.6             # No-speech probability threshold
+                                   # Note: Internal thresholds (entropy, logprob, no_speech) are hardcoded to whisper.cpp defaults
 
 [post_process_config]
 enabled = true                    # Enable post-processing of transcriptions
@@ -156,12 +158,16 @@ normalize_whitespace = true       # Normalize whitespace
 enable_xdg_portal = true              # Enable XDG Desktop Portal for input injection and global shortcuts
 enable_global_shortcuts = true        # Enable global shortcuts via portal
 manual_toggle_accelerator = "<Super>backslash"  # Accelerator for toggling manual sessions
-application_id = "dev.paddy.sonori"   # App ID for portal integration
 paste_shortcut = "ctrl_shift_v"       # Paste method: "ctrl_shift_v" (terminals) or "ctrl_v" (apps)
+                                      # Note: Application ID for portal registration is hardcoded to "dev.sonori"
 
 [display_config]
 vsync_mode = "Enabled"                # VSync: "Auto", "Enabled", "Adaptive", "Disabled", "Mailbox"
 target_fps = 60                       # Target FPS when vsync is disabled
+window_position = "BottomCenter"      # Window position on screen
+                                      # Available: BottomLeft, BottomCenter, BottomRight,
+                                      #            TopLeft, TopCenter, TopRight,
+                                      #            MiddleLeft, MiddleCenter, MiddleRight
 
 [window_behavior_config]
 show_in_system_tray = true            # Show icon in system tray
@@ -230,11 +236,56 @@ Manual mode allows push-to-talk transcription with specialized chunking for long
 - `clear_on_new_session`: Whether to clear previous transcript when starting new session
 - `disable_chunking`: Experimental mode to process entire recording without chunks (may fail on long/dense speech)
 
+### Voice Activity Detection (VAD)
+
+Voice Activity Detection automatically identifies when speech is present in the audio stream. Sonori uses the Silero VAD model with configurable sensitivity presets.
+
+#### Sensitivity Presets
+
+The `sensitivity` setting controls how aggressively the VAD detects speech. Choose based on your acoustic environment:
+
+**Low** - Reduces false positives in noisy environments
+- Best for: Noisy offices, environments with background conversations, mechanical noise
+- Trade-off: May miss very quiet speech or soft consonants
+- Technical: Higher detection threshold (0.15), higher speech end threshold (0.12)
+
+**Medium** (Recommended)
+- Best for: Most home/office environments with moderate background noise
+- Trade-off: Balanced between catching all speech and avoiding false triggers
+- Technical: Moderate detection threshold (0.10), moderate speech end threshold (0.08)
+
+**High** - Catches quiet speech, may trigger on background noise
+- Best for: Quiet environments, soft-spoken users, ASMR/whispered content
+- Trade-off: May trigger on breathing, keyboard sounds, distant conversations
+- Technical: Lower detection threshold (0.05), lower speech end threshold (0.03)
+
+#### Advanced VAD Parameters
+
+These parameters fine-tune the VAD behavior (defaults work well for most users):
+
+- `hangbefore_frames`: Frames to wait before confirming speech start (default: 5 = 50ms)
+  - Prevents false positives from sudden noises like clicks or pops
+
+- `hangover_frames`: Frames to wait after speech ends before cutting (default: 30 = 300ms)
+  - Prevents speech from cutting off during natural pauses between words
+
+- `silence_tolerance_frames`: Frames of silence to tolerate during speech (default: 8 = 80ms)
+  - Allows for natural pauses within sentences without breaking the segment
+
+- `speech_prob_smoothing`: Exponential moving average smoothing factor (default: 0.3)
+  - Smooths detection to prevent jittery start/stop behavior
+
+**Note**: Sample rate is hardcoded to 16000 Hz as required by the Silero VAD model.
+
 ### Display and Window Configuration
 
 #### Display Configuration
 - `vsync_mode`: VSync options - "Enabled" (default), "Adaptive", "Disabled", "Mailbox", "Auto"
 - `target_fps`: Frame rate cap when VSync is disabled (default: 60)
+- `window_position`: Position of the overlay window on screen (default: "BottomCenter")
+  - Available positions: `BottomLeft`, `BottomCenter`, `BottomRight`, `TopLeft`, `TopCenter`, `TopRight`, `MiddleLeft`, `MiddleCenter`, `MiddleRight`
+  - Uses Wayland layer-shell anchors for precise positioning
+  - Note: Window dragging is not supported by the Wayland layer-shell protocol
 
 #### Window Behavior
 - `show_in_system_tray`: Show application icon in system tray (default: true)

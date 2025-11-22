@@ -58,9 +58,9 @@ impl AudioProcessor {
         app_config: AppConfig,
     ) -> Self {
         // Calculate manual buffer size from max_recording_duration_secs and sample_rate
-        let manual_buffer_max_size = (app_config.manual_mode_config.max_recording_duration_secs
-            as usize)
-            * app_config.audio_processor_config.sample_rate;
+        let manual_buffer_max_size =
+            (app_config.manual_mode_config.max_recording_duration_secs as usize)
+                * crate::config::SAMPLE_RATE;
         let manual_audio_buffer = Arc::new(Mutex::new(Vec::with_capacity(manual_buffer_max_size)));
 
         // Initialize session ID based on transcription mode
@@ -85,7 +85,7 @@ impl AudioProcessor {
             manual_session_tx,
             current_session_id: Arc::new(RwLock::new(initial_session_id)),
             debug_config: app_config.debug_config.clone(),
-            sample_rate: app_config.audio_processor_config.sample_rate,
+            sample_rate: crate::config::SAMPLE_RATE,
             samples_received: Arc::new(AtomicUsize::new(0)),
         }
     }

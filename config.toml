@@ -33,10 +33,9 @@ quantization_level = "medium"         # Precision: "high" (full), "medium" (q8_0
 # Configure how audio is captured and processed
 
 [audio_processor_config]
-sample_rate = 16000                   # Audio sample rate in Hz (must be 8000 or 16000 for VAD)
-                                        # Most users can keep this default - required by VAD
 buffer_size = 1024                    # Audio buffer size (also used for visualization)
                                         # Keep this default unless you're experiencing performance issues
+                                        # Note: Sample rate is hardcoded to 16000 Hz (Silero VAD requirement)
 
 # =============================================================================
 # TRANSCRIPTION MODE SETTINGS
@@ -64,10 +63,10 @@ disable_chunking = false              # EXPERIMENTAL: Process entire recording a
                                         # Leave false unless you're experimenting with very long recordings
 
 [vad_config]
-threshold = 0.10                      # Speech detection sensitivity (0.0-1.0, lower = more sensitive)
-                                        # Most users can keep this default - adjust if it's missing speech or triggering too easily
-speech_end_threshold = 0.08           # Lower threshold for speech continuation (hysteresis)
-                                        # Keep this default - helps prevent speech from cutting off mid-sentence
+sensitivity = "Medium"                # Voice Activity Detection sensitivity preset
+                                        # Low: Reduces false positives in noisy environments
+                                        # Medium: Balanced for most environments (recommended)
+                                        # High: Catches quiet speech, may trigger on background noise
 hangbefore_frames = 5                 # Frames to wait before confirming speech start (1 frame = 10ms)
                                         # Keep this default - prevents false positives from sudden noises
 hangover_frames = 30                  # Frames to wait after speech ends before cutting (1 frame = 10ms)
@@ -110,12 +109,7 @@ no_context = true                     # Disable context
                                         # Keep this default - prevents double transcriptions in real-time mode
 max_tokens = 0                        # Maximum tokens per segment (0 = auto)
                                         # Keep this default - automatically determined by model
-entropy_thold = 2.4                   # Entropy threshold for fallback sampling
-                                        # Keep this default - helps with difficult speech segments
-logprob_thold = -1.0                  # Log probability threshold for speech detection
-                                        # Keep this default - helps filter out non-speech
-no_speech_thold = 0.6                 # No-speech probability threshold
-                                        # Keep this default - helps distinguish speech from silence
+                                        # Note: Internal thresholds (entropy, logprob, no_speech) are hardcoded to whisper.cpp defaults
 
 # =============================================================================
 # USER INTERFACE & CONTROLS
@@ -125,8 +119,8 @@ no_speech_thold = 0.6                 # No-speech probability threshold
 [display_config]
 vsync_mode = "Enabled"                # VSync: "Auto", "Enabled", "Adaptive", "Disabled", "Mailbox"
                                         # Keep "Enabled" unless you're experiencing tearing or performance issues
-target_fps = 60                       # Target FPS when vsync is disabled
-                                        # Keep this default - higher values use more CPU for minimal benefit
+target_fps = 60                       # Target FPS when vsync is disabled (caps frame rate)
+                                        # Adjust if you want higher/lower frame rate without vsync
 window_position = "BottomCenter"      # Window position on screen
                                         # Available: BottomLeft, BottomCenter, BottomRight,
                                         #            TopLeft, TopCenter, TopRight,
@@ -149,10 +143,9 @@ enable_global_shortcuts = true        # Enable global shortcuts via desktop port
                                         # Keep enabled for global hotkeys, disable if not working or not needed
 manual_toggle_accelerator = "<Super>backslash"  # Global hotkey for manual mode toggle
                                         # Change this if Super+backslash conflicts with other apps
-application_id = "dev.sonori"   # Application ID for desktop portal registration
-                                        # Keep this default unless you're developing your own fork
 paste_shortcut = "ctrl_shift_v"       # Paste method: "ctrl_shift_v" (terminals) or "ctrl_v" (apps)
                                         # Change to "ctrl_v" if you're mostly using regular applications
+                                        # Note: Application ID for portal registration is hardcoded to "dev.sonori"
 
 # =============================================================================
 # TRANSCRIPTION POST-PROCESSING
