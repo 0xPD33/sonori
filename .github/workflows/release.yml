@@ -17,6 +17,7 @@ jobs:
       OPENBLAS_PATH: /usr
       ORT_STRATEGY: system
       ORT_LIB_LOCATION: /usr/local/lib
+      ONNX_VERSION: "1.20.0"
 
     steps:
       - name: Checkout code
@@ -66,16 +67,20 @@ jobs:
             cmake \
             libvulkan-dev \
             libopenblas-dev \
-            glslc
+            glslc \
+            patchelf \
+            file \
+            libfuse2
 
       - name: Install ONNX Runtime
         run: |
-          ONNX_VERSION=1.20.0
           wget https://github.com/microsoft/onnxruntime/releases/download/v${ONNX_VERSION}/onnxruntime-linux-x64-${ONNX_VERSION}.tgz
           tar -xzf onnxruntime-linux-x64-${ONNX_VERSION}.tgz
           sudo cp -r onnxruntime-linux-x64-${ONNX_VERSION}/include/* /usr/local/include/
           sudo cp -r onnxruntime-linux-x64-${ONNX_VERSION}/lib/* /usr/local/lib/
           sudo ldconfig
+          # Keep the extracted directory for bundling
+          echo "ONNX_LIB_DIR=$(pwd)/onnxruntime-linux-x64-${ONNX_VERSION}/lib" >> $GITHUB_ENV
 
       - name: Install git-cliff
         run: |
@@ -84,6 +89,11 @@ jobs:
           sudo mv git-cliff-2.7.0/git-cliff /usr/local/bin/
           git-cliff --version
 
+      - name: Download linuxdeploy for AppImage
+        run: |
+          wget https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy-x86_64.AppImage
+
       - name: Build release binary
         run: cargo build --release --verbose
 
@@ -91,15 +101,125 @@ jobs:
         id: get_version
         run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
 
-      - name: Create release tarball
+      - name: Create release tarball with bundled libraries
         run: |
           VERSION=${{ steps.get_version.outputs.VERSION }}
           ARCHIVE_NAME="sonori-${VERSION}-x86_64-linux"
-          mkdir -p "${ARCHIVE_NAME}"
-          cp target/release/sonori "${ARCHIVE_NAME}/"
+
+          mkdir -p "${ARCHIVE_NAME}/lib"
+
+          # Copy the binary
+          cp target/release/sonori "${ARCHIVE_NAME}/sonori.bin"
+
+          # Copy documentation
           cp README.md LICENSE CONFIGURATION.md "${ARCHIVE_NAME}/"
+
+          # Bundle ONNX Runtime libraries
+          cp -P ${ONNX_LIB_DIR}/libonnxruntime.so* "${ARCHIVE_NAME}/lib/"
+
+          # Bundle other required libraries that may not be on all systems
+          # OpenBLAS
+          cp -P /usr/lib/x86_64-linux-gnu/libopenblas.so* "${ARCHIVE_NAME}/lib/" 2>/dev/null || true
+          cp -P /usr/lib/x86_64-linux-gnu/openblas-pthread/libopenblas.so* "${ARCHIVE_NAME}/lib/" 2>/dev/null || true
+
+          # PortAudio
+          cp -P /usr/lib/x86_64-linux-gnu/libportaudio.so* "${ARCHIVE_NAME}/lib/" 2>/dev/null || true
+
+          # Create wrapper script
+          printf '%s\n' \
+            '#!/bin/bash' \
+            '# Sonori wrapper script - sets up library paths for bundled dependencies' \
+            '' \
+            '# Get the directory where this script is located' \
+            'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' \
+            '' \
+            '# Add bundled libraries to LD_LIBRARY_PATH' \
+            'export LD_LIBRARY_PATH="${SCRIPT_DIR}/lib:${LD_LIBRARY_PATH}"' \
+            '' \
+            '# Execute the actual binary' \
+            'exec "${SCRIPT_DIR}/sonori.bin" "$@"' \
+            > "${ARCHIVE_NAME}/sonori"
+
+          chmod +x "${ARCHIVE_NAME}/sonori"
+
+          # Create the tarball
           tar -czf "${ARCHIVE_NAME}.tar.gz" "${ARCHIVE_NAME}"
           echo "ARCHIVE_NAME=${ARCHIVE_NAME}" >> $GITHUB_ENV
+
+      - name: Create AppImage
+        run: |
+          VERSION=${{ steps.get_version.outputs.VERSION }}
+          APPDIR="Sonori.AppDir"
+
+          # Create AppDir structure
+          mkdir -p "${APPDIR}/usr/bin"
+          mkdir -p "${APPDIR}/usr/lib"
+          mkdir -p "${APPDIR}/usr/share/applications"
+          mkdir -p "${APPDIR}/usr/share/icons/hicolor/scalable/apps"
+          mkdir -p "${APPDIR}/usr/share/metainfo"
+
+          # Copy binary
+          cp target/release/sonori "${APPDIR}/usr/bin/"
+
+          # Copy desktop file and icon
+          cp desktop/dev.sonori.desktop "${APPDIR}/usr/share/applications/"
+          cp desktop/dev.sonori.desktop "${APPDIR}/sonori.desktop"
+          cp desktop/icons/hicolor/scalable/apps/sonori.svg "${APPDIR}/usr/share/icons/hicolor/scalable/apps/"
+          cp desktop/icons/hicolor/scalable/apps/sonori.svg "${APPDIR}/sonori.svg"
+          cp desktop/dev.sonori.metainfo.xml "${APPDIR}/usr/share/metainfo/"
+
+          # Fix desktop file Exec line for AppImage
+          sed -i 's|Exec=sonori|Exec=sonori|g' "${APPDIR}/sonori.desktop"
+          sed -i 's|TryExec=sonori|TryExec=sonori|g' "${APPDIR}/sonori.desktop"
+
+          # Bundle ONNX Runtime
+          cp -P ${ONNX_LIB_DIR}/libonnxruntime.so* "${APPDIR}/usr/lib/"
+
+          # Bundle other libraries
+          cp -P /usr/lib/x86_64-linux-gnu/libopenblas.so* "${APPDIR}/usr/lib/" 2>/dev/null || true
+          cp -P /usr/lib/x86_64-linux-gnu/openblas-pthread/libopenblas.so* "${APPDIR}/usr/lib/" 2>/dev/null || true
+          cp -P /usr/lib/x86_64-linux-gnu/libportaudio.so* "${APPDIR}/usr/lib/" 2>/dev/null || true
+          cp -P /usr/lib/x86_64-linux-gnu/libgfortran.so* "${APPDIR}/usr/lib/" 2>/dev/null || true
+
+          # Create AppRun script
+          printf '%s\n' \
+            '#!/bin/bash' \
+            '# AppRun for Sonori AppImage' \
+            '' \
+            'SELF=$(readlink -f "$0")' \
+            'HERE=${SELF%/*}' \
+            '' \
+            '# Set up library path' \
+            'export LD_LIBRARY_PATH="${HERE}/usr/lib:${LD_LIBRARY_PATH}"' \
+            '' \
+            '# Set up XDG paths for desktop integration' \
+            'export XDG_DATA_DIRS="${HERE}/usr/share:${XDG_DATA_DIRS}"' \
+            '' \
+            '# Execute the application' \
+            'exec "${HERE}/usr/bin/sonori" "$@"' \
+            > "${APPDIR}/AppRun"
+          chmod +x "${APPDIR}/AppRun"
+
+          # Use linuxdeploy to bundle additional dependencies and create AppImage
+          # --appdir specifies the AppDir, -e specifies the executable
+          ./linuxdeploy-x86_64.AppImage \
+            --appdir "${APPDIR}" \
+            --executable target/release/sonori \
+            --desktop-file desktop/dev.sonori.desktop \
+            --icon-file desktop/icons/hicolor/scalable/apps/sonori.svg \
+            --output appimage || {
+              # If linuxdeploy fails, create AppImage manually with appimagetool
+              echo "linuxdeploy failed, trying manual AppImage creation..."
+              wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+              chmod +x appimagetool-x86_64.AppImage
+              ARCH=x86_64 ./appimagetool-x86_64.AppImage "${APPDIR}"
+            }
+
+          # Rename AppImage to include version
+          mv Sonori*.AppImage "Sonori-${VERSION}-x86_64.AppImage" 2>/dev/null || \
+            mv *.AppImage "Sonori-${VERSION}-x86_64.AppImage" 2>/dev/null || true
+
+          echo "APPIMAGE_NAME=Sonori-${VERSION}-x86_64.AppImage" >> $GITHUB_ENV
 
       - name: Generate release notes
         id: release_notes
@@ -121,7 +241,12 @@ jobs:
             echo ""
             echo "### Installation"
             echo ""
-            echo "**NixOS (Recommended):**"
+            echo "**AppImage (Recommended for most Linux users):**"
+            echo "1. Download \`Sonori-${VERSION}-x86_64.AppImage\`"
+            echo "2. Make executable: \`chmod +x Sonori-${VERSION}-x86_64.AppImage\`"
+            echo "3. Run: \`./Sonori-${VERSION}-x86_64.AppImage\`"
+            echo ""
+            echo "**NixOS:**"
             echo '```bash'
             echo "nix run github:0xPD33/sonori"
             echo "# or"
@@ -133,7 +258,9 @@ jobs:
             echo "2. Extract: \`tar -xzf sonori-${VERSION}-x86_64-linux.tar.gz\`"
             echo "3. Run: \`./sonori-${VERSION}-x86_64-linux/sonori\`"
             echo ""
-            echo "See README.md for building from source on other distributions."
+            echo "The tarball includes bundled libraries (ONNX Runtime, OpenBLAS) for broader compatibility."
+            echo ""
+            echo "See README.md for building from source."
             echo ""
             echo "### Changes"
             echo ""
@@ -144,7 +271,9 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          files: ${{ env.ARCHIVE_NAME }}.tar.gz
+          files: |
+            ${{ env.ARCHIVE_NAME }}.tar.gz
+            ${{ env.APPIMAGE_NAME }}
           body: ${{ steps.release_notes.outputs.RELEASE_NOTES }}
           draft: false
           prerelease: false
