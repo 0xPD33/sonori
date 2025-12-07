@@ -149,13 +149,42 @@ impl WindowState {
         // Select present mode based on display configuration
         let present_mode = display_config.to_present_mode(&surface_caps.present_modes);
 
+        // Select alpha mode for transparency support
+        // Prefer modes that support transparency, with Inherit as fallback for X11
+        let alpha_mode = if surface_caps
+            .alpha_modes
+            .contains(&wgpu::CompositeAlphaMode::PreMultiplied)
+        {
+            wgpu::CompositeAlphaMode::PreMultiplied
+        } else if surface_caps
+            .alpha_modes
+            .contains(&wgpu::CompositeAlphaMode::PostMultiplied)
+        {
+            wgpu::CompositeAlphaMode::PostMultiplied
+        } else if surface_caps
+            .alpha_modes
+            .contains(&wgpu::CompositeAlphaMode::Inherit)
+        {
+            // Inherit from windowing system - may help on X11
+            wgpu::CompositeAlphaMode::Inherit
+        } else {
+            // Fallback to first available (likely Opaque)
+            // On X11, transparency may still work through the compositor
+            let is_wayland = std::env::var("WAYLAND_DISPLAY").is_ok();
+            if !is_wayland && surface_caps.alpha_modes[0] == wgpu::CompositeAlphaMode::Opaque {
+                eprintln!("Warning: GPU reports only Opaque alpha mode. Window transparency may not work.");
+                eprintln!("Try: enabling compositor, or using a different compositor like picom.");
+            }
+            surface_caps.alpha_modes[0]
+        };
+
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
             width: fixed_width,
             height: fixed_height,
             present_mode,
-            alpha_mode: wgpu::CompositeAlphaMode::PreMultiplied,
+            alpha_mode,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };

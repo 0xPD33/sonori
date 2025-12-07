@@ -53,158 +53,97 @@ Contributions are welcome and encouraged! Whether you're fixing bugs, adding fea
 - **Using a GUI framework**: I want to learn more about wgpu and wgsl and think a GUI written from scratch is perfectly fine for this application
 - **Support for Windows/macOS**: Not planned by me personally but if anyone wants to give it a shot feel free
 
-## Requirements
-
-**Platform:** Linux only (x86_64, aarch64)
-
-### Dependencies
-
-**Note:** Primarily tested on NixOS, but should work on other Linux distributions with proper dependencies installed. Feedback on other distros is welcome!
-
-For Debian/Ubuntu-based distributions:
-
-**Ubuntu 24.04+ (Noble and later):**
-```bash
-sudo apt install build-essential portaudio19-dev libclang-dev pkg-config wl-copy \
-  libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev \
-  libasound2-dev libssl-dev libfftw3-dev curl cmake libvulkan-dev \
-  libopenblas-dev glslc
-```
-
-**Ubuntu 22.04 and earlier:**
-Note: `glslc` is not available in standard repositories. You'll need to either:
-- Upgrade to Ubuntu 24.04, or
-- Download glslc from [LunarG Vulkan SDK](https://vulkan.lunarg.com/), or
-- Build shaderc from [source](https://github.com/google/shaderc)
-
-For Fedora/RHEL-based distributions:
-
-```bash
-sudo dnf install gcc gcc-c++ portaudio-devel clang-devel pkg-config wl-copy \
-  libxkbcommon-devel wayland-devel libX11-devel libXcursor-devel libXi-devel libXrandr-devel \
-  alsa-lib-devel openssl-devel fftw-devel curl cmake vulkan-loader-devel vulkan-headers \
-  openblas-devel shaderc
-```
-
-For Arch-based distributions:
-
-```bash
-sudo pacman -S base-devel portaudio clang pkgconf wl-copy \
-  libxkbcommon wayland libx11 libxcursor libxi libxrandr alsa-lib openssl fftw curl cmake \
-  vulkan-headers vulkan-tools blas shaderc
-```
-
-For NixOS:
-
-Simply use the provided flake.nix by running
-
-```bash
-nix develop
-```
-
-while in the root directory of the repository. The flake includes all necessary dependencies including vulkan-loader.
-
-### Required Models
-
-Sonori needs models to function properly, depending on the selected backend:
-
-1. **Transcription Model** - Downloaded automatically based on backend selection:
-   - **CTranslate2**: Hugging Face models converted to CTranslate2 format
-   - **Whisper.cpp**: GGML format models from whisper.cpp repository
-2. **Silero VAD Model** - Downloaded automatically on first run (shared across all backends)
-
-   Note: If you need to download the Silero model manually for any reason, you can get it from:
-   https://github.com/snakers4/silero-vad/
-   And place it in `~/.cache/sonori/models/`
-
-### Additional Requirements
-
-- **ONNX Runtime**: Required for the Silero VAD model
-  - **Ubuntu/Debian**: Not available in standard repos. Download from [GitHub releases](https://github.com/microsoft/onnxruntime/releases):
-    ```bash
-    ONNX_VERSION=1.20.0
-    wget https://github.com/microsoft/onnxruntime/releases/download/v${ONNX_VERSION}/onnxruntime-linux-x64-${ONNX_VERSION}.tgz
-    tar -xzf onnxruntime-linux-x64-${ONNX_VERSION}.tgz
-    sudo cp -r onnxruntime-linux-x64-${ONNX_VERSION}/include/* /usr/local/include/
-    sudo cp -r onnxruntime-linux-x64-${ONNX_VERSION}/lib/* /usr/local/lib/
-    sudo ldconfig
-    ```
-  - **NixOS**: Included in development environment via `nix develop`
-- **CTranslate2**: Used for CTranslate2 backend inference
-- **whisper-rs**: Used for Whisper.cpp backend inference
-- **OpenBLAS**: Required for Whisper.cpp CPU optimization. For better performance on modern CPUs, ensure this is installed
-- **CPAL**: Required for sound feedback system
-- **Vulkan**: Required for WGPU rendering and optional GPU acceleration in Whisper.cpp. Your system must have:
-  - Vulkan loader and headers
-  - Shader compiler (shaderc) for Vulkan GPU compilation
-
 ## Installation
 
-### NixOS (Recommended)
+**Platform:** Linux only (x86_64)
 
-**Try without installing:**
+### AppImage (Recommended for most users)
+
+The easiest way to run Sonori - no installation required:
+
+1. Download `Sonori-*-x86_64.AppImage` from [GitHub Releases](https://github.com/0xPD33/sonori/releases)
+2. Make executable: `chmod +x Sonori-*-x86_64.AppImage`
+3. Run: `./Sonori-*-x86_64.AppImage`
+
+### Release Tarball
+
+Pre-built binary with bundled libraries:
+
+1. Download `sonori-*-x86_64-linux.tar.gz` from [GitHub Releases](https://github.com/0xPD33/sonori/releases)
+2. Extract: `tar -xzf sonori-*-x86_64-linux.tar.gz`
+3. Run: `./sonori-*/sonori`
+
+### NixOS
+
 ```bash
+# Try without installing
 nix run github:0xPD33/sonori
-```
 
-**Install to profile:**
-```bash
+# Install to profile
 nix profile install github:0xPD33/sonori
 ```
 
-**Add to configuration.nix:**
+Or add to your flake:
 ```nix
 {
   inputs.sonori.url = "github:0xPD33/sonori";
-
-  # In your system configuration:
-  environment.systemPackages = [ inputs.sonori.packages.${system}.default ];
+  # Then add: inputs.sonori.packages.${system}.default
 }
 ```
 
-### From Releases
-
-1. Download the latest tarball from [GitHub Releases](https://github.com/0xPD33/sonori/releases)
-2. Extract: `tar -xzf sonori-*.tar.gz`
-3. Run: `./sonori-*/sonori`
-
 ### Building from Source
 
-**Requirements:** Install Rust and Cargo from https://rustup.rs/
+For developers or if you need to customize the build.
 
-#### Arch/Manjaro
+**Prerequisites:** [Rust](https://rustup.rs/) and distribution-specific dependencies.
+
+<details>
+<summary><strong>Ubuntu/Debian 24.04+</strong></summary>
+
 ```bash
-sudo pacman -S base-devel portaudio clang pkgconf wl-copy \
-  libxkbcommon wayland libx11 libxcursor libxi libxrandr alsa-lib openssl fftw curl cmake \
-  vulkan-headers vulkan-tools blas shaderc
+sudo apt install build-essential portaudio19-dev libclang-dev pkg-config \
+  libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev \
+  libasound2-dev libssl-dev libfftw3-dev curl cmake libvulkan-dev libopenblas-dev glslc
+
+# ONNX Runtime (not in repos)
+ONNX_VERSION=1.22.0
+wget https://github.com/microsoft/onnxruntime/releases/download/v${ONNX_VERSION}/onnxruntime-linux-x64-${ONNX_VERSION}.tgz
+tar -xzf onnxruntime-linux-x64-${ONNX_VERSION}.tgz
+sudo cp -r onnxruntime-linux-x64-${ONNX_VERSION}/include/* /usr/local/include/
+sudo cp -r onnxruntime-linux-x64-${ONNX_VERSION}/lib/* /usr/local/lib/
+sudo ldconfig
 ```
+</details>
 
-#### Fedora/RHEL
+<details>
+<summary><strong>Fedora/RHEL</strong></summary>
+
 ```bash
-sudo dnf install gcc gcc-c++ portaudio-devel clang-devel pkg-config wl-copy \
+sudo dnf install gcc gcc-c++ portaudio-devel clang-devel pkg-config \
   libxkbcommon-devel wayland-devel libX11-devel libXcursor-devel libXi-devel libXrandr-devel \
   alsa-lib-devel openssl-devel fftw-devel curl cmake vulkan-loader-devel vulkan-headers \
-  openblas-devel shaderc
+  openblas-devel shaderc onnxruntime-devel
 ```
+</details>
 
-#### Debian/Ubuntu
+<details>
+<summary><strong>Arch/Manjaro</strong></summary>
 
-**Ubuntu 24.04+:**
 ```bash
-sudo apt install build-essential portaudio19-dev libclang-dev pkg-config wl-copy \
-  libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev \
-  libasound2-dev libssl-dev libfftw3-dev curl cmake libvulkan-dev \
-  libopenblas-dev glslc
+sudo pacman -S base-devel portaudio clang pkgconf \
+  libxkbcommon wayland libx11 libxcursor libxi libxrandr alsa-lib openssl fftw curl cmake \
+  vulkan-headers vulkan-tools openblas shaderc
+# Install onnxruntime from AUR
 ```
+</details>
 
-Then install ONNX Runtime (see Additional Requirements section above).
+<details>
+<summary><strong>NixOS</strong></summary>
 
-**Ubuntu 22.04:** See notes above about glslc availability and ONNX Runtime installation
-
-#### NixOS
 ```bash
-nix develop
+nix develop  # All dependencies included
 ```
+</details>
 
 **Build:**
 ```bash
@@ -213,6 +152,12 @@ cd sonori
 cargo build --release
 ./target/release/sonori
 ```
+
+### Models
+
+Sonori downloads required models automatically on first run:
+- **Transcription model** - Based on your backend choice (CTranslate2 or Whisper.cpp)
+- **Silero VAD model** - For voice activity detection
 
 ### Desktop Integration
 
@@ -312,7 +257,7 @@ Sonori uses layer shell protocol for Wayland compositors. If you experience issu
 
 Sonori uses WGPU for rendering and has the ability to accelerate transcription using the GPU, which requires Vulkan support. If you encounter errors related to adapter detection or Vulkan:
 
-- Ensure you have the Vulkan libraries installed for your distribution (see Dependencies section)
+- Ensure you have Vulkan libraries installed (`vulkan-loader`, `vulkan-headers`)
 - Verify that your GPU supports Vulkan and that drivers are properly installed
 - On some systems, you may need to install additional vendor-specific Vulkan packages (e.g., `mesa-vulkan-drivers` on Ubuntu/Debian)
 - You can test Vulkan support by running `vulkaninfo` or `vkcube` if available on your system
@@ -374,20 +319,11 @@ Try different `chunk_duration_seconds` values to find what works best for your s
 
 ## Platform Support
 
-**Supported:**
-- Linux x86_64 (64-bit Intel/AMD)
-- Linux aarch64 (64-bit ARM)
+**Supported:** Linux x86_64 (64-bit Intel/AMD)
 
-**Tested on:**
-- NixOS with KDE Plasma/KWin (Wayland)
-- Other major Linux distributions should work with proper dependencies
+**Tested on:** NixOS with KDE Plasma/KWin (Wayland). Other distributions should work - feedback welcome!
 
-**Not supported:**
-- Windows
-- macOS
-- 32-bit architectures
-
-**Note:** While primarily developed and tested on NixOS, Sonori should work on other Linux distributions with the proper dependencies installed. Feedback and testing on other distros is welcome!
+**Not supported:** Windows, macOS, 32-bit architectures, ARM (aarch64 support planned)
 
 ## Credits
 
