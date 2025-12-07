@@ -78,9 +78,17 @@ jobs:
           tar -xzf onnxruntime-linux-x64-${ONNX_VERSION}.tgz
           sudo cp -r onnxruntime-linux-x64-${ONNX_VERSION}/include/* /usr/local/include/
           sudo cp -r onnxruntime-linux-x64-${ONNX_VERSION}/lib/* /usr/local/lib/
+          # Also copy to lib64 for linker compatibility
+          sudo mkdir -p /usr/local/lib64
+          sudo cp -r onnxruntime-linux-x64-${ONNX_VERSION}/lib/* /usr/local/lib64/
+          # Update ldconfig
+          echo "/usr/local/lib" | sudo tee /etc/ld.so.conf.d/onnxruntime.conf
+          echo "/usr/local/lib64" | sudo tee -a /etc/ld.so.conf.d/onnxruntime.conf
           sudo ldconfig
           # Keep the extracted directory for bundling
           echo "ONNX_LIB_DIR=$(pwd)/onnxruntime-linux-x64-${ONNX_VERSION}/lib" >> $GITHUB_ENV
+          # Set library path for build
+          echo "LIBRARY_PATH=/usr/local/lib:/usr/local/lib64:${LIBRARY_PATH}" >> $GITHUB_ENV
 
       - name: Install git-cliff
         run: |
