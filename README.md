@@ -2,76 +2,83 @@
 
 A lightweight, transparent overlay application for local AI-powered speech transcription on Linux. Choose between real-time or on-demand manual transcription modes.
 
-## Contributing
-
-Contributions are welcome and encouraged! Whether you're fixing bugs, adding features, improving documentation, or testing on different distributions, your help is appreciated.
-
-**Getting Started:**
-- Check out [ARCHITECTURE.md](./ARCHITECTURE.md) to understand the codebase structure
-- Look at the planned features and known issues below for ideas
-- Test your changes on your distribution (we aim to support NixOS and other major distros)
-- Open an issue or PR - no formal guidelines yet, just make sure it works!
-
-**Note:** The application is in active development. You may encounter bugs or instability as new features are added.
+> **Note:** The application is in active development. You may encounter bugs or instability as new features are added.
 
 ## Features
 
-### Current
+### Core
+- **Local AI Processing** - All transcription happens on your device, no cloud services required
+- **Multi-Backend Support** - Choose between CTranslate2 or Whisper.cpp backends
+- **Dual Transcription Modes** - Real-time continuous transcription or manual on-demand sessions
+- **Voice Activity Detection** - Uses Silero VAD for accurate speech detection
+- **Automatic Model Download** - Models are downloaded automatically on first run
 
-- **Local AI Processing**: All transcription happens on your device - no cloud services required
-- **Multi-Backend Support**: Choose between CTranslate2, Whisper.cpp, and other local AI backends
-- **Dual Transcription Modes**: Real-time continuous transcription or manual on-demand sessions
-- **GPU Acceleration**: Accelerate transcription using Vulkan (no CUDA yet and only works using the `whisper_cpp` backend)
-- **Voice Activity Detection**: Uses Silero VAD for accurate speech detection
-- **Transparent Overlay**: Non-intrusive overlay that sits at the bottom of your screen
-- **Audio Visualization**: Visual feedback when speaking with a spectrogram display
-- **Copy/Paste Functionality**: Easily copy transcribed text to clipboard
-- **Pause/Resume Recording**: Pause/Resume recording (real-time mode) or Start/Stop sessions (manual mode)
-- **Auto-Start Recording**: Begins recording automatically in real-time mode (manual mode requires manual start)
-- **Scroll Controls**: Navigate through longer transcripts
-- **CLI Mode**: Run without GUI in terminal mode using `--cli` flag for headless usage
-- **Sound Feedback**: Optional audio cues for recording state changes
-- **Configurable**: Configure the backend, model, language, transcription mode, and other settings in the config file (config.toml)
-- **Automatic Model Download**: Models are downloaded automatically based on selected backend
-- **Performance Monitoring**: Optional statistics logging for transcription performance analysis
-- **Global Shortcuts**: Optional XDG Desktop Portal integration for system-wide hotkeys (e.g., Super+backslash to toggle manual sessions)
-- **Portal Input**: Optional automatic pasting via XDG Desktop Portal for seamless text injection
-- **System Tray Integration**: Quick access via system tray with window control and status display
-- **Display Configuration**: VSync and frame rate control for optimized rendering
-- **Window Behavior Control**: Auto-hide, window positioning, and system tray integration options
+### Interface
+- **Transparent Overlay** - Non-intrusive overlay at the bottom of your screen
+- **CLI Mode** - Run without GUI using `--cli` flag for headless/terminal usage
+- **Audio Visualization** - Spectrogram display shows audio input in real-time
+- **System Tray Integration** - Quick access with window control and status display
 
-### Planned
+### Optional Features
+- **GPU Acceleration** - Vulkan-based acceleration (Whisper.cpp backend only)
+- **Global Shortcuts** - System-wide hotkeys via XDG Desktop Portal (e.g., Super+\ to toggle recording)
+- **Auto-Paste** - Automatic text injection via XDG Desktop Portal RemoteDesktop
+- **Sound Feedback** - Audio cues for recording state changes
 
-- **Better error handling**: Handle errors gracefully and provide useful error messages
-- **Better UI**: A better UI with a focus on more usability
-- **Additional Local AI Backends**: Support for other specialized local transcription models
-- **CUDA Support**: Enhanced GPU acceleration across all backends
-- **Cloud API Support**: Optional integration with cloud providers (Deepgram, OpenAI) for users who prefer cloud processing
+### Roadmap
 
-### NOT Planned
+**Planned:**
+- Better error handling and UI improvements
+- CUDA support for GPU acceleration
+- Additional local AI backends
+- Optional cloud API support (Deepgram, OpenAI)
 
-- **Using a GUI framework**: I want to learn more about wgpu and wgsl and think a GUI written from scratch is perfectly fine for this application
-- **Support for Windows/macOS**: Not planned by me personally but if anyone wants to give it a shot feel free
+**Not Planned:**
+- GUI framework (custom wgpu/wgsl implementation by design)
+- Windows/macOS support (contributions welcome)
+
+## System Requirements
+
+**Platform:** Linux x86_64 only
+
+**Tested on:** NixOS with KDE Plasma/KWin (Wayland)
+
+### Compositor (Wayland)
+
+| Protocol | Required | Purpose |
+|----------|----------|---------|
+| `zwlr_layer_shell_v1` | **Yes** | Transparent overlay rendering |
+| XDG Portal: GlobalShortcuts | No | System-wide hotkeys |
+| XDG Portal: RemoteDesktop | No | Auto-paste via keyboard injection |
+
+**Compositor Compatibility:**
+| Compositor | Status |
+|------------|--------|
+| KDE Plasma (KWin) | ✅ Full support |
+| Hyprland | ✅ Should work |
+| Sway | ✅ Should work |
+| GNOME (Mutter) | ❌ No layer shell (use CLI mode) |
+
+### Hardware
+- **GPU:** Vulkan-capable with appropriate drivers
+- **Audio:** Working microphone, PipeWire or PulseAudio
 
 ## Installation
 
-**Platform:** Linux only (x86_64)
+### AppImage (Recommended)
 
-### AppImage (Recommended for most users)
-
-The easiest way to run Sonori - no installation required:
-
-1. Download `Sonori-*-x86_64.AppImage` from [GitHub Releases](https://github.com/0xPD33/sonori/releases)
-2. Make executable: `chmod +x Sonori-*-x86_64.AppImage`
-3. Run: `./Sonori-*-x86_64.AppImage`
+```bash
+# Download from GitHub Releases
+chmod +x Sonori-*-x86_64.AppImage
+./Sonori-*-x86_64.AppImage
+```
 
 ### Release Tarball
 
-Pre-built binary with bundled libraries:
-
-1. Download `sonori-*-x86_64-linux.tar.gz` from [GitHub Releases](https://github.com/0xPD33/sonori/releases)
-2. Extract: `tar -xzf sonori-*-x86_64-linux.tar.gz`
-3. Run: `./sonori-*/sonori`
+```bash
+tar -xzf sonori-*-x86_64-linux.tar.gz
+./sonori-*/sonori
+```
 
 ### NixOS
 
@@ -93,25 +100,37 @@ Or add to your flake:
 
 ### Building from Source
 
-For developers or if you need to customize the build.
-
 **Prerequisites:** [Rust](https://rustup.rs/) and distribution-specific dependencies.
 
 <details>
 <summary><strong>Ubuntu/Debian 24.04+</strong></summary>
 
 ```bash
-sudo apt install build-essential portaudio19-dev libclang-dev pkg-config \
+# Install system dependencies
+sudo apt-get update
+sudo apt-get install -y build-essential portaudio19-dev libclang-dev pkg-config \
   libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev \
   libasound2-dev libssl-dev libfftw3-dev curl cmake libvulkan-dev libopenblas-dev glslc
 
-# ONNX Runtime (not in repos)
+# Install ONNX Runtime (not in repos)
 ONNX_VERSION=1.22.0
 wget https://github.com/microsoft/onnxruntime/releases/download/v${ONNX_VERSION}/onnxruntime-linux-x64-${ONNX_VERSION}.tgz
 tar -xzf onnxruntime-linux-x64-${ONNX_VERSION}.tgz
 sudo cp -r onnxruntime-linux-x64-${ONNX_VERSION}/include/* /usr/local/include/
 sudo cp -r onnxruntime-linux-x64-${ONNX_VERSION}/lib/* /usr/local/lib/
+sudo mkdir -p /usr/local/lib64
+sudo cp -r onnxruntime-linux-x64-${ONNX_VERSION}/lib/* /usr/local/lib64/
+echo "/usr/local/lib" | sudo tee /etc/ld.so.conf.d/onnxruntime.conf
+echo "/usr/local/lib64" | sudo tee -a /etc/ld.so.conf.d/onnxruntime.conf
 sudo ldconfig
+```
+
+Set environment variables before building:
+```bash
+export BLAS_INCLUDE_DIRS=/usr/include/x86_64-linux-gnu
+export OPENBLAS_PATH=/usr
+export ORT_STRATEGY=system
+export ORT_LIB_LOCATION=/usr/local/lib
 ```
 </details>
 
@@ -124,6 +143,13 @@ sudo dnf install gcc gcc-c++ portaudio-devel clang-devel pkg-config \
   alsa-lib-devel openssl-devel fftw-devel curl cmake vulkan-loader-devel vulkan-headers \
   openblas-devel shaderc onnxruntime-devel
 ```
+
+Set environment variables before building:
+```bash
+export BLAS_INCLUDE_DIRS=/usr/include/openblas
+export OPENBLAS_PATH=/usr
+export ORT_STRATEGY=system
+```
 </details>
 
 <details>
@@ -133,7 +159,14 @@ sudo dnf install gcc gcc-c++ portaudio-devel clang-devel pkg-config \
 sudo pacman -S base-devel portaudio clang pkgconf \
   libxkbcommon wayland libx11 libxcursor libxi libxrandr alsa-lib openssl fftw curl cmake \
   vulkan-headers vulkan-tools openblas shaderc
-# Install onnxruntime from AUR
+# Install onnxruntime from AUR (e.g., yay -S onnxruntime)
+```
+
+Set environment variables before building:
+```bash
+export BLAS_INCLUDE_DIRS=/usr/include/openblas
+export OPENBLAS_PATH=/usr
+export ORT_STRATEGY=system
 ```
 </details>
 
@@ -149,188 +182,139 @@ nix develop  # All dependencies included
 ```bash
 git clone https://github.com/0xPD33/sonori
 cd sonori
+# Ensure environment variables are set (see distro-specific instructions above)
 cargo build --release
 ./target/release/sonori
 ```
 
-### Models
-
-Sonori downloads required models automatically on first run:
-- **Transcription model** - Based on your backend choice (CTranslate2 or Whisper.cpp)
-- **Silero VAD model** - For voice activity detection
-
 ### Desktop Integration
 
-To integrate Sonori with your application menu and system:
+**NixOS:** Automatic via Nix flake.
 
-**For NixOS:** Desktop integration is automatic via the Nix flake.
-
-**For other distributions:**
+**Other distributions:**
 ```bash
-# User installation (recommended)
-./install-desktop.sh --user
-
-# System-wide installation (requires root)
-sudo ./install-desktop.sh --system
+./install-desktop.sh --user        # User installation (recommended)
+sudo ./install-desktop.sh --system # System-wide installation
 ```
 
-This installs:
-- Application menu entry (.desktop file)
-- AppStream metadata for software centers
-- Application icon
-
-See [desktop/README.md](desktop/README.md) for detailed instructions and manual installation steps.
+See [desktop/README.md](desktop/README.md) for details.
 
 ## Usage
 
 ### GUI Mode (Default)
 
-1. Launch the application:
-   ```bash
-   ./target/release/sonori
-   ```
-2. A transparent overlay will appear at the bottom of your screen
-3. In real-time mode, recording starts automatically; in manual mode, press Record to start sessions
-4. Speak naturally - your speech will be transcribed in real-time or near real-time (based on the model and hardware)
-5. Use the buttons on the overlay to:
-   - Pause/Resume recording (real-time mode)
-   - Start/Stop manual sessions and Accept transcript (manual mode)
-   - Copy text to clipboard
-   - Clear transcript history
-   - Toggle between real-time and manual modes
-   - Exit the application
+```bash
+sonori
+```
 
-For manual mode, start a session with the Record button, speak, then stop and accept to transcribe the accumulated audio.
+1. A transparent overlay appears at the bottom of your screen
+2. **Real-time mode:** Recording starts automatically
+3. **Manual mode:** Press Record to start/stop sessions
+4. Use overlay buttons to copy text, clear history, switch modes, or exit
 
 ### CLI Mode
 
-For headless usage or terminal-based transcription:
+```bash
+sonori --cli
+```
 
-1. Launch in CLI mode:
-   ```bash
-   ./target/release/sonori --cli
-   ```
-2. Transcription will appear directly in your terminal
-3. In real-time mode, recording starts automatically; in manual mode, use spacebar to start/stop sessions
-4. Speak naturally - transcriptions will update in real-time on the same line (real-time mode) or after session acceptance (manual mode)
-5. Press `Ctrl+C` to exit gracefully
+- Transcription appears directly in terminal
+- Real-time mode: auto-starts recording
+- Manual mode: use spacebar to start/stop
+- `Ctrl+C` to exit
 
 ### Command Line Options
 
-- `--cli`: Run in CLI mode without GUI
-- `--mode <realtime|manual>`: Set transcription mode (default: manual)
-- `--manual`: Shorthand for `--mode manual` to start in manual transcription mode
-- `--help`: Show help information
-- `--version`: Display version information
+| Option | Description |
+|--------|-------------|
+| `--cli` | Run in CLI mode without GUI |
+| `--mode <realtime\|manual>` | Set transcription mode (default: manual) |
+| `--manual` | Shorthand for `--mode manual` |
+| `--help` | Show help information |
+| `--version` | Display version |
 
 ## Configuration
 
-Sonori uses a `config.toml` file for configuration. The defaults work well for most users - you typically only need to change 2-3 settings.
+Sonori uses `config.toml` for configuration. Defaults work well for most users.
 
-**Quick Setup**: Most users just need to choose a configuration from the [Configuration Guide](./CONFIGURATION.md) and copy it to `config.toml`.
-
-### Common Choices:
-- **Fast & Lightweight**: Good for older computers
-- **Balanced Performance**: Recommended for most users
-- **High Quality**: For powerful computers with GPU
-- **Real-Time**: Live transcription as you speak
-- **Multilingual**: For non-English languages
-
-See the [complete configuration guide](./CONFIGURATION.md) for all examples and advanced settings.
-
-## Known Issues
-
-- The application might not work with all Wayland compositors (I only tested it with KDE Plasma and KWin).
-- The transcriptions are not 100% accurate and might contain errors. This is closely related to the whisper model that is used.
-- **30-second transcription truncation**: Recordings exactly 30 seconds long may get truncated. This is a known architectural limitation of Whisper models, not a bug. Whisper uses 30-second processing windows with a 448 token limit - dense speech can exhaust this limit before the full 30 seconds are transcribed. See Troubleshooting section for solutions.
-- The CPU usage is too high, even when idle. This might be related to bad code on my side or some overhead of the models. I already identified that changing the buffer size will help (or make it worse).
+**Quick Setup:** Choose a preset from the [Configuration Guide](./CONFIGURATION.md):
+- **Fast & Lightweight** - Good for older computers
+- **Balanced Performance** - Recommended for most users
+- **High Quality** - For powerful computers with GPU
+- **Real-Time** - Live transcription as you speak
+- **Multilingual** - For non-English languages
 
 ## Troubleshooting
 
-### Wayland Support
+### Wayland / Layer Shell
 
-Sonori uses layer shell protocol for Wayland compositors. If you experience issues:
+Sonori uses `zwlr_layer_shell_v1` for the transparent overlay.
 
-- Make sure you are in a wayland session and your compositor supports the layer shell protocol
+- Verify Wayland session: `echo $XDG_SESSION_TYPE` should return `wayland`
+- Check [Compositor Compatibility](#compositor-wayland) table above
+- GNOME/Mutter doesn't support layer shell - use CLI mode (`--cli`)
 
-### Vulkan Support
+### Vulkan / GPU
 
-Sonori uses WGPU for rendering and has the ability to accelerate transcription using the GPU, which requires Vulkan support. If you encounter errors related to adapter detection or Vulkan:
+Required for UI rendering and optional GPU-accelerated transcription.
 
-- Ensure you have Vulkan libraries installed (`vulkan-loader`, `vulkan-headers`)
-- Verify that your GPU supports Vulkan and that drivers are properly installed
-- On some systems, you may need to install additional vendor-specific Vulkan packages (e.g., `mesa-vulkan-drivers` on Ubuntu/Debian)
-- You can test Vulkan support by running `vulkaninfo` or `vkcube` if available on your system
+- Install Vulkan libraries: `vulkan-loader`, `vulkan-headers`
+- Vendor-specific packages may be needed (e.g., `mesa-vulkan-drivers` on Ubuntu)
+- Test with: `vulkaninfo` or `vkcube`
+- For GPU transcription: enable `gpu_enabled = true` in `[backend_config]`
 
-### GPU Acceleration (Whisper.cpp Backend)
+### XDG Desktop Portal Features
 
-If GPU acceleration is enabled but not working:
+**Global Shortcuts** (`global_shortcuts_enabled`):
+- Requires KDE Plasma 6+ or GNOME 45+
+- Accept permission dialog on first run
+- Check portal is running: `systemctl --user status xdg-desktop-portal`
 
-- Ensure `gpu_enabled = true` in `[backend_config]` section
-- Verify that your system has Vulkan support (see Vulkan Support section above)
-- Check that shaderc is properly installed (required for shader compilation)
-- For NVIDIA GPUs: ensure CUDA drivers are installed and up-to-date
-- For AMD/Intel: ensure appropriate Vulkan drivers are installed
-- If compilation fails with shader errors, try disabling GPU acceleration and using CPU mode instead
-- Monitor GPU usage with `nvidia-smi` (NVIDIA) or `rocm-smi` (AMD) while transcribing
+**Auto-Paste** (`portal_input_enabled`):
+- Uses RemoteDesktop portal for keyboard injection
+- Some compositors require screencast permission as fallback
+- Falls back to clipboard-only if declined
 
-### Model Conversion Issues
+### Model Issues
 
-If you encounter issues with automatic model conversion:
-
-For NixOS:
-
+**Automatic conversion fails:**
 ```bash
+# NixOS
 nix-shell model-conversion/shell.nix
 ct2-transformers-converter --model your-model --output_dir ~/.cache/whisper/your-model --copy_files preprocessor_config.json tokenizer.json
-```
 
-For other distributions:
-
-```bash
+# Other distros
 pip install -U ctranslate2 huggingface_hub torch transformers
 ct2-transformers-converter --model your-model --output_dir ~/.cache/whisper/your-model --copy_files preprocessor_config.json tokenizer.json
 ```
 
-### 30-Second Transcription Truncation
+**30-second truncation:** Whisper's 30-second window with 448 token limit can truncate dense speech. Solutions:
+1. Keep recordings under 25 seconds
+2. Adjust `chunk_duration_seconds` (15-25) in `[manual_mode_config]`
+3. Try CTranslate2 backend
 
-If you experience transcription cutoffs with recordings exactly 30 seconds long, this is due to Whisper's architectural limitations:
+## Known Issues
 
-**Root Cause**: Whisper models process audio in 30-second windows with a 448 token limit. Dense speech can exhaust this limit before the full 30 seconds are transcribed.
+- Not all Wayland compositors supported (tested primarily on KDE Plasma/KWin)
+- Transcription accuracy depends on Whisper model quality
+- CPU usage can be high when idle (buffer size related)
 
-**Solutions**:
+## Contributing
 
-1. **Keep recordings under 30 seconds** (simplest): For manual mode, try to keep your recordings around 25 seconds or less to avoid this boundary entirely.
+Contributions welcome! Whether fixing bugs, adding features, improving docs, or testing on different distributions.
 
-2. **Adjust chunk settings** (recommended):
-```toml
-[manual_mode_config]
-chunk_duration_seconds = 20.0    # Experiment with values between 15-25
-chunk_overlap_seconds = 2.0      # Overlap helps prevent word cutoff
-```
-
-3. **Switch to CTranslate2 backend**:
-```toml
-[backend_config]
-backend = "ctranslate2"
-```
-
-Try different `chunk_duration_seconds` values to find what works best for your speech patterns and content density.
-
-## Platform Support
-
-**Supported:** Linux x86_64 (64-bit Intel/AMD)
-
-**Tested on:** NixOS with KDE Plasma/KWin (Wayland). Other distributions should work - feedback welcome!
-
-**Not supported:** Windows, macOS, 32-bit architectures, ARM (aarch64 support planned)
+**Getting Started:**
+- See [ARCHITECTURE.md](./ARCHITECTURE.md) to understand the codebase
+- Check planned features and known issues above
+- Test on your distribution
+- Open an issue or PR
 
 ## Credits
 
 - [Rust](https://www.rust-lang.org/)
-- [CTranslate2](https://github.com/OpenNMT/CTranslate2) and [Faster Whisper](https://github.com/SYSTRAN/faster-whisper)
-- [whisper.cpp](https://github.com/ggerganov/whisper.cpp) and [whisper-rs](https://codeberg.org/tazz4843/whisper-rs)
-- [Onnx Runtime](https://github.com/microsoft/onnxruntime)
+- [CTranslate2](https://github.com/OpenNMT/CTranslate2) / [Faster Whisper](https://github.com/SYSTRAN/faster-whisper)
+- [whisper.cpp](https://github.com/ggerganov/whisper.cpp) / [whisper-rs](https://codeberg.org/tazz4843/whisper-rs)
+- [ONNX Runtime](https://github.com/microsoft/onnxruntime)
 - [OpenAI Whisper](https://github.com/openai/whisper)
 - [Silero VAD](https://github.com/snakers4/silero-vad)
 - [CPAL](https://github.com/RustAudio/cpal)
@@ -339,4 +323,4 @@ Try different `chunk_duration_seconds` values to find what works best for your s
 
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+MIT License - see [LICENSE](LICENSE) for details.
