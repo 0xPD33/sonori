@@ -7,9 +7,122 @@ use tokio::sync::{broadcast, mpsc};
 use crate::backend::TranscriptionBackend;
 use crate::config::read_app_config;
 use crate::post_processor;
-use crate::silero_audio_processor::AudioSegment;
+use crate::silero_audio_processor::{AudioSegment, SileroVad, VadConfig, VadState};
 use crate::transcription_stats::TranscriptionStats;
 use crate::ui::common::{AudioVisualizationData, ProcessingState};
+
+/// Extract the last N words from text for use as a prompt
+fn extract_prompt_context(text: &str, max_words: usize) -> String {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    if words.len() <= max_words {
+        text.to_string()
+    } else {
+        words[words.len() - max_words..].join(" ")
+    }
+}
+
+/// Find natural pause points in audio using VAD.
+/// Returns sample indices where pauses occur (good places to split chunks).
+fn find_pause_points(samples: &[f32], sample_rate: usize) -> Vec<usize> {
+    let home_dir = match std::env::var("HOME") {
+        Ok(h) => h,
+        Err(_) => {
+            println!("Could not get HOME directory, falling back to time-based chunking");
+            return Vec::new();
+        }
+    };
+    let model_path = std::path::PathBuf::from(format!("{}/.cache/sonori/models/silero_vad.onnx", home_dir));
+
+    if !model_path.exists() {
+        println!("VAD model not found at {:?}, falling back to time-based chunking", model_path);
+        return Vec::new();
+    }
+
+    // Create VAD with config tuned for finding pauses
+    let config = VadConfig {
+        threshold: 0.3,              // Slightly higher threshold for clearer boundaries
+        speech_end_threshold: 0.2,
+        frame_size: 512,
+        sample_rate,
+        hangbefore_frames: 3,
+        hangover_frames: 15,         // Shorter hangover to detect pauses faster
+        hop_samples: 160,
+        max_buffer_duration: samples.len() + 1024,
+        max_segment_count: 1000,
+        silence_tolerance_frames: 3,
+        speech_prob_smoothing: 0.3,
+    };
+
+    let mut vad = match SileroVad::new(config, &model_path) {
+        Ok(v) => v,
+        Err(e) => {
+            println!("Failed to initialize VAD: {:?}, falling back to time-based chunking", e);
+            return Vec::new();
+        }
+    };
+
+    // Process audio through VAD to track state transitions
+    // Only consider pauses that last at least this long (filters out brief hesitations)
+    let min_pause_duration_ms = 300;
+    let min_pause_samples = (sample_rate * min_pause_duration_ms) / 1000;
+
+    let mut pause_points = Vec::new();
+    let frame_size = 512;
+    let hop_samples = 160;
+    let mut current_sample = 0;
+    let mut was_speaking = false;
+    let mut pause_start: Option<usize> = None;
+
+    // Process in frames
+    let mut frame = vec![0.0f32; frame_size];
+    let mut buffer_pos = 0;
+
+    for &sample in samples {
+        frame[buffer_pos] = sample;
+        buffer_pos += 1;
+
+        if buffer_pos >= frame_size {
+            if let Ok(state) = vad.process_frame(&frame, hop_samples) {
+                let is_speaking = matches!(state, VadState::Speech | VadState::PossibleSpeech);
+
+                // Detect transition from speech to silence (potential pause start)
+                if was_speaking && !is_speaking {
+                    pause_start = Some(current_sample);
+                }
+
+                // Detect transition from silence to speech (pause ended)
+                // Only record if pause was long enough
+                if !was_speaking && is_speaking {
+                    if let Some(start) = pause_start {
+                        let pause_duration = current_sample.saturating_sub(start);
+                        if pause_duration >= min_pause_samples {
+                            // Use the midpoint of the pause as the split point
+                            pause_points.push(start + pause_duration / 2);
+                        }
+                    }
+                    pause_start = None;
+                }
+
+                was_speaking = is_speaking;
+            }
+
+            // Slide the frame
+            frame.copy_within(hop_samples.., 0);
+            buffer_pos = frame_size - hop_samples;
+            current_sample += hop_samples;
+        }
+    }
+
+    // Handle trailing pause (audio ends in silence)
+    if let Some(start) = pause_start {
+        let pause_duration = current_sample.saturating_sub(start);
+        if pause_duration >= min_pause_samples {
+            pause_points.push(start + pause_duration / 2);
+        }
+    }
+
+    pause_points
+}
 
 /// Handles the processing of audio segments for transcription
 pub struct TranscriptionProcessor {
@@ -43,15 +156,17 @@ impl TranscriptionProcessor {
         }
     }
 
-    /// Transcribe an audio segment using the backend
+    /// Transcribe an audio segment using the backend.
+    /// Optionally accepts an initial prompt for chunk continuity (whisper.cpp only; CT2 ignores it).
     fn transcribe_segment(
         backend: &Arc<Mutex<Option<TranscriptionBackend>>>,
         segment: &AudioSegment,
         language: &str,
         stats: &Arc<Mutex<TranscriptionStats>>,
         audio_visualization_data: &Arc<RwLock<AudioVisualizationData>>,
+        initial_prompt: Option<&str>,
     ) -> String {
-        let app_config = read_app_config();
+        let mut app_config = read_app_config();
         let log_stats_enabled = app_config.debug_config.log_stats_enabled;
 
         // Set processing state to transcribing
@@ -62,38 +177,38 @@ impl TranscriptionProcessor {
 
         if log_stats_enabled {
             println!(
-                "Transcribing segment from {:.2}s to {:.2}s",
-                segment.start_time, segment.end_time
+                "Transcribing segment from {:.2}s to {:.2}s{}",
+                segment.start_time,
+                segment.end_time,
+                if initial_prompt.is_some() { " (with prompt)" } else { "" }
             );
         }
 
         let start_time = Instant::now();
         let segment_duration = (segment.end_time - segment.start_time) as f32;
 
-        // Get a lock on the backend and check if it's available
-        let mut backend_lock = backend.lock();
+        let backend_lock = backend.lock();
 
         if backend_lock.is_none() {
             let total_duration = start_time.elapsed();
-
             if log_stats_enabled {
                 println!(
                     "Backend not available (checked in {:.2}s)",
                     total_duration.as_secs_f32()
                 );
             }
-
-            // Set processing state back to idle on error
             {
                 let mut audio_data = audio_visualization_data.write();
                 audio_data.set_processing_state(ProcessingState::Idle);
             }
-
             return "[backend not available]".to_string();
         }
 
-        // Generate with the backend while still holding the lock
-        // Use backend-specific options from config
+        // Apply initial prompt for whisper.cpp backend (if provided)
+        if let Some(prompt) = initial_prompt {
+            app_config.whisper_cpp_options.initial_prompt = Some(prompt.to_string());
+        }
+
         let backend_ref = backend_lock.as_ref().unwrap();
         let inference_start = Instant::now();
 
@@ -129,24 +244,18 @@ impl TranscriptionProcessor {
                 let inference_secs = inference_duration.as_secs_f32();
                 let total_secs = total_duration.as_secs_f32();
 
-                // Update statistics
                 if let Some(mut stats_lock) = stats.try_lock() {
                     stats_lock.update(segment_duration, inference_secs, total_secs);
                 }
 
                 if log_stats_enabled {
                     println!(
-                        "Transcription timing: Segment length: {:.2}s, Inference time: {:.2}s, Total processing time: {:.2}s, RTF: {:.2}",
-                        segment_duration,
-                        inference_secs,
-                        total_secs,
-                        inference_secs / segment_duration
+                        "Transcription timing: Segment length: {:.2}s, Inference time: {:.2}s, Total: {:.2}s, RTF: {:.2}",
+                        segment_duration, inference_secs, total_secs, inference_secs / segment_duration
                     );
-
                     println!("Transcription (raw): '{}'", transcription);
                 }
 
-                // Apply post-processing
                 let processed_transcription = post_processor::post_process_text(
                     transcription,
                     &app_config.post_process_config,
@@ -156,7 +265,6 @@ impl TranscriptionProcessor {
                     println!("Transcription (processed): '{}'", processed_transcription);
                 }
 
-                // Set processing state back to idle on success
                 {
                     let mut audio_data = audio_visualization_data.write();
                     audio_data.set_processing_state(ProcessingState::Idle);
@@ -166,7 +274,6 @@ impl TranscriptionProcessor {
             }
             Err(e) => {
                 let total_duration = start_time.elapsed();
-
                 if log_stats_enabled {
                     println!(
                         "Transcription error after {:.2}s: {}",
@@ -174,19 +281,15 @@ impl TranscriptionProcessor {
                         e
                     );
                 }
-
-                // Set processing state to error on transcription error
                 {
                     let mut audio_data = audio_visualization_data.write();
                     audio_data.set_processing_state(ProcessingState::Error);
                 }
-
                 format!("[transcription error: {}]", e)
             }
         };
 
         drop(backend_lock);
-
         result
     }
 
@@ -255,6 +358,7 @@ impl TranscriptionProcessor {
                                 &language_clone,
                                 &stats_clone,
                                 &audio_viz_clone,
+                                None,
                             );
 
                             if !transcription.is_empty() {
@@ -336,6 +440,7 @@ impl TranscriptionProcessor {
                                     &language_clone,
                                     &stats_clone,
                                     &audio_viz_clone,
+                                    None,
                                 );
 
                                 if !transcription.is_empty() {
@@ -392,7 +497,7 @@ impl TranscriptionProcessor {
             println!(
                 "EXPERIMENTAL: Processing entire recording as single segment (chunking disabled)"
             );
-            let result = Self::transcribe_segment(backend, segment, language, stats, audio_visualization_data);
+            let result = Self::transcribe_segment(backend, segment, language, stats, audio_visualization_data, None);
             let processing_time = start_time.elapsed();
             println!(
                 "Manual segment processing completed in {:.2}s",
@@ -410,7 +515,7 @@ impl TranscriptionProcessor {
         }
 
         // Process normally for smaller manual segments
-        let result = Self::transcribe_segment(backend, segment, language, stats, audio_visualization_data);
+        let result = Self::transcribe_segment(backend, segment, language, stats, audio_visualization_data, None);
 
         let processing_time = start_time.elapsed();
         println!(
@@ -421,7 +526,9 @@ impl TranscriptionProcessor {
         result
     }
 
-    /// Process very large manual segments by splitting into chunks
+    /// Process very large manual segments by splitting into chunks using VAD-guided boundaries.
+    /// Finds natural pauses in speech to split at, avoiding mid-word cuts.
+    /// Falls back to time-based splitting if no pauses found or continuous speech exceeds limits.
     fn process_large_manual_segment(
         backend: &Arc<Mutex<Option<TranscriptionBackend>>>,
         segment: &AudioSegment,
@@ -431,125 +538,156 @@ impl TranscriptionProcessor {
     ) -> String {
         let app_config = read_app_config();
         let sample_rate = segment.sample_rate;
-        let chunk_duration_seconds = app_config.manual_mode_config.chunk_duration_seconds;
-        let chunk_duration_samples = (chunk_duration_seconds as f64 * sample_rate as f64).round() as usize;
-
-        println!(
-            "Using chunk duration of {:.1}s (config: chunk_duration_seconds={:.1})",
-            chunk_duration_seconds, chunk_duration_seconds
-        );
-
-        // Get overlap settings from config
-        let use_overlap = app_config.manual_mode_config.enable_chunk_overlap;
-        let overlap_seconds = app_config.manual_mode_config.chunk_overlap_seconds;
-        let overlap_samples = if use_overlap {
-            (overlap_seconds as f64 * sample_rate as f64).round() as usize
-        } else {
-            0
-        };
-
-        if use_overlap {
-            println!(
-                "Using {:.1}s overlap between chunks (config: enable_chunk_overlap=true, chunk_overlap_seconds={:.1})",
-                overlap_seconds, overlap_seconds
-            );
-        } else {
-            println!("No overlap between chunks (config: enable_chunk_overlap=false)");
-        }
-
-        let mut chunk_ranges: Vec<(usize, usize)> = Vec::new();
-        let mut start_idx = 0;
+        let max_chunk_seconds = app_config.manual_mode_config.chunk_duration_seconds;
+        let max_chunk_samples = (max_chunk_seconds as f64 * sample_rate as f64).round() as usize;
         let total_len = segment.samples.len();
 
-        while start_idx < total_len {
-            let end_idx = (start_idx + chunk_duration_samples).min(total_len);
-            chunk_ranges.push((start_idx, end_idx));
+        println!(
+            "Processing {:.1}s of audio with VAD-guided chunking (max chunk: {:.1}s)",
+            total_len as f64 / sample_rate as f64,
+            max_chunk_seconds
+        );
 
-            if end_idx >= total_len {
-                break;
-            }
+        // Find natural pause points using VAD
+        let pause_points = find_pause_points(&segment.samples, sample_rate);
 
-            if use_overlap {
-                // Ensure we don't create negative indices or go backwards
-                let proposed_start = end_idx.saturating_sub(overlap_samples);
-                start_idx = proposed_start.max(start_idx + 1); // Always move forward at least 1 sample
-            } else {
-                start_idx = end_idx;
-            }
+        if !pause_points.is_empty() {
+            println!("Found {} natural pause point(s) in audio", pause_points.len());
+        } else {
+            println!("No natural pauses detected, using time-based chunking");
         }
 
-        // Merge the trailing remainder into the previous chunk if it's too short on its own.
-        // This mirrors the VAD behavior that avoids handing tiny fragments to the backend.
-        if chunk_ranges.len() > 1 {
-            if let Some(&(last_start, last_end)) = chunk_ranges.last() {
-                let last_len = last_end.saturating_sub(last_start);
+        // Build chunk ranges using pause points as preferred boundaries
+        let chunk_ranges = Self::build_vad_guided_chunks(
+            total_len,
+            max_chunk_samples,
+            &pause_points,
+            sample_rate,
+        );
 
-                // Minimum chunk size: roughly one-sixth of the main chunk (≈5s) or 0.5s, whichever is larger.
-                // Whisper is much happier with these longer windows and avoids skipping tail words.
-                let min_chunk_samples = (chunk_duration_samples / 6)
-                    .max(sample_rate / 2)
-                    .max(1);
+        println!("Split into {} chunk(s)", chunk_ranges.len());
 
-                if last_len > 0 && last_len < min_chunk_samples {
-                    let len = chunk_ranges.len();
-                    if let Some(prev_range) = chunk_ranges.get_mut(len - 2) {
-                        // Validate that merging won't create an oversized chunk
-                        let merged_size = last_end - prev_range.0;
-                        let merged_duration = merged_size as f64 / sample_rate as f64;
+        // Transcribe each chunk with prompt conditioning for continuity
+        let mut transcriptions: Vec<String> = Vec::new();
+        let mut previous_text = String::new();
+        const PROMPT_CONTEXT_WORDS: usize = 30;
 
-                        if merged_duration <= 60.0 {
-                            // Safe to merge - within backend limits
-                            println!(
-                                "Merging trailing {:.2}s remainder into previous chunk (merged total: {:.2}s)",
-                                last_len as f64 / sample_rate as f64,
-                                merged_duration
-                            );
-                            prev_range.1 = last_end;
-                            chunk_ranges.pop();
-                        } else {
-                            // Merged chunk would exceed 60s backend limit
-                            println!(
-                                "WARNING: Not merging {:.2}s trailing chunk - would create {:.2}s chunk exceeding 60s backend limit. Processing as separate chunk.",
-                                last_len as f64 / sample_rate as f64,
-                                merged_duration
-                            );
-                            // Keep the small chunk separate - backend will handle it
-                        }
-                    }
-                }
-            }
-        }
-
-        let mut transcriptions = Vec::new();
-
-        for (start_idx, end_idx) in chunk_ranges {
-            let chunk_audio = segment.samples[start_idx..end_idx].to_vec();
-            let chunk_start_time = segment.start_time + (start_idx as f64 / sample_rate as f64);
-            let chunk_end_time = segment.start_time + (end_idx as f64 / sample_rate as f64);
+        for (chunk_idx, (start_idx, end_idx)) in chunk_ranges.iter().enumerate() {
+            let chunk_audio = segment.samples[*start_idx..*end_idx].to_vec();
+            let chunk_start_time = segment.start_time + (*start_idx as f64 / sample_rate as f64);
+            let chunk_end_time = segment.start_time + (*end_idx as f64 / sample_rate as f64);
 
             let chunk_segment = AudioSegment {
                 samples: chunk_audio,
                 start_time: chunk_start_time,
                 end_time: chunk_end_time,
                 sample_rate,
-                session_id: segment.session_id.clone(), // Inherit session ID from parent segment
-                is_manual: segment.is_manual, // Inherit is_manual flag from parent segment
+                session_id: segment.session_id.clone(),
+                is_manual: segment.is_manual,
             };
 
             println!(
-                "Processing chunk {:.1}s - {:.1}s",
-                chunk_start_time, chunk_end_time
+                "Processing chunk {}/{} ({:.1}s - {:.1}s, {:.1}s duration)",
+                chunk_idx + 1,
+                chunk_ranges.len(),
+                chunk_start_time,
+                chunk_end_time,
+                chunk_end_time - chunk_start_time
             );
 
-            let chunk_transcription =
-                Self::transcribe_segment(backend, &chunk_segment, language, stats, audio_visualization_data);
+            // Use previous transcription as prompt for continuity (whisper.cpp only)
+            let prompt = if !previous_text.is_empty() {
+                Some(extract_prompt_context(&previous_text, PROMPT_CONTEXT_WORDS))
+            } else {
+                None
+            };
+
+            let chunk_transcription = Self::transcribe_segment(
+                backend,
+                &chunk_segment,
+                language,
+                stats,
+                audio_visualization_data,
+                prompt.as_deref(),
+            );
 
             if !chunk_transcription.is_empty() {
-                transcriptions.push(chunk_transcription.trim().to_string());
+                let trimmed = chunk_transcription.trim().to_string();
+                if !trimmed.is_empty() {
+                    transcriptions.push(trimmed.clone());
+                    previous_text = trimmed;
+                }
             }
         }
 
         // Combine all chunk transcriptions
         transcriptions.join(" ")
+    }
+
+    /// Build chunk ranges using VAD pause points as preferred split locations.
+    /// Tries to split at natural pauses, falls back to time-based if needed.
+    fn build_vad_guided_chunks(
+        total_len: usize,
+        max_chunk_samples: usize,
+        pause_points: &[usize],
+        sample_rate: usize,
+    ) -> Vec<(usize, usize)> {
+        let mut chunk_ranges: Vec<(usize, usize)> = Vec::new();
+        let mut start_idx = 0;
+
+        // Minimum chunk size (avoid tiny fragments)
+        let min_chunk_samples = sample_rate * 2; // 2 seconds minimum
+
+        while start_idx < total_len {
+            let remaining = total_len - start_idx;
+
+            // If remaining audio fits in one chunk, take it all
+            if remaining <= max_chunk_samples {
+                chunk_ranges.push((start_idx, total_len));
+                break;
+            }
+
+            // Find the best pause point within our max chunk size
+            let max_end = start_idx + max_chunk_samples;
+            let best_pause = pause_points
+                .iter()
+                .filter(|&&p| p > start_idx + min_chunk_samples && p <= max_end)
+                .max(); // Take the latest pause within range (largest chunk)
+
+            let end_idx = if let Some(&pause) = best_pause {
+                // Split at the natural pause
+                println!(
+                    "  Splitting at pause at {:.1}s",
+                    pause as f64 / sample_rate as f64
+                );
+                pause
+            } else {
+                // No pause found, fall back to max chunk size
+                max_end.min(total_len)
+            };
+
+            chunk_ranges.push((start_idx, end_idx));
+            start_idx = end_idx;
+        }
+
+        // Merge trailing tiny chunk into previous if too short
+        if chunk_ranges.len() > 1 {
+            if let Some(&(last_start, last_end)) = chunk_ranges.last() {
+                let last_len = last_end - last_start;
+                if last_len < min_chunk_samples {
+                    let len = chunk_ranges.len();
+                    if let Some(prev_range) = chunk_ranges.get_mut(len - 2) {
+                        let merged_len = last_end - prev_range.0;
+                        // Only merge if result is within reasonable limits (45s)
+                        if merged_len <= sample_rate * 45 {
+                            prev_range.1 = last_end;
+                            chunk_ranges.pop();
+                        }
+                    }
+                }
+            }
+        }
+
+        chunk_ranges
     }
 }

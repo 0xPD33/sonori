@@ -130,6 +130,13 @@ impl WhisperCppBackend {
             params.set_max_tokens(options.max_tokens);
         }
 
+        // Apply initial prompt for chunk continuity (conditions model on previous context)
+        if let Some(ref prompt) = options.initial_prompt {
+            if !prompt.is_empty() {
+                params.set_initial_prompt(prompt);
+            }
+        }
+
         // Use hardcoded whisper.cpp internal thresholds (whisper.cpp defaults)
         params.set_entropy_thold(crate::config::WHISPER_ENTROPY_THOLD);
         params.set_logprob_thold(crate::config::WHISPER_LOGPROB_THOLD);

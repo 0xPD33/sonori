@@ -51,6 +51,16 @@ impl Default for GeneralConfig {
 /// Application ID for portal registration - hardcoded app identifier
 pub const APPLICATION_ID: &str = "dev.sonori";
 
+/// Shortcut activation mode for manual transcription
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum ShortcutMode {
+    /// Press to start, press again to stop (default)
+    #[default]
+    Toggle,
+    /// Hold to record, release to stop (push-to-talk)
+    PushToTalk,
+}
+
 /// Configuration for XDG Desktop Portal features
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -62,6 +72,8 @@ pub struct PortalConfig {
     pub enable_global_shortcuts: bool,
     /// Accelerator string for manual toggle (e.g., "<Super>Tab")
     pub manual_toggle_accelerator: String,
+    /// Shortcut activation mode: Toggle (press to start/stop) or PushToTalk (hold to record)
+    pub shortcut_mode: ShortcutMode,
     /// Paste shortcut to use: "ctrl_shift_v" (default, works in terminals) or "ctrl_v"
     pub paste_shortcut: String,
 }
@@ -124,6 +136,7 @@ impl Default for PortalConfig {
             enable_xdg_portal: true, // Default to enabled for better UX
             enable_global_shortcuts: true,
             manual_toggle_accelerator: "<Super>backslash".to_string(),
+            shortcut_mode: ShortcutMode::default(),
             paste_shortcut: "ctrl_shift_v".to_string(), // Default: Ctrl+Shift+V (works in terminals)
         }
     }
@@ -152,6 +165,10 @@ pub struct DebugConfig {
     pub save_manual_audio_debug: bool,
     /// Directory to save debug recordings (default: "recordings")
     pub recording_dir: String,
+    /// Whether to save transcript history to a persistent file
+    pub save_transcript_history: bool,
+    /// Path to transcript history file (default: ~/.cache/sonori/transcript_history.txt)
+    pub transcript_history_path: String,
 }
 
 /// Configuration for sound settings
@@ -166,10 +183,25 @@ pub struct SoundConfig {
 
 impl Default for DebugConfig {
     fn default() -> Self {
+        let transcript_history_path = if let Some(cache_home) = std::env::var_os("XDG_CACHE_HOME") {
+            std::path::PathBuf::from(cache_home)
+                .join("sonori")
+                .join("transcript_history.txt")
+        } else if let Some(home) = std::env::var_os("HOME") {
+            std::path::PathBuf::from(home)
+                .join(".cache")
+                .join("sonori")
+                .join("transcript_history.txt")
+        } else {
+            std::path::PathBuf::from("transcript_history.txt")
+        };
+
         Self {
             log_stats_enabled: false,
             save_manual_audio_debug: false,
             recording_dir: "recordings".to_string(),
+            save_transcript_history: false,
+            transcript_history_path: transcript_history_path.to_string_lossy().to_string(),
         }
     }
 }
@@ -480,6 +512,9 @@ pub struct WhisperCppOptions {
     pub suppress_blank: bool,
     pub no_context: bool,
     pub max_tokens: i32,
+    /// Initial prompt to condition the model (used internally for chunk continuity)
+    #[serde(skip)]
+    pub initial_prompt: Option<String>,
 }
 
 impl Default for WhisperCppOptions {
@@ -489,6 +524,7 @@ impl Default for WhisperCppOptions {
             suppress_blank: true, // Skip blank segments
             no_context: true,     // Disable context to prevent double transcriptions
             max_tokens: 0,        // No limit
+            initial_prompt: None, // Set dynamically for chunk continuity
         }
     }
 }
