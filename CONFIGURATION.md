@@ -158,6 +158,7 @@ normalize_whitespace = true       # Normalize whitespace
 enable_xdg_portal = true              # Enable XDG Desktop Portal for input injection and global shortcuts
 enable_global_shortcuts = true        # Enable global shortcuts via portal
 manual_toggle_accelerator = "<Super>backslash"  # Accelerator for toggling manual sessions
+shortcut_mode = "Toggle"              # Shortcut behavior: "Toggle" (press to start/stop) or "PushToTalk" (hold to record)
 paste_shortcut = "ctrl_shift_v"       # Paste method: "ctrl_shift_v" (terminals) or "ctrl_v" (apps)
                                       # Note: Application ID for portal registration is hardcoded to "dev.sonori"
 
@@ -174,6 +175,10 @@ show_in_system_tray = true            # Show icon in system tray
 
 [debug_config]
 log_stats_enabled = false             # Enable detailed performance logging
+save_manual_audio_debug = false       # Save manual mode audio to WAV files
+recording_dir = "recordings"          # Directory to save debug audio recordings
+save_transcript_history = false       # Save all transcripts to persistent history file
+transcript_history_path = "~/.cache/sonori/transcript_history.txt"  # History file location
 ```
 
 ## Configuration Sections
@@ -305,6 +310,25 @@ This feature is useful for:
 - Debugging transcription issues
 - Benchmarking different model configurations
 
+### Audio Recording Debug
+
+Save manual mode audio recordings to WAV files for debugging or review by enabling `save_manual_audio_debug = true`:
+
+- **Format**: 16-bit mono WAV files at 16kHz sample rate
+- **Location**: Saves to directory specified by `recording_dir` (default: `recordings/`)
+- **Naming**: Files are timestamped: `recording_20251211_143022.wav`
+
+### Transcript History
+
+Automatically save all transcriptions to a persistent history file by enabling `save_transcript_history = true`:
+
+- **Format**: Plain text with timestamps, one entry per line: `[2025-12-11 14:30:22] Your transcribed text`
+- **Location**: Specified by `transcript_history_path` (default: `~/.cache/sonori/transcript_history.txt`)
+- **Behavior**: Appends each transcription in real-time, persists across sessions
+- **Both Modes**: Works for both real-time and manual transcription modes
+
+The history file grows unbounded. To clear it, simply delete or truncate the file.
+
 ### System Tray Integration
 
 Sonori integrates with the system tray using StatusNotifierItem (freedesktop standard). The system tray provides quick access to:
@@ -326,7 +350,9 @@ The tray icon updates to reflect the current recording state and can show a prev
 
 ### Logs and Output
 - `transcription_stats.log` - Performance statistics (when `log_stats_enabled = true`)
-- Created in the current working directory where Sonori is launched
+- `recordings/` - Debug audio recordings (when `save_manual_audio_debug = true`)
+- `~/.cache/sonori/transcript_history.txt` - Transcript history (when `save_transcript_history = true`)
 
 ### Configuration
-- `config.toml` - Configuration file (searched in current directory)
+- `~/.config/sonori/config.toml` - User configuration file (or `$XDG_CONFIG_HOME/sonori/config.toml`)
+- Set `SONORI_CONFIG_PATH` environment variable to override config location
