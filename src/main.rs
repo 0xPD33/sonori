@@ -430,6 +430,10 @@ async fn run_gui_mode(
     let portal_tx_clone = portal_tx.clone();
     let audio_processor_for_session = transcriber.get_audio_processor();
 
+    // Transcript history saving config
+    let save_transcript_history = app_config.debug_config.save_transcript_history;
+    let transcript_history_path = app_config.debug_config.transcript_history_path.clone();
+
     tokio::spawn(async move {
         while let Ok(message) = transcript_rx.recv().await {
             // Get current session ID to filter stale transcriptions
@@ -463,6 +467,15 @@ async fn run_gui_mode(
             };
             let mut audio_data = audio_visualization_data_for_thread.write();
             audio_data.transcript = updated_transcript;
+
+            // Save transcript to history file if enabled
+            if let Err(e) = sonori::transcript_writer::append_to_transcript_history(
+                &transcription,
+                &transcript_history_path,
+                save_transcript_history,
+            ) {
+                eprintln!("Failed to save transcript history: {}", e);
+            }
 
             // Forward chunk to clipboard and portal workers with leading space (except for first segment)
             let segment_with_space = if history_len_before > 0 {
@@ -556,22 +569,22 @@ async fn run_gui_mode(
         (None, None)
     };
 
-    // Global shortcuts: register Super+Tab (or configured) to toggle manual session
+    // Global shortcuts: register Super+\ (or configured) to toggle manual session
     if app_config.portal_config.enable_global_shortcuts {
         let accelerator = app_config.portal_config.manual_toggle_accelerator.clone();
+        let shortcut_mode = app_config.portal_config.shortcut_mode;
         let manual_tx = manual_session_sender.clone();
         let mode_ref = transcription_mode_ref.clone();
         let recording_ref = recording.clone();
-        // Pass "running" flag (TRUE=app running, FALSE=shutting down)
-        // GlobalShortcutsManager will check !flag to detect shutdown
-        let shutdown = running.clone();
+        let running_ref = running.clone();
         tokio::spawn(async move {
             if let Err(e) = crate::global_shortcuts::run_listener(
                 &accelerator,
+                shortcut_mode,
                 manual_tx,
                 mode_ref,
                 recording_ref,
-                shutdown,
+                running_ref,
             )
             .await
             {

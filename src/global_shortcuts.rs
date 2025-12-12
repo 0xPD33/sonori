@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration};
 use zbus::zvariant::OwnedValue;
 
+use sonori::config::ShortcutMode;
 use sonori::real_time_transcriber::{ManualSessionCommand, TranscriptionMode};
 
 /// Manages global shortcuts through the XDG Desktop Portal.
@@ -20,27 +21,30 @@ use sonori::real_time_transcriber::{ManualSessionCommand, TranscriptionMode};
 /// - Clean shutdown
 pub struct GlobalShortcutsManager {
     accelerator: String,
+    shortcut_mode: ShortcutMode,
     manual_session_tx: mpsc::Sender<ManualSessionCommand>,
     transcription_mode: Arc<parking_lot::Mutex<TranscriptionMode>>,
     recording: Arc<AtomicBool>,
-    shutdown: Arc<AtomicBool>,
+    running: Arc<AtomicBool>,
 }
 
 impl GlobalShortcutsManager {
     /// Create a new global shortcuts manager
     pub fn new(
         accelerator: String,
+        shortcut_mode: ShortcutMode,
         manual_session_tx: mpsc::Sender<ManualSessionCommand>,
         transcription_mode: Arc<parking_lot::Mutex<TranscriptionMode>>,
         recording: Arc<AtomicBool>,
-        shutdown: Arc<AtomicBool>,
+        running: Arc<AtomicBool>,
     ) -> Self {
         Self {
             accelerator,
+            shortcut_mode,
             manual_session_tx,
             transcription_mode,
             recording,
-            shutdown,
+            running,
         }
     }
 
@@ -112,9 +116,9 @@ impl GlobalShortcutsManager {
             .await
             .context("Failed to subscribe to ShortcutsChanged signal")?;
 
-        // Process signals concurrently - keep session alive until shutdown
+        // Process signals concurrently - keep session alive until app stops running
         loop {
-            if !self.shutdown.load(Ordering::Relaxed) {
+            if !self.running.load(Ordering::Relaxed) {
                 break;
             }
 
@@ -140,7 +144,7 @@ impl GlobalShortcutsManager {
         Ok(())
     }
 
-    /// Handle shortcut activation
+    /// Handle shortcut activation (key pressed)
     async fn handle_activated(&self, activated: ashpd::desktop::global_shortcuts::Activated) {
         if activated.shortcut_id() != "toggle_manual" {
             return;
@@ -157,13 +161,20 @@ impl GlobalShortcutsManager {
             return;
         }
 
-        // Toggle recording state
-        let is_recording = self.recording.load(Ordering::Relaxed);
-
-        let command = if is_recording {
-            ManualSessionCommand::StopSession { responder: None }
-        } else {
-            ManualSessionCommand::StartSession { responder: None }
+        let command = match self.shortcut_mode {
+            ShortcutMode::Toggle => {
+                // Toggle: start if not recording, stop if recording
+                let is_recording = self.recording.load(Ordering::Relaxed);
+                if is_recording {
+                    ManualSessionCommand::StopSession { responder: None }
+                } else {
+                    ManualSessionCommand::StartSession { responder: None }
+                }
+            }
+            ShortcutMode::PushToTalk => {
+                // Push-to-talk: always start on press
+                ManualSessionCommand::StartSession { responder: None }
+            }
         };
 
         if let Err(e) = self.manual_session_tx.send(command).await {
@@ -171,12 +182,30 @@ impl GlobalShortcutsManager {
         }
     }
 
-    /// Handle shortcut deactivation
+    /// Handle shortcut deactivation (key released)
     async fn handle_deactivated(
         &self,
-        _deactivated: ashpd::desktop::global_shortcuts::Deactivated,
+        deactivated: ashpd::desktop::global_shortcuts::Deactivated,
     ) {
-        // Nothing to do on deactivation
+        if deactivated.shortcut_id() != "toggle_manual" {
+            return;
+        }
+
+        // Only act in Manual mode with push-to-talk
+        if self.shortcut_mode != ShortcutMode::PushToTalk {
+            return;
+        }
+
+        let mode = *self.transcription_mode.lock();
+        if mode != TranscriptionMode::Manual {
+            return;
+        }
+
+        // Stop recording on key release
+        let command = ManualSessionCommand::StopSession { responder: None };
+        if let Err(e) = self.manual_session_tx.send(command).await {
+            eprintln!("Failed to send stop command: {}", e);
+        }
     }
 
     /// Handle shortcuts changed notification
@@ -242,17 +271,19 @@ fn normalize_accelerator_for_portal(accelerator: &str) -> String {
 /// Legacy function for backwards compatibility - spawns the manager in a task
 pub async fn run_listener(
     accelerator: &str,
+    shortcut_mode: ShortcutMode,
     manual_session_tx: mpsc::Sender<ManualSessionCommand>,
     transcription_mode_ref: Arc<parking_lot::Mutex<TranscriptionMode>>,
     recording: Arc<AtomicBool>,
-    shutdown: Arc<AtomicBool>,
+    running: Arc<AtomicBool>,
 ) -> Result<()> {
     let manager = GlobalShortcutsManager::new(
         accelerator.to_string(),
+        shortcut_mode,
         manual_session_tx,
         transcription_mode_ref,
         recording,
-        shutdown,
+        running,
     );
 
     manager.run().await
