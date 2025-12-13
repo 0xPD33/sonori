@@ -13,6 +13,7 @@ pub mod sound_generator;
 pub mod sound_player;
 pub mod stats_reporter;
 pub mod system_tray;
+pub mod transcript_writer;
 pub mod transcription_processor;
 pub mod transcription_stats;
 pub mod ui;
