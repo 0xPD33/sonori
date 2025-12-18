@@ -1,8 +1,24 @@
+<div align="center">
+
 # Sonori
 
-A lightweight, transparent overlay application for local AI-powered speech transcription on Linux. Choose between real-time or on-demand manual transcription modes.
+**Local AI speech transcription with a transparent overlay for Linux**
 
-> **Note:** The application is in active development. You may encounter bugs or instability as new features are added.
+Real-time or on-demand transcription, entirely on your device.
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Platform: Linux](https://img.shields.io/badge/Platform-Linux%20x86__64-orange.svg)](#system-requirements)
+[![Wayland](https://img.shields.io/badge/Wayland-Layer%20Shell-blueviolet.svg)](#compositor-wayland)
+
+<br>
+
+![Sonori Demo](assets/sonori-demo.gif)
+
+</div>
+
+---
+
+> **Note:** Active development. You may encounter bugs or instability as new features are added.
 
 ## Features
 
