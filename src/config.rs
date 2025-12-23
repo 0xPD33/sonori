@@ -437,6 +437,9 @@ pub struct AppConfig {
     /// Whisper.cpp-specific options
     pub whisper_cpp_options: WhisperCppOptions,
 
+    /// Moonshine-specific options
+    pub moonshine_options: MoonshineOptions,
+
     /// XDG Desktop Portal configuration
     pub portal_config: PortalConfig,
 
@@ -525,6 +528,22 @@ impl Default for WhisperCppOptions {
             no_context: true,     // Disable context to prevent double transcriptions
             max_tokens: 0,        // No limit
             initial_prompt: None, // Set dynamically for chunk continuity
+        }
+    }
+}
+
+/// Moonshine-specific options
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MoonshineOptions {
+    /// Whether to use cached decoder (prefill + decode steps) for faster inference
+    pub enable_cache: bool,
+}
+
+impl Default for MoonshineOptions {
+    fn default() -> Self {
+        Self {
+            enable_cache: false, // Default to uncached for simplicity initially
         }
     }
 }
@@ -622,6 +641,7 @@ impl Default for AppConfig {
             common_transcription_options: CommonTranscriptionOptions::default(),
             ctranslate2_options: CT2Options::default(),
             whisper_cpp_options: WhisperCppOptions::default(),
+            moonshine_options: MoonshineOptions::default(),
             portal_config: PortalConfig::default(),
             display_config: DisplayConfig::default(),
             window_behavior_config: WindowBehaviorConfig::default(),
@@ -718,20 +738,29 @@ fn find_config_path() -> Option<std::path::PathBuf> {
     None
 }
 
-/// Create default config in user config directory on first run
-fn ensure_user_config() {
+fn user_config_path() -> Option<std::path::PathBuf> {
     use std::path::PathBuf;
 
-    // Determine user config path
-    let user_config_dir = if let Some(config_home) = std::env::var_os("XDG_CONFIG_HOME") {
-        PathBuf::from(config_home).join("sonori")
+    if let Some(config_home) = std::env::var_os("XDG_CONFIG_HOME") {
+        Some(PathBuf::from(config_home).join("sonori").join("config.toml"))
     } else if let Some(home) = std::env::var_os("HOME") {
-        PathBuf::from(home).join(".config").join("sonori")
+        Some(PathBuf::from(home).join(".config").join("sonori").join("config.toml"))
     } else {
-        return; // Can't determine config dir
+        None
+    }
+}
+
+/// Create default config in user config directory on first run
+fn ensure_user_config() {
+    let user_config_path = match user_config_path() {
+        Some(path) => path,
+        None => return,
     };
 
-    let user_config_path = user_config_dir.join("config.toml");
+    let user_config_dir = match user_config_path.parent() {
+        Some(dir) => dir,
+        None => return,
+    };
 
     // Skip if user config already exists
     if user_config_path.exists() {
@@ -739,7 +768,7 @@ fn ensure_user_config() {
     }
 
     // Create config directory
-    if let Err(e) = std::fs::create_dir_all(&user_config_dir) {
+    if let Err(e) = std::fs::create_dir_all(user_config_dir) {
         eprintln!("Failed to create config directory: {}", e);
         return;
     }
@@ -787,10 +816,16 @@ pub fn read_app_config_with_path() -> (AppConfig, Option<std::path::PathBuf>) {
         }
     };
 
-    let config = match toml::from_str::<AppConfig>(&config_str) {
-        Ok(mut config) => {
-            // Migrate legacy configuration if needed
+    let config = match build_config_with_defaults(&config_str) {
+        Ok((mut config, updated_toml)) => {
             config.migrate_legacy_config();
+
+            if let (Some(path), Some(updated_toml)) = (config_path.as_ref(), updated_toml) {
+                if let Err(e) = std::fs::write(path, updated_toml) {
+                    eprintln!("Failed to update config with new defaults: {}", e);
+                }
+            }
+
             config
         }
         Err(e) => {
@@ -800,4 +835,66 @@ pub fn read_app_config_with_path() -> (AppConfig, Option<std::path::PathBuf>) {
     };
 
     (config, config_path)
+}
+
+pub fn write_app_config(config: &AppConfig) -> Result<(), String> {
+    let config_path = find_config_path().or_else(user_config_path).ok_or_else(|| {
+        "Unable to determine config path. Set SONORI_CONFIG_PATH or HOME.".to_string()
+    })?;
+
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create config directory: {}", e))?;
+    }
+
+    let toml_string = toml::to_string_pretty(&config)
+        .map_err(|e| format!("Failed to serialize config: {}", e))?;
+    std::fs::write(&config_path, toml_string)
+        .map_err(|e| format!("Failed to write config: {}", e))?;
+
+    Ok(())
+}
+
+fn build_config_with_defaults(
+    config_str: &str,
+) -> Result<(AppConfig, Option<String>), toml::de::Error> {
+    let mut default_value = toml::Value::Table(Default::default());
+    if let Ok(default_toml) = toml::to_string(&AppConfig::default()) {
+        if let Ok(value) = toml::from_str::<toml::Value>(&default_toml) {
+            default_value = value;
+        }
+    }
+
+    let user_value = toml::from_str::<toml::Value>(config_str)?;
+    let mut merged_value = default_value;
+    merge_toml(&mut merged_value, user_value.clone());
+
+    let updated_toml = if merged_value != user_value {
+        toml::to_string_pretty(&merged_value).ok()
+    } else {
+        None
+    };
+
+    let merged_string = toml::to_string(&merged_value).unwrap_or_default();
+    let config = toml::from_str::<AppConfig>(&merged_string)?;
+
+    Ok((config, updated_toml))
+}
+
+fn merge_toml(base: &mut toml::Value, overlay: toml::Value) {
+    match (base, overlay) {
+        (toml::Value::Table(base_table), toml::Value::Table(overlay_table)) => {
+            for (key, value) in overlay_table {
+                match base_table.get_mut(&key) {
+                    Some(existing) => merge_toml(existing, value),
+                    None => {
+                        base_table.insert(key, value);
+                    }
+                }
+            }
+        }
+        (base_value, overlay_value) => {
+            *base_value = overlay_value;
+        }
+    }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "sonori"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 
 [dependencies]
@@ -32,11 +32,21 @@ chrono = "0.4.35"
 num_cpus = "1.16"
 whisper-rs = { version = "0.15.1", features = ["openblas", "vulkan"] }
 hound = "3.5"
+tokenizers = "0.22"
 
 [features]
+default = []
 # Enable runtime CPU feature detection
 std = ["std_detect"]
 std_detect = []
+# Backends
+backend-moonshine = []
+backend-parakeet = []
+# ORT execution providers
+ort-cpu = [] 
+ort-cuda = ["ort/cuda"]
+ort-tensorrt = ["ort/tensorrt"]
+
 
 [package.metadata.release]
 publish = false          # Don't publish to crates.io
