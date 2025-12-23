@@ -18,7 +18,7 @@ transcription_mode = "manual"          # "realtime" for live transcription, "man
 # Choose the transcription engine and configure its performance
 
 [backend_config]
-backend = "whisper_cpp"                # Options: "ctranslate2", "whisper_cpp", "parakeet"
+backend = "whisper_cpp"                # Options: "ctranslate2", "whisper_cpp", "moonshine", "parakeet"
                                         # whisper_cpp is recommended for most users (better performance)
 threads = 4                           # Number of CPU threads (default: min(num_cpus, 4))
                                         # Most users can keep this default - will auto-adjust to your CPU
@@ -110,6 +110,10 @@ no_context = true                     # Disable context
 max_tokens = 0                        # Maximum tokens per segment (0 = auto)
                                         # Keep this default - automatically determined by model
                                         # Note: Internal thresholds (entropy, logprob, no_speech) are hardcoded to whisper.cpp defaults
+
+# Moonshine-specific options (used when backend = "moonshine")
+[moonshine_options]
+enable_cache = false                  # Use cached decoder (requires cached_decode.onnx)
 
 # =============================================================================
 # USER INTERFACE & CONTROLS

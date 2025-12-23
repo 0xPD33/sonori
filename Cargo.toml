@@ -1,6 +1,6 @@
 [package]
 name = "sonori"
-version = "0.5.1"
+version = "0.6.0"
 edition = "2021"
 
 [dependencies]
@@ -8,6 +8,7 @@ portaudio = "0.8.0"
 cpal = "0.16"
 ct2rs = { version = "0.9.6", features = ["whisper"] }
 ndarray = "0.16.1"
+serde_json = "1.0"
 reqwest = { version = "0.12.14", features = ["stream", "json"] }
 tokio = { version = "1.43.0", features = ["full"] }
 futures-util = "0.3.31"

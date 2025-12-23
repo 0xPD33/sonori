@@ -13,6 +13,8 @@ pub mod ctranslate2;
 pub mod factory;
 pub mod traits;
 pub mod whisper_cpp;
+pub mod moonshine;
+pub mod onnx_utils;
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -29,6 +31,10 @@ pub enum BackendType {
     #[serde(alias = "whisper-cpp", alias = "whispercpp")]
     WhisperCpp,
 
+    /// Moonshine ONNX backend
+    #[serde(alias = "moonshine")]
+    Moonshine,
+
     /// NVIDIA Parakeet backend (future)
     Parakeet,
 }
@@ -44,6 +50,7 @@ impl fmt::Display for BackendType {
         match self {
             BackendType::CTranslate2 => write!(f, "ctranslate2"),
             BackendType::WhisperCpp => write!(f, "whisper_cpp"),
+            BackendType::Moonshine => write!(f, "moonshine"),
             BackendType::Parakeet => write!(f, "parakeet"),
         }
     }
@@ -138,6 +145,9 @@ pub enum TranscriptionBackend {
     /// whisper.cpp backend
     WhisperCpp(whisper_cpp::WhisperCppBackend),
 
+    /// Moonshine backend
+    Moonshine(moonshine::MoonshineBackend),
+
     /// Parakeet backend (future)
     #[allow(dead_code)]
     Parakeet, // Placeholder for implementation
@@ -149,6 +159,7 @@ impl TranscriptionBackend {
         match self {
             TranscriptionBackend::CTranslate2(_) => BackendType::CTranslate2,
             TranscriptionBackend::WhisperCpp(_) => BackendType::WhisperCpp,
+            TranscriptionBackend::Moonshine(_) => BackendType::Moonshine,
             TranscriptionBackend::Parakeet => BackendType::Parakeet,
         }
     }
@@ -158,6 +169,7 @@ impl TranscriptionBackend {
         match self {
             TranscriptionBackend::CTranslate2(backend) => backend.capabilities(),
             TranscriptionBackend::WhisperCpp(backend) => backend.capabilities(),
+            TranscriptionBackend::Moonshine(backend) => backend.capabilities(),
             TranscriptionBackend::Parakeet => {
                 unimplemented!("Parakeet backend not yet implemented")
             }

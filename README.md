@@ -24,7 +24,7 @@ Real-time or on-demand transcription, entirely on your device.
 
 ### Core
 - **Local AI Processing** - All transcription happens on your device, no cloud services required
-- **Multi-Backend Support** - Choose between CTranslate2 or Whisper.cpp backends
+- **Multi-Backend Support** - Choose between CTranslate2, Whisper.cpp, or Moonshine backends
 - **Dual Transcription Modes** - Real-time continuous transcription or manual on-demand sessions
 - **Voice Activity Detection** - Uses Silero VAD for accurate speech detection
 - **Automatic Model Download** - Models are downloaded automatically on first run
@@ -259,6 +259,7 @@ Sonori uses `config.toml` for configuration. Defaults work well for most users.
 - **High Quality** - For powerful computers with GPU
 - **Real-Time** - Live transcription as you speak
 - **Multilingual** - For non-English languages
+- **Moonshine** - ONNX-based backend with fast real-time performance
 
 ## Troubleshooting
 
@@ -309,6 +310,8 @@ ct2-transformers-converter --model your-model --output_dir ~/.cache/whisper/your
 2. Adjust `chunk_duration_seconds` (15-25) in `[manual_mode_config]`
 3. Try CTranslate2 backend
 
+**Moonshine model layout:** Moonshine uses ONNX merged models (auto-downloaded) and expects a model name like `tiny` or `base`. If you see decoder input errors, set `[moonshine_options].enable_cache = false` and retry.
+
 ## Known Issues
 
 - Not all Wayland compositors supported (tested primarily on KDE Plasma/KWin)
@@ -332,6 +335,7 @@ Contributions welcome! Whether fixing bugs, adding features, improving docs, or 
 - [whisper.cpp](https://github.com/ggerganov/whisper.cpp) / [whisper-rs](https://codeberg.org/tazz4843/whisper-rs)
 - [ONNX Runtime](https://github.com/microsoft/onnxruntime)
 - [OpenAI Whisper](https://github.com/openai/whisper)
+- [Moonshine](https://github.com/moonshine-ai/moonshine)
 - [Silero VAD](https://github.com/snakers4/silero-vad)
 - [CPAL](https://github.com/RustAudio/cpal)
 - [Winit Fork](https://github.com/SergioRibera/winit)

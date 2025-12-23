@@ -60,6 +60,22 @@ gpu_enabled = true                  # GPU required for real-time
 quantization_level = "medium"        # Good balance
 ```
 
+### ⚡ Moonshine Real-Time (ONNX backend)
+```toml
+[general_config]
+model = "base"                       # Moonshine model: "tiny" or "base"
+language = "en"                      # Moonshine English models only
+transcription_mode = "realtime"      # Live transcription
+
+[backend_config]
+backend = "moonshine"                # Moonshine ONNX backend
+gpu_enabled = true                   # Optional (CPU works too)
+quantization_level = "high"          # Not used by Moonshine (kept for consistency)
+
+[moonshine_options]
+enable_cache = true                  # Enable decoder cache if supported
+```
+
 ### 🌍 Multilingual Support (Non-English languages)
 ```toml
 [general_config]
@@ -99,7 +115,7 @@ language = "en"                   # Language code for transcription (use "auto" 
 transcription_mode = "manual"     # "realtime" for live transcription, "manual" for push-to-talk
 
 [backend_config]
-backend = "whisper_cpp"           # Backend: "ctranslate2", "whisper_cpp" (default)
+backend = "whisper_cpp"           # Backend: "ctranslate2", "whisper_cpp", "moonshine"
 threads = 8                       # Number of CPU threads (default: min(num_cpus, 4))
 gpu_enabled = true                # Enable GPU acceleration (CUDA/Metal/Vulkan)
 quantization_level = "medium"     # Precision: "high" (full), "medium" (q8_0), "low" (q5_1)
@@ -147,6 +163,9 @@ suppress_blank = true             # Suppress blank outputs at beginning
 no_context = true                 # Disable context to prevent double transcriptions
 max_tokens = 0                    # Maximum tokens per segment (0 = auto)
                                    # Note: Internal thresholds (entropy, logprob, no_speech) are hardcoded to whisper.cpp defaults
+
+[moonshine_options]
+enable_cache = false              # Enable decoder cache if supported by the model
 
 [post_process_config]
 enabled = true                    # Enable post-processing of transcriptions
@@ -200,6 +219,13 @@ Sonori supports multiple transcription backends, each with different strengths:
 - **Use case**: Alternative for compatibility or specific use cases
 - **Model format**: CTranslate2 converted models
 
+#### Moonshine (ONNX)
+- **Models**: Moonshine ONNX merged models (auto-downloaded)
+- **Strengths**: Fast real-time performance; scales with audio length
+- **Use case**: Real-time or low-latency transcription
+- **Model format**: `encoder_model.onnx` + `decoder_model_merged.onnx` with tokenizer
+- **Model names**: `tiny`, `base` (English); add language tags for supported variants (e.g., `tiny-ko`)
+
 ### Model Options
 
 #### CTranslate2 Backend
@@ -219,6 +245,13 @@ Recommended models:
 - `large-v3-turbo` - Fast large model (requires GPU acceleration enabled)
 
 For non-English languages, use the multilingual models (without `.en` suffix) and set the appropriate language code in the configuration.
+
+#### Moonshine Backend
+Recommended models:
+- `tiny` - Fastest, lowest memory
+- `base` - Higher accuracy, still fast
+
+Moonshine models are auto-downloaded on first run into `~/.cache/sonori/models/moonshine-<model>-onnx`.
 
 ### Manual Mode Configuration
 
@@ -346,6 +379,7 @@ The tray icon updates to reflect the current recording state and can show a prev
 
 ### Model Storage
 - `~/.cache/sonori/models/` - Downloaded and converted Whisper models
+- `~/.cache/sonori/models/moonshine-*-onnx` - Downloaded Moonshine ONNX models
 - `~/.cache/sonori/models/silero_vad.onnx` - Silero VAD model
 
 ### Logs and Output

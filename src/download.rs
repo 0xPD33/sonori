@@ -18,6 +18,18 @@ const SILERO_VAD_URL: &str =
 /// Default filename for the Silero VAD model
 const SILERO_MODEL_FILENAME: &str = "silero_vad.onnx";
 
+const MOONSHINE_REPO: &str = "UsefulSensors/moonshine";
+const MOONSHINE_ONNX_DIR: &str = "onnx";
+const MOONSHINE_MERGED_DIR: &str = "merged";
+const MOONSHINE_MERGED_VARIANT: &str = "float";
+const MOONSHINE_REQUIRED_FILES: [&str; 4] = [
+    "encoder_model.onnx",
+    "decoder_model_merged.onnx",
+    "tokenizer.json",
+    "preprocessor_config.json",
+];
+const MOONSHINE_OPTIONAL_FILES: [&str; 0] = [];
+
 /// Enum to represent different model types
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ModelType {
@@ -78,6 +90,30 @@ fn is_model_complete(model_dir: &Path) -> Result<bool> {
 
     println!("All required files are present");
     Ok(true)
+}
+
+fn is_moonshine_model_complete(model_dir: &Path) -> Result<bool> {
+    for file in MOONSHINE_REQUIRED_FILES.iter() {
+        if !model_dir.join(file).exists() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn moonshine_model_id(model_name: &str) -> String {
+    let simple = model_name
+        .split('/')
+        .last()
+        .unwrap_or(model_name);
+    simple
+        .strip_prefix("moonshine-")
+        .unwrap_or(simple)
+        .to_string()
+}
+
+fn moonshine_model_dir(models_dir: &Path, model_id: &str) -> PathBuf {
+    models_dir.join(format!("moonshine-{}-onnx", model_id))
 }
 
 /// Checks if Silero model file exists and is valid
@@ -239,6 +275,62 @@ pub async fn download_file(url: &str, output_path: &Path) -> Result<()> {
     Ok(())
 }
 
+pub async fn download_file_optional(url: &str, output_path: &Path) -> Result<bool> {
+    println!("Downloading file from: {}", url);
+
+    if let Some(parent) = output_path.parent() {
+        if !parent.exists() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+
+    let response = reqwest::get(url)
+        .await
+        .context(format!("Failed to download file from {}", url))?;
+
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        println!("Optional file not found (404): {}", url);
+        return Ok(false);
+    }
+
+    if !response.status().is_success() {
+        return Err(anyhow::anyhow!(
+            "Failed to download file, status: {}",
+            response.status()
+        ));
+    }
+
+    let temp_path = output_path.with_extension("downloading");
+    let total_size = response.content_length().unwrap_or(0);
+    let mut file = tokio::fs::File::create(&temp_path)
+        .await
+        .context(format!("Failed to create file at {:?}", temp_path))?;
+
+    let mut stream = response.bytes_stream();
+    let mut downloaded: u64 = 0;
+
+    use futures_util::StreamExt;
+    while let Some(item) = stream.next().await {
+        let chunk = item.context("Error while downloading file")?;
+        file.write_all(&chunk).await?;
+
+        downloaded += chunk.len() as u64;
+        if total_size > 0 {
+            let progress = (downloaded as f64 / total_size as f64) * 100.0;
+            print!(
+                "\rDownloading... {:.1}% ({}/{} bytes)",
+                progress, downloaded, total_size
+            );
+            io::stdout().flush()?;
+        }
+    }
+
+    file.flush().await?;
+    tokio::fs::rename(&temp_path, output_path).await?;
+    println!("\nDownloaded to {:?}", output_path);
+    Ok(true)
+}
+
 /// Download and initialize the Silero VAD model
 pub async fn init_silero_model() -> Result<PathBuf> {
     println!("Initializing Silero VAD model...");
@@ -383,6 +475,9 @@ fn normalize_model_name(model_name: &str, backend_type: crate::backend::BackendT
             // Parakeet will use standard model names
             model_name.to_string()
         }
+        crate::backend::BackendType::Moonshine => {
+            model_name.to_string()
+        }
     }
 }
 
@@ -429,10 +524,66 @@ pub async fn init_all_models(
         crate::backend::BackendType::Parakeet => {
             return Err(anyhow::anyhow!("Parakeet backend not yet implemented"));
         }
+        crate::backend::BackendType::Moonshine => {
+            let model_id = moonshine_model_id(&normalized_model);
+            init_moonshine_model(&model_id).await?
+        }
     };
 
     Ok((whisper_model_path, silero_model_path))
 }
+
+async fn init_moonshine_model(model_id: &str) -> Result<PathBuf> {
+    let models_dir = get_models_dir()?;
+    let model_dir = moonshine_model_dir(&models_dir, model_id);
+
+    if model_dir.exists() && is_moonshine_model_complete(&model_dir)? {
+        println!("Moonshine model already exists at: {:?}", model_dir);
+        return Ok(model_dir);
+    }
+
+    if !model_dir.exists() {
+        fs::create_dir_all(&model_dir)?;
+    }
+
+    for file in MOONSHINE_REQUIRED_FILES.iter() {
+        let output_path = model_dir.join(file);
+        if output_path.exists() {
+            continue;
+        }
+
+        let url = format!(
+            "https://huggingface.co/{}/resolve/main/{}/{}/{}/{}/{}",
+            MOONSHINE_REPO,
+            MOONSHINE_ONNX_DIR,
+            MOONSHINE_MERGED_DIR,
+            model_id,
+            MOONSHINE_MERGED_VARIANT,
+            file
+        );
+        download_file(&url, &output_path).await?;
+    }
+
+    for file in MOONSHINE_OPTIONAL_FILES.iter() {
+        let url = format!(
+            "https://huggingface.co/{}/resolve/main/{}/{}/{}/{}/{}",
+            MOONSHINE_REPO,
+            MOONSHINE_ONNX_DIR,
+            MOONSHINE_MERGED_DIR,
+            model_id,
+            MOONSHINE_MERGED_VARIANT,
+            file
+        );
+        let output_path = model_dir.join(file);
+        if output_path.exists() {
+            continue;
+        }
+        let _ = download_file_optional(&url, &output_path).await?;
+    }
+
+    Ok(model_dir)
+}
+
 
 /// Download a whisper.cpp GGML model file
 ///

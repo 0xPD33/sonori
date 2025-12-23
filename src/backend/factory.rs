@@ -64,6 +64,11 @@ pub async fn create_backend(
         BackendType::Parakeet => Err(TranscriptionError::BackendNotImplemented(
             "Parakeet backend not yet implemented. Please use CTranslate2 backend.".to_string(),
         )),
+
+        BackendType::Moonshine => {
+             let moonshine_backend = super::moonshine::MoonshineBackend::new(model_path, backend_config)?;
+             Ok(TranscriptionBackend::Moonshine(moonshine_backend))
+        }
     }
 }
 
@@ -158,6 +163,20 @@ pub fn validate_model_path(
         BackendType::Parakeet => Err(TranscriptionError::BackendNotImplemented(
             "Parakeet backend not yet implemented".to_string(),
         )),
+
+        BackendType::Moonshine => {
+            if !path.is_dir() {
+                return Err(TranscriptionError::ConfigurationError(
+                    "Moonshine models must be directories".to_string(),
+                ));
+            }
+            super::moonshine::model::MoonshineModel::validate_model_dir(path).map_err(|e| {
+                TranscriptionError::ConfigurationError(format!(
+                    "Moonshine model directory invalid: {}",
+                    e
+                ))
+            })
+        }
     }
 }
 
