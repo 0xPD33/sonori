@@ -365,6 +365,39 @@ impl Default for WindowBehaviorConfig {
     }
 }
 
+/// Configuration for UI appearance settings
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UiConfig {
+    /// Base font size for transcript text (default: 10.0)
+    /// Actual rendered size is font_size * display_scale
+    pub font_size: f32,
+
+    /// Text color when speaking/actively transcribing [r, g, b, a] (0.0-1.0)
+    pub speaking_color: [f32; 4],
+
+    /// Text color when idle/not speaking [r, g, b, a] (0.0-1.0)
+    pub idle_color: [f32; 4],
+
+    /// Recording indicator dot color [r, g, b, a] (0.0-1.0)
+    pub recording_indicator_color: [f32; 4],
+
+    /// Whether to show the pulsing recording indicator
+    pub show_recording_indicator: bool,
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self {
+            font_size: 10.0,
+            speaking_color: [0.1, 0.9, 0.5, 1.0],            // Teal-green
+            idle_color: [1.0, 0.85, 0.15, 1.0],              // Gold
+            recording_indicator_color: [0.9, 0.2, 0.2, 1.0], // Red
+            show_recording_indicator: true,
+        }
+    }
+}
+
 impl DisplayConfig {
     /// Convert string vsync_mode to wgpu::PresentMode, with fallback logic
     pub fn to_present_mode(&self, available_modes: &[wgpu::PresentMode]) -> wgpu::PresentMode {
@@ -457,6 +490,9 @@ pub struct AppConfig {
 
     /// Transcription post-processing configuration
     pub post_process_config: PostProcessConfig,
+
+    /// UI appearance configuration
+    pub ui_config: UiConfig,
 
     /// Deprecated legacy field - use backend_config instead
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -648,6 +684,7 @@ impl Default for AppConfig {
             sound_config: SoundConfig::default(),
             debug_config: DebugConfig::default(),
             post_process_config: PostProcessConfig::default(),
+            ui_config: UiConfig::default(),
             compute_type: None,
             device: None,
         }

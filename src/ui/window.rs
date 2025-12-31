@@ -282,8 +282,12 @@ impl WindowState {
         // Create loading animation
         let loading_animation = LoadingAnimation::new(&Arc::new(device.clone()), config.format);
 
+        // Load UI config for timer badge
+        let (app_config, _) = crate::config::read_app_config_with_path();
+        let ui_config = app_config.ui_config;
+
         // Create timer badge
-        let timer_badge = TimerBadge::new(&Arc::new(device.clone()), &Arc::new(queue.clone()), config.format);
+        let timer_badge = TimerBadge::new(&Arc::new(device.clone()), &Arc::new(queue.clone()), config.format, &ui_config);
 
         // Calculate target frame duration from display config
         let target_frame_duration =

@@ -6,7 +6,12 @@ use wgpu::{self, Device, Queue, TextureView};
 pub struct TimerBadge {
     recording_start: Option<Instant>,
     fade_progress: f32,
+    pulse_phase: f32,
     last_update: Instant,
+
+    // Recording indicator config
+    indicator_color: [f32; 4],
+    show_indicator: bool,
 
     // Glyphon text rendering resources
     font_system: glyphon::FontSystem,
@@ -20,7 +25,12 @@ pub struct TimerBadge {
 
 impl TimerBadge {
     /// Create a new timer badge component
-    pub fn new(device: &Arc<wgpu::Device>, queue: &Arc<wgpu::Queue>, format: wgpu::TextureFormat) -> Self {
+    pub fn new(
+        device: &Arc<wgpu::Device>,
+        queue: &Arc<wgpu::Queue>,
+        format: wgpu::TextureFormat,
+        ui_config: &crate::config::UiConfig,
+    ) -> Self {
         let mut font_system = glyphon::FontSystem::new();
         let swash_cache = glyphon::SwashCache::new();
         let cache = glyphon::Cache::new(device);
@@ -36,7 +46,10 @@ impl TimerBadge {
         Self {
             recording_start: None,
             fade_progress: 0.0,
+            pulse_phase: 0.0,
             last_update: Instant::now(),
+            indicator_color: ui_config.recording_indicator_color,
+            show_indicator: ui_config.show_recording_indicator,
             font_system,
             swash_cache,
             text_atlas,
@@ -89,15 +102,24 @@ impl TimerBadge {
         viewport_width: u32,
         viewport_height: u32,
     ) {
-        // Update fade animation
+        // Update animations
         let now = Instant::now();
         let delta = now.duration_since(self.last_update).as_secs_f32();
         self.last_update = now;
 
+        // Fade animation
         let target_fade = if self.is_recording() { 1.0 } else { 0.0 };
-        let fade_speed = 5.0; // Fade in/out over ~200ms
+        let fade_speed = 5.0;
         self.fade_progress += (target_fade - self.fade_progress) * fade_speed * delta;
         self.fade_progress = self.fade_progress.clamp(0.0, 1.0);
+
+        // Pulse animation for recording dot (cycle every ~0.8s)
+        if self.is_recording() {
+            self.pulse_phase += delta * 1.25 * std::f32::consts::TAU;
+            if self.pulse_phase > std::f32::consts::TAU {
+                self.pulse_phase -= std::f32::consts::TAU;
+            }
+        }
 
         if self.fade_progress < 0.01 {
             return; // Don't render if fully faded out
@@ -121,41 +143,105 @@ impl TimerBadge {
                 },
             );
 
-            // Prepare text buffer to calculate width
             use glyphon::{Attrs, Buffer, Color, Family, Metrics, Shaping, TextArea, TextBounds};
 
             let metrics = Metrics::new(font_size, line_height);
-            let mut buffer = Buffer::new(&mut self.font_system, metrics);
-            buffer.set_size(&mut self.font_system, Some(1000.0), Some(50.0));
-            buffer.set_text(&mut self.font_system, &time_str, &Attrs::new().family(Family::Monospace), Shaping::Advanced);
+            let mut timer_buffer = Buffer::new(&mut self.font_system, metrics);
+            timer_buffer.set_size(&mut self.font_system, Some(1000.0), Some(50.0));
+            timer_buffer.set_text(
+                &mut self.font_system,
+                &time_str,
+                &Attrs::new().family(Family::Monospace),
+                Shaping::Advanced,
+            );
 
             // Calculate actual text width from layout
-            let layout = buffer.layout_runs().collect::<Vec<_>>();
+            let layout = timer_buffer.layout_runs().collect::<Vec<_>>();
             let text_width = layout
                 .iter()
                 .map(|run| run.line_w)
                 .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
                 .unwrap_or(0.0);
 
+            // Calculate recording indicator size and position
+            let indicator_size = font_size * 0.6;
+            let indicator_gap = 6.0;
+            let total_width = if self.show_indicator {
+                indicator_size + indicator_gap + text_width
+            } else {
+                text_width
+            };
+
             // Position in bottom-right corner of text area
-            let text_x = text_area_x + text_area_width - text_width - padding;
+            let content_x = text_area_x + text_area_width - total_width - padding;
             let text_y = text_area_y + text_area_height - line_height - padding;
 
             let text_alpha = (0.9 * self.fade_progress * 255.0) as u8;
-            let text_area = TextArea {
-                buffer: &buffer,
-                left: text_x,
+            let timer_x = if self.show_indicator {
+                content_x + indicator_size + indicator_gap
+            } else {
+                content_x
+            };
+
+            // Build text areas
+            let mut text_areas: Vec<TextArea> = Vec::new();
+
+            // Add indicator dot if enabled
+            let indicator_buffer;
+            if self.show_indicator {
+                // Pulse opacity between 0.5 and 1.0
+                let pulse_value = 0.75 + 0.25 * self.pulse_phase.sin();
+                let indicator_alpha = (pulse_value * self.fade_progress * 255.0) as u8;
+                let indicator_color = Color::rgba(
+                    (self.indicator_color[0] * 255.0) as u8,
+                    (self.indicator_color[1] * 255.0) as u8,
+                    (self.indicator_color[2] * 255.0) as u8,
+                    indicator_alpha,
+                );
+
+                indicator_buffer = {
+                    let mut buf = Buffer::new(&mut self.font_system, metrics);
+                    buf.set_size(&mut self.font_system, Some(50.0), Some(50.0));
+                    buf.set_text(
+                        &mut self.font_system,
+                        "●",
+                        &Attrs::new().family(Family::SansSerif).color(indicator_color),
+                        Shaping::Advanced,
+                    );
+                    buf
+                };
+
+                text_areas.push(TextArea {
+                    buffer: &indicator_buffer,
+                    left: content_x,
+                    top: text_y,
+                    scale: 1.0,
+                    bounds: TextBounds {
+                        left: content_x as i32,
+                        top: text_y as i32,
+                        right: (content_x + indicator_size + 20.0) as i32,
+                        bottom: (text_y + line_height) as i32,
+                    },
+                    default_color: indicator_color,
+                    custom_glyphs: &[],
+                });
+            }
+
+            // Add timer text
+            text_areas.push(TextArea {
+                buffer: &timer_buffer,
+                left: timer_x,
                 top: text_y,
                 scale: 1.0,
                 bounds: TextBounds {
-                    left: text_x as i32,
+                    left: timer_x as i32,
                     top: text_y as i32,
-                    right: (text_x + text_width) as i32,
+                    right: (timer_x + text_width) as i32,
                     bottom: (text_y + line_height) as i32,
                 },
                 default_color: Color::rgba(255, 255, 255, text_alpha),
                 custom_glyphs: &[],
-            };
+            });
 
             // Prepare and render text
             self.text_renderer
@@ -165,7 +251,7 @@ impl TimerBadge {
                     &mut self.font_system,
                     &mut self.text_atlas,
                     &self.viewport,
-                    [text_area],
+                    text_areas,
                     &mut self.swash_cache,
                 )
                 .expect("Failed to prepare timer text");
