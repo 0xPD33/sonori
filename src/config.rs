@@ -317,14 +317,14 @@ impl WindowPosition {
 
         match self {
             WindowPosition::BottomLeft => Anchor::BOTTOM | Anchor::LEFT,
-            WindowPosition::BottomCenter => Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
+            WindowPosition::BottomCenter => Anchor::BOTTOM,
             WindowPosition::BottomRight => Anchor::BOTTOM | Anchor::RIGHT,
             WindowPosition::TopLeft => Anchor::TOP | Anchor::LEFT,
-            WindowPosition::TopCenter => Anchor::TOP | Anchor::LEFT | Anchor::RIGHT,
+            WindowPosition::TopCenter => Anchor::TOP,
             WindowPosition::TopRight => Anchor::TOP | Anchor::RIGHT,
-            WindowPosition::MiddleLeft => Anchor::LEFT | Anchor::TOP | Anchor::BOTTOM,
-            WindowPosition::MiddleCenter => Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
-            WindowPosition::MiddleRight => Anchor::RIGHT | Anchor::TOP | Anchor::BOTTOM,
+            WindowPosition::MiddleLeft => Anchor::LEFT,
+            WindowPosition::MiddleCenter => Anchor::empty(), // No anchors = centered
+            WindowPosition::MiddleRight => Anchor::RIGHT,
         }
     }
 }

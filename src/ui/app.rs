@@ -329,14 +329,18 @@ fn create_window(
     let window_width = window_width.max(240);
     let window_height = window_height.max(174);
 
-    // Calculate proportional layout (make spectrogram more rectangular)
-    let spectrogram_width = window_width;
-    let spectrogram_height = (window_height as f32 * 0.32) as u32; // Increased from 0.28 to 0.32 for a bit more height
-    let text_area_height = (window_height as f32 * 0.66) as u32; // Decreased from 0.70 to 0.66
-    let gap = (window_height as f32 * 0.02).max(4.0) as u32;
-
     let dynamic_size = PhysicalSize::new(window_width, window_height);
     let logical_size = dynamic_size.to_logical::<i32>(scale_factor);
+
+    // Calculate layout based on logical size (what the surface will actually be)
+    let logical_width = logical_size.width.max(240) as u32;
+    let logical_height = logical_size.height.max(174) as u32;
+
+    // Calculate proportional layout (make spectrogram more rectangular)
+    let spectrogram_width = logical_width;
+    let spectrogram_height = (logical_height as f32 * 0.32) as u32; // Increased from 0.28 to 0.32 for a bit more height
+    let text_area_height = (logical_height as f32 * 0.66) as u32; // Decreased from 0.70 to 0.66
+    let gap = (logical_height as f32 * 0.02).max(4.0) as u32;
 
     // Set the fixed size in the window attributes
     let mut w = w.with_surface_size(logical_size);
@@ -381,8 +385,8 @@ fn create_window(
         manual_session_sender,
         transcription_mode_ref,
         display_config,
-        window_width,
-        window_height,
+        logical_width,
+        logical_height,
         spectrogram_width,
         spectrogram_height,
         text_area_height,
