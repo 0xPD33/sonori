@@ -1,202 +1,120 @@
 # =============================================================================
-# CORE TRANSCRIPTION SETTINGS
+# Sonori Configuration
 # =============================================================================
-# These are the most important settings you'll likely want to change
+# Most settings have good defaults. See CONFIGURATION.md for detailed docs.
+# Quick examples: Fast (base.en), Balanced (small.en), Quality (large-v3-turbo)
 
 [general_config]
-model = "small.en"                     # Whisper model size (tiny, base, small, medium, large, large-v2, large-v3, large-v3-turbo)
-                                        # Most users can stick with "base.en" or "small.en" for good performance
-language = "en"                        # Transcription language (use "auto" for auto-detect)
-                                        # Change this if you speak a different language
-transcription_mode = "manual"          # "realtime" for live transcription, "manual" for push-to-talk
-                                        # Real-time: transcribes as you speak (more resource intensive)
-                                        # Manual: record chunks, then transcribe (better for longer speech)
+model = "small.en"                     # Model: tiny, base, small, medium, large-v3-turbo
+language = "en"                        # Language code (or "auto" for detection)
+transcription_mode = "manual"          # "realtime" or "manual"
 
 # =============================================================================
-# BACKEND CONFIGURATION
+# BACKEND
 # =============================================================================
-# Choose the transcription engine and configure its performance
 
 [backend_config]
-backend = "whisper_cpp"                # Options: "ctranslate2", "whisper_cpp", "moonshine", "parakeet"
-                                        # whisper_cpp is recommended for most users (better performance)
-threads = 4                           # Number of CPU threads (default: min(num_cpus, 4))
-                                        # Most users can keep this default - will auto-adjust to your CPU
-gpu_enabled = true                    # Enable GPU acceleration (CUDA/Metal/Vulkan)
-                                        # Enable if you have a decent GPU, disable for CPU-only or issues
-quantization_level = "medium"         # Precision: "high" (full), "medium" (q8_0), "low" (q5_1)
-                                        # Medium is good balance - high for max accuracy, low for less memory
+backend = "whisper_cpp"                # Options: ctranslate2, whisper_cpp, moonshine
+threads = 4                            # CPU threads (default: min(num_cpus, 4))
+gpu_enabled = true                     # GPU acceleration (CUDA/Metal/Vulkan)
+quantization_level = "medium"          # Precision: high, medium, low
 
 # =============================================================================
-# AUDIO PROCESSING
+# AUDIO & TRANSCRIPTION MODES
 # =============================================================================
-# Configure how audio is captured and processed
 
 [audio_processor_config]
-buffer_size = 1024                    # Audio buffer size (also used for visualization)
-                                        # Keep this default unless you're experiencing performance issues
-                                        # Note: Sample rate is hardcoded to 16000 Hz (Silero VAD requirement)
-
-# =============================================================================
-# TRANSCRIPTION MODE SETTINGS
-# =============================================================================
-# Configure real-time and manual transcription modes
+buffer_size = 1024                     # Audio buffer size (sample rate hardcoded to 16000 Hz)
 
 [realtime_mode_config]
-max_buffer_duration_sec = 30.0        # Maximum audio buffer duration for VAD history (seconds)
-                                        # Most users can keep this default
-max_segment_count = 20                # Maximum number of speech segments to buffer
-                                        # Keep this default unless you need very long continuous transcription
+max_buffer_duration_sec = 30.0
+max_segment_count = 20
 
 [manual_mode_config]
-max_recording_duration_secs = 120     # Maximum recording time per session (2 minutes)
-                                        # Adjust if you need longer recordings
-clear_on_new_session = true           # Clear transcript when starting new session
-                                        # Personal preference - false to accumulate transcriptions
-chunk_duration_seconds = 29.0         # Chunk size in seconds (see CONFIGURATION.md for why 29s vs 30s)
-                                        # Keep this default to avoid Whisper's 30-second boundary issues
-enable_chunk_overlap = true           # Enable overlap between chunks (prevents word cutoff)
-                                        # Keep enabled unless you experience repetition issues
-chunk_overlap_seconds = 2.0           # Overlap duration in seconds
-                                        # Most users can keep this default - prevents word cutoff at boundaries
-disable_chunking = false              # EXPERIMENTAL: Process entire recording as single segment (no chunk limit)
-                                        # Leave false unless you're experimenting with very long recordings
+max_recording_duration_secs = 120
+clear_on_new_session = true
+chunk_duration_seconds = 29.0          # 29s avoids Whisper token limit at 30s boundary
+enable_chunk_overlap = true
+chunk_overlap_seconds = 2.0
+disable_chunking = false
+
+# =============================================================================
+# VOICE ACTIVITY DETECTION
+# =============================================================================
 
 [vad_config]
-sensitivity = "Medium"                # Voice Activity Detection sensitivity preset
-                                        # Low: Reduces false positives in noisy environments
-                                        # Medium: Balanced for most environments (recommended)
-                                        # High: Catches quiet speech, may trigger on background noise
-hangbefore_frames = 5                 # Frames to wait before confirming speech start (1 frame = 10ms)
-                                        # Keep this default - prevents false positives from sudden noises
-hangover_frames = 30                  # Frames to wait after speech ends before cutting (1 frame = 10ms)
-                                        # Keep this default - prevents speech from cutting off during short pauses
-silence_tolerance_frames = 8          # Frames of silence to tolerate during speech (1 frame = 10ms)
-                                        # Keep this default - allows for natural pauses in speech
-speech_prob_smoothing = 0.3           # Exponential moving average smoothing factor
-                                        # Keep this default - smooths out detection to prevent jittery behavior
+sensitivity = "Medium"                 # Low, Medium, High
+hangbefore_frames = 5                  # Frames before confirming speech (1 frame = 10ms)
+hangover_frames = 30                   # Frames after speech ends before cutting
+silence_tolerance_frames = 8           # Silence tolerance during speech
+speech_prob_smoothing = 0.3            # EMA smoothing factor
+
+# =============================================================================
+# SOUND
+# =============================================================================
 
 [sound_config]
-enabled = true                        # Enable sound feedback
-                                        # Personal preference - disable if you don't want audio cues
-volume = 0.5                         # Sound volume (0.0-1.0)
-                                        # Adjust to your preferred volume level
+enabled = true
+volume = 0.5
 
 # =============================================================================
 # TRANSCRIPTION OPTIONS
 # =============================================================================
-# Configure transcription behavior
 
-# Common options shared across all backends
 [common_transcription_options]
-beam_size = 5                         # Beam search width (1 = greedy/fastest, higher = more accurate but slower)
-                                        # Most users can keep this default - higher values may be more accurate but slower
-patience = 1.0                        # Beam search patience factor
-                                        # Keep this default - helps with complex speech patterns
+beam_size = 5
+patience = 1.0
 
-# CTranslate2-specific options (used when backend = "ctranslate2")
 [ctranslate2_options]
-repetition_penalty = 1.25             # Penalty for repeated tokens
-                                        # Keep this default unless you're experiencing repeated words or phrases
+repetition_penalty = 1.25
 
-# Whisper.cpp-specific options (used when backend = "whisper_cpp")
 [whisper_cpp_options]
-temperature = 0.2                     # Sampling temperature (0.0 = deterministic, higher = more creative)
-                                        # Keep this default - higher values may be more creative but less accurate
-suppress_blank = true                 # Suppress blank outputs at beginning
-                                        # Keep this default - prevents empty transcriptions
-no_context = true                     # Disable context
-                                        # Keep this default - prevents double transcriptions in real-time mode
-max_tokens = 0                        # Maximum tokens per segment (0 = auto)
-                                        # Keep this default - automatically determined by model
-                                        # Note: Internal thresholds (entropy, logprob, no_speech) are hardcoded to whisper.cpp defaults
+temperature = 0.2
+suppress_blank = true
+no_context = true
+max_tokens = 0
 
-# Moonshine-specific options (used when backend = "moonshine")
 [moonshine_options]
-enable_cache = false                  # Use cached decoder (requires cached_decode.onnx)
+enable_cache = false
 
 # =============================================================================
-# USER INTERFACE & CONTROLS
+# POST-PROCESSING
 # =============================================================================
-# Configure display and window behavior
 
-[display_config]
-vsync_mode = "Enabled"                # VSync: "Auto", "Enabled", "Adaptive", "Disabled", "Mailbox"
-                                        # Keep "Enabled" unless you're experiencing tearing or performance issues
-target_fps = 60                       # Target FPS when vsync is disabled (caps frame rate)
-                                        # Adjust if you want higher/lower frame rate without vsync
-window_position = "BottomCenter"      # Window position on screen
-                                        # Available: BottomLeft, BottomCenter, BottomRight,
-                                        #            TopLeft, TopCenter, TopRight,
-                                        #            MiddleLeft, MiddleCenter, MiddleRight
-                                        # Change this to position the window where you want it
-
-[window_behavior_config]
-show_in_system_tray = true            # Show icon in system tray
-                                        # Personal preference - disable if you don't use system tray
+[post_process_config]
+enabled = true
+remove_leading_dashes = true
+remove_trailing_dashes = true
+normalize_whitespace = true
 
 # =============================================================================
 # SYSTEM INTEGRATION
 # =============================================================================
-# Configure desktop environment integration and global shortcuts
 
 [portal_config]
-enable_xdg_portal = true              # Enable XDG Desktop Portal for input injection
-                                        # Keep enabled unless you're having issues with paste functionality
-enable_global_shortcuts = true        # Enable global shortcuts via desktop portal
-                                        # Keep enabled for global hotkeys, disable if not working or not needed
-manual_toggle_accelerator = "<Super>backslash"  # Global hotkey for manual mode toggle
-                                        # Change this if Super+backslash conflicts with other apps
-paste_shortcut = "ctrl_shift_v"       # Paste method: "ctrl_shift_v" (terminals) or "ctrl_v" (apps)
-                                        # Change to "ctrl_v" if you're mostly using regular applications
-                                        # Note: Application ID for portal registration is hardcoded to "dev.sonori"
+enable_xdg_portal = true
+enable_global_shortcuts = true
+manual_toggle_accelerator = "<Super>backslash"
+paste_shortcut = "ctrl_shift_v"        # ctrl_shift_v (terminals) or ctrl_v (apps)
 
 # =============================================================================
-# TRANSCRIPTION POST-PROCESSING
+# DISPLAY & WINDOW
 # =============================================================================
-# Clean up transcription artifacts and normalize output
 
-[post_process_config]
-enabled = true                        # Enable post-processing of transcriptions
-                                        # Keep enabled - cleans up transcription artifacts
-remove_leading_dashes = true          # Remove leading dashes (e.g., "- text" → "text")
-                                        # Keep enabled - removes common transcription artifacts
-remove_trailing_dashes = true         # Remove trailing dashes (e.g., "text -" → "text")
-                                        # Keep enabled - removes common transcription artifacts
-normalize_whitespace = true           # Normalize whitespace (collapse multiple spaces, etc.)
-                                        # Keep enabled - makes output more readable
+[display_config]
+vsync_mode = "Enabled"                 # Auto, Enabled, Adaptive, Disabled, Mailbox
+target_fps = 60
+window_position = "BottomCenter"       # BottomCenter, TopCenter, MiddleCenter, etc.
+
+[window_behavior_config]
+show_in_system_tray = true
 
 # =============================================================================
-# DEBUGGING & DEVELOPMENT
+# DEBUGGING
 # =============================================================================
-# Advanced options for debugging and performance monitoring
+# See CONFIGURATION.md for details on these options
 
 [debug_config]
-log_stats_enabled = false             # Enable detailed performance logging
-                                        # Keep disabled unless you're troubleshooting performance issues
-save_manual_audio_debug = false       # Save manual mode audio to WAV files for debugging
-                                        # Keep enabled - useful for debugging transcription issues
-recording_dir = "recordings"          # Directory to save debug recordings
-                                        # Keep this default unless you prefer a different location
-
-# =============================================================================
-# NEED HELP CONFIGURING?
-# =============================================================================
-# See CONFIGURATION.md for common configurations and examples
-# Most users only need to change 2-3 settings from the defaults above
-
-# =============================================================================
-# MODEL INFORMATION
-# =============================================================================
-# Available models: tiny, tiny.en, base, base.en, small, small.en, medium, large-v1, large-v2, large-v3
-#
-# Intelligent mapping for CTranslate2:
-#   - tiny, base → openai/whisper-* (standard OpenAI models, already fast)
-#   - small, medium, large → distil-whisper/* (distilled models for speed optimization)
-#   Examples:
-#     "base.en" → "openai/whisper-base.en"
-#     "small.en" → "distil-whisper/distil-small.en"
-#     "medium" → "distil-whisper/distil-medium.en"
-#
-# Whisper.cpp always uses standard OpenAI models (e.g., "base.en" → "base.en")
-# You can also specify full model paths to bypass mapping: "distil-whisper/distil-small.en"
+log_stats_enabled = false
+save_manual_audio_debug = false
+recording_dir = "recordings"

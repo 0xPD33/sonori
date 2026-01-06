@@ -197,7 +197,7 @@ log_stats_enabled = false             # Enable detailed performance logging
 save_manual_audio_debug = false       # Save manual mode audio to WAV files
 recording_dir = "recordings"          # Directory to save debug audio recordings
 save_transcript_history = false       # Save all transcripts to persistent history file
-transcript_history_path = "~/.cache/sonori/transcript_history.txt"  # History file location
+transcript_history_path = "~/.cache/sonori/transcript_history.txt"  # History file location (optional)
 ```
 
 ## Configuration Sections
@@ -353,14 +353,22 @@ Save manual mode audio recordings to WAV files for debugging or review by enabli
 
 ### Transcript History
 
-Automatically save all transcriptions to a persistent history file by enabling `save_transcript_history = true`:
+Enable persistent transcript history by adding to your `[debug_config]` section:
+
+```toml
+[debug_config]
+save_transcript_history = true         # Enable history saving
+transcript_history_path = "~/.cache/sonori/transcript_history.txt"  # Optional custom path
+```
 
 - **Format**: Plain text with timestamps, one entry per line: `[2025-12-11 14:30:22] Your transcribed text`
-- **Location**: Specified by `transcript_history_path` (default: `~/.cache/sonori/transcript_history.txt`)
+- **Default Location**: `~/.cache/sonori/transcript_history.txt` (respects `$XDG_CACHE_HOME`)
 - **Behavior**: Appends each transcription in real-time, persists across sessions
 - **Both Modes**: Works for both real-time and manual transcription modes
 
 The history file grows unbounded. To clear it, simply delete or truncate the file.
+
+**Note**: These settings don't appear in the default config.toml since they're optional. Add them manually to enable history.
 
 ### System Tray Integration
 

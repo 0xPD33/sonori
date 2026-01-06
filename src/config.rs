@@ -155,6 +155,28 @@ impl Default for ManualModeConfig {
     }
 }
 
+/// Get the default transcript history path for the current user
+fn default_transcript_history_path() -> String {
+    let path = if let Some(cache_home) = std::env::var_os("XDG_CACHE_HOME") {
+        std::path::PathBuf::from(cache_home)
+            .join("sonori")
+            .join("transcript_history.txt")
+    } else if let Some(home) = std::env::var_os("HOME") {
+        std::path::PathBuf::from(home)
+            .join(".cache")
+            .join("sonori")
+            .join("transcript_history.txt")
+    } else {
+        std::path::PathBuf::from("transcript_history.txt")
+    };
+    path.to_string_lossy().to_string()
+}
+
+/// Check if a transcript history path matches the default for the current user
+fn is_default_transcript_history_path(path: &str) -> bool {
+    path == default_transcript_history_path()
+}
+
 /// Configuration for debugging and development
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -168,6 +190,8 @@ pub struct DebugConfig {
     /// Whether to save transcript history to a persistent file
     pub save_transcript_history: bool,
     /// Path to transcript history file (default: ~/.cache/sonori/transcript_history.txt)
+    /// Skipped during serialization if using the default value to allow per-user paths
+    #[serde(skip_serializing_if = "is_default_transcript_history_path")]
     pub transcript_history_path: String,
 }
 
@@ -183,25 +207,12 @@ pub struct SoundConfig {
 
 impl Default for DebugConfig {
     fn default() -> Self {
-        let transcript_history_path = if let Some(cache_home) = std::env::var_os("XDG_CACHE_HOME") {
-            std::path::PathBuf::from(cache_home)
-                .join("sonori")
-                .join("transcript_history.txt")
-        } else if let Some(home) = std::env::var_os("HOME") {
-            std::path::PathBuf::from(home)
-                .join(".cache")
-                .join("sonori")
-                .join("transcript_history.txt")
-        } else {
-            std::path::PathBuf::from("transcript_history.txt")
-        };
-
         Self {
             log_stats_enabled: false,
             save_manual_audio_debug: false,
             recording_dir: "recordings".to_string(),
             save_transcript_history: false,
-            transcript_history_path: transcript_history_path.to_string_lossy().to_string(),
+            transcript_history_path: default_transcript_history_path(),
         }
     }
 }
@@ -306,14 +317,14 @@ impl WindowPosition {
 
         match self {
             WindowPosition::BottomLeft => Anchor::BOTTOM | Anchor::LEFT,
-            WindowPosition::BottomCenter => Anchor::BOTTOM,
+            WindowPosition::BottomCenter => Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
             WindowPosition::BottomRight => Anchor::BOTTOM | Anchor::RIGHT,
             WindowPosition::TopLeft => Anchor::TOP | Anchor::LEFT,
-            WindowPosition::TopCenter => Anchor::TOP,
+            WindowPosition::TopCenter => Anchor::TOP | Anchor::LEFT | Anchor::RIGHT,
             WindowPosition::TopRight => Anchor::TOP | Anchor::RIGHT,
-            WindowPosition::MiddleLeft => Anchor::LEFT,
-            WindowPosition::MiddleCenter => Anchor::empty(), // No anchors = centered
-            WindowPosition::MiddleRight => Anchor::RIGHT,
+            WindowPosition::MiddleLeft => Anchor::LEFT | Anchor::TOP | Anchor::BOTTOM,
+            WindowPosition::MiddleCenter => Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
+            WindowPosition::MiddleRight => Anchor::RIGHT | Anchor::TOP | Anchor::BOTTOM,
         }
     }
 }
