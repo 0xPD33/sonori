@@ -31,6 +31,7 @@ pub fn run() {
         audio_data: None,
         running: None,
         recording: None,
+        magic_mode_enabled: None,
         current_modifiers: Modifiers::default(),
         config: app_config,
         manual_session_sender: None,
@@ -47,6 +48,7 @@ pub fn run_with_audio_data(
     audio_data: Arc<RwLock<AudioVisualizationData>>,
     running: Arc<AtomicBool>,
     recording: Arc<AtomicBool>,
+    magic_mode_enabled: Arc<AtomicBool>,
     config: AppConfig,
     manual_session_sender: Option<
         tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>,
@@ -63,6 +65,7 @@ pub fn run_with_audio_data(
         audio_data: Some(audio_data),
         running: Some(running),
         recording: Some(recording),
+        magic_mode_enabled: Some(magic_mode_enabled),
         current_modifiers: Modifiers::default(),
         config,
         manual_session_sender,
@@ -79,6 +82,7 @@ pub struct WindowApp {
     pub audio_data: Option<Arc<RwLock<AudioVisualizationData>>>,
     pub running: Option<Arc<AtomicBool>>,
     pub recording: Option<Arc<AtomicBool>>,
+    pub magic_mode_enabled: Option<Arc<AtomicBool>>,
     pub current_modifiers: Modifiers,
     pub config: AppConfig,
     pub manual_session_sender:
@@ -190,10 +194,12 @@ impl ApplicationHandler for WindowApp {
                 screen,
                 self.running.clone(),
                 self.recording.clone(),
+                self.magic_mode_enabled.clone(),
                 *self.transcription_mode_ref.lock(),
                 self.manual_session_sender.clone(),
                 self.transcription_mode_ref.clone(),
                 &self.config.display_config,
+                self.config.enhancement_config.enabled,
             );
 
             if let Some(audio_data) = &self.audio_data {
@@ -307,6 +313,7 @@ fn create_window(
     monitor: MonitorHandle,
     running: Option<Arc<AtomicBool>>,
     recording: Option<Arc<AtomicBool>>,
+    magic_mode_enabled: Option<Arc<AtomicBool>>,
     transcription_mode: crate::real_time_transcriber::TranscriptionMode,
     manual_session_sender: Option<
         tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>,
@@ -315,6 +322,7 @@ fn create_window(
         parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>,
     >,
     display_config: &crate::config::DisplayConfig,
+    enhancement_enabled: bool,
 ) -> WindowState {
     // Get monitor dimensions from video mode
     let monitor_size = monitor_mode.size();
@@ -381,6 +389,7 @@ fn create_window(
             .unwrap(),
         running,
         recording,
+        magic_mode_enabled,
         transcription_mode,
         manual_session_sender,
         transcription_mode_ref,
@@ -391,5 +400,6 @@ fn create_window(
         spectrogram_height,
         text_area_height,
         gap,
+        enhancement_enabled,
     )
 }

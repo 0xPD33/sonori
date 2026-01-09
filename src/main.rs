@@ -543,6 +543,7 @@ async fn run_gui_mode(
 
     let running = transcriber.get_running();
     let recording = transcriber.get_recording();
+    let magic_mode_enabled = transcriber.get_magic_mode_enabled();
     let manual_session_sender = transcriber.get_manual_session_sender();
     let transcription_mode_ref = transcriber.get_transcription_mode_ref();
 
@@ -598,6 +599,7 @@ async fn run_gui_mode(
         audio_visualization_data,
         running,
         recording,
+        magic_mode_enabled,
         app_config,
         Some(manual_session_sender),
         transcription_mode_ref,

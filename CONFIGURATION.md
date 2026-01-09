@@ -173,6 +173,12 @@ remove_leading_dashes = true      # Remove leading dashes (e.g., "- text" → "t
 remove_trailing_dashes = true     # Remove trailing dashes (e.g., "text -" → "text")
 normalize_whitespace = true       # Normalize whitespace
 
+[enhancement_config]
+enabled = false                   # Enable magic mode by default
+# model = ""                      # HuggingFace GGUF: "owner/repo/filename.gguf"
+max_tokens = 256                  # Maximum tokens to generate
+# system_prompt = ""              # Custom system prompt
+
 [portal_config]
 enable_xdg_portal = true              # Enable XDG Desktop Portal for input injection and global shortcuts
 enable_global_shortcuts = true        # Enable global shortcuts via portal
@@ -328,6 +334,41 @@ These parameters fine-tune the VAD behavior (defaults work well for most users):
 #### Window Behavior
 - `show_in_system_tray`: Show application icon in system tray (default: true)
 
+### Enhancement Configuration (Magic Mode)
+
+The enhancement feature ("Magic Mode") post-processes transcriptions through a local LLM to clean up grammar, remove filler words (um, uh, like), and transform raw speech into clear, well-structured text.
+
+#### Model Configuration
+
+Uses llama.cpp with GGUF models from HuggingFace for GPU-accelerated inference.
+
+**Model format:** `owner/repo/filename.gguf`
+
+**Example:** `Qwen/Qwen2.5-1.5B-Instruct-GGUF/qwen2.5-1.5b-instruct-q5_k_m.gguf`
+
+#### Configuration Options
+
+```toml
+[enhancement_config]
+enabled = false           # Enable magic mode by default when starting
+# model = ""              # HuggingFace GGUF: "owner/repo/filename.gguf"
+max_tokens = 256          # Maximum tokens to generate
+# system_prompt = ""      # Custom system prompt (uses default if empty)
+```
+
+#### Model Storage
+
+Models are stored in `~/.cache/sonori/models/enhancement/`
+
+#### Custom System Prompts
+
+Override the default enhancement behavior with a custom system prompt:
+
+```toml
+[enhancement_config]
+system_prompt = "Transform this speech into a formal email. Fix grammar and maintain professional tone."
+```
+
 ### Performance Monitoring
 
 Sonori includes optional performance monitoring that can be enabled by setting `log_stats_enabled = true` in your configuration:
@@ -389,6 +430,7 @@ The tray icon updates to reflect the current recording state and can show a prev
 - `~/.cache/sonori/models/` - Downloaded and converted Whisper models
 - `~/.cache/sonori/models/moonshine-*-onnx` - Downloaded Moonshine ONNX models
 - `~/.cache/sonori/models/silero_vad.onnx` - Silero VAD model
+- `~/.cache/sonori/models/enhancement/` - Enhancement models
 
 ### Logs and Output
 - `transcription_stats.log` - Performance statistics (when `log_stats_enabled = true`)

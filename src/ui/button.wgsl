@@ -133,38 +133,38 @@ fn fs_close(in: VertexOutput) -> @location(0) vec4<f32> {
 @fragment
 fn fs_mode_toggle(in: VertexOutput) -> @location(0) vec4<f32> {
     var color = vec4<f32>(0.0, 0.0, 0.0, 0.0); // Start transparent
-    
+
     // Coordinates from 0-1
     let uv = in.tex_coords;
-    
+
     // Define the thickness of the letter lines
     let thickness = 0.1;
-    
+
     // Choose letter based on mode: 0.0 = RealTime (R), 1.0 = Manual (M)
     let is_manual = rotation_data.mode > 0.5;
-    
+
     if (is_manual) {
         // Draw letter "M" - consists of two vertical lines and two diagonal lines
         let center_x = 0.5;
         let left_x = 0.2;
         let right_x = 0.8;
-        
+
         // Left vertical line
         let on_left_vertical = abs(uv.x - left_x) < thickness && uv.y > 0.1 && uv.y < 0.9;
-        
-        // Right vertical line  
+
+        // Right vertical line
         let on_right_vertical = abs(uv.x - right_x) < thickness && uv.y > 0.1 && uv.y < 0.9;
-        
+
         // Left diagonal (from top-left to center-middle)
         let left_diag_slope = (0.5 - 0.1) / (center_x - left_x);
         let left_diag_y = 0.1 + left_diag_slope * (uv.x - left_x);
         let on_left_diagonal = abs(uv.y - left_diag_y) < thickness && uv.x >= left_x && uv.x <= center_x && uv.y >= 0.1 && uv.y <= 0.5;
-        
+
         // Right diagonal (from center-middle to top-right)
         let right_diag_slope = (0.1 - 0.5) / (right_x - center_x);
         let right_diag_y = 0.5 + right_diag_slope * (uv.x - center_x);
         let on_right_diagonal = abs(uv.y - right_diag_y) < thickness && uv.x >= center_x && uv.x <= right_x && uv.y >= 0.1 && uv.y <= 0.5;
-        
+
         // If we're on any part of the M, color is white
         if (on_left_vertical || on_right_vertical || on_left_diagonal || on_right_diagonal) {
             color = vec4<f32>(1.0, 1.0, 1.0, 0.85);
@@ -197,6 +197,51 @@ fn fs_mode_toggle(in: VertexOutput) -> @location(0) vec4<f32> {
             color = vec4<f32>(1.0, 1.0, 1.0, 0.85);
         }
     }
-    
+
+    return color;
+}
+
+// Fragment shader for magic mode button - draws a sparkle/star shape
+// mode: 0.0 = off (dim), 1.0 = on (bright gold)
+@fragment
+fn fs_magic_mode(in: VertexOutput) -> @location(0) vec4<f32> {
+    var color = vec4<f32>(0.0, 0.0, 0.0, 0.0); // Start transparent
+
+    // Coordinates from 0-1, centered at 0.5
+    let uv = in.tex_coords;
+    let centered = uv - vec2<f32>(0.5, 0.5);
+
+    // Calculate distance from center and angle
+    let dist = length(centered);
+    let angle = atan2(centered.y, centered.x);
+
+    // Create a 4-pointed star shape
+    let num_points = 4.0;
+    let star_angle = abs(cos(angle * num_points));
+    let inner_radius = 0.1;
+    let outer_radius = 0.35;
+    let star_radius = mix(inner_radius, outer_radius, star_angle);
+
+    // Check if we're inside the star
+    let on_star = dist < star_radius;
+
+    // Also add small sparkle dots at the corners
+    let sparkle_dist = 0.08;
+    let sparkle_size = 0.04;
+    let on_sparkle1 = length(uv - vec2<f32>(0.85, 0.15)) < sparkle_size;
+    let on_sparkle2 = length(uv - vec2<f32>(0.15, 0.85)) < sparkle_size;
+
+    if (on_star || on_sparkle1 || on_sparkle2) {
+        // Color based on mode: dim white when off, bright gold when on
+        let is_on = rotation_data.mode > 0.5;
+        if (is_on) {
+            // Bright gold/yellow when enabled
+            color = vec4<f32>(1.0, 0.85, 0.3, 0.95);
+        } else {
+            // Dim white when disabled
+            color = vec4<f32>(1.0, 1.0, 1.0, 0.5);
+        }
+    }
+
     return color;
 }

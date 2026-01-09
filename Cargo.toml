@@ -34,6 +34,7 @@ num_cpus = "1.16"
 whisper-rs = { version = "0.15.1", features = ["openblas", "vulkan"] }
 hound = "3.5"
 tokenizers = "0.22"
+llama-cpp-2 = { version = "0.1.131", features = ["vulkan"] }  # Shares ggml with whisper-rs
 
 [features]
 default = []

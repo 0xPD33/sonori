@@ -17,6 +17,7 @@ pub struct EventHandler {
     pub hovering_transcript: bool,
     pub auto_scroll: bool,
     pub recording: Option<Arc<AtomicBool>>,
+    pub magic_mode_enabled: Option<Arc<AtomicBool>>,
     pub manual_session_sender:
         Option<tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>>,
     pub transcription_mode_ref:
@@ -26,6 +27,7 @@ pub struct EventHandler {
 impl EventHandler {
     pub fn new(
         recording: Option<Arc<AtomicBool>>,
+        magic_mode_enabled: Option<Arc<AtomicBool>>,
         manual_session_sender: Option<
             tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>,
         >,
@@ -38,6 +40,7 @@ impl EventHandler {
             hovering_transcript: false,
             auto_scroll: true,
             recording,
+            magic_mode_enabled,
             manual_session_sender,
             transcription_mode_ref,
         }
@@ -282,6 +285,19 @@ impl EventHandler {
                             eprintln!("Manual session sender not available for mode switching");
                         }
                         // UI thread continues immediately - transcription system handles mode switch
+                    }
+                    ButtonType::MagicMode => {
+                        // Toggle magic mode (LFM enhancement)
+                        if let Some(magic_mode) = &self.magic_mode_enabled {
+                            let was_enabled = magic_mode.load(Ordering::Relaxed);
+                            let new_state = !was_enabled;
+                            magic_mode.store(new_state, Ordering::Relaxed);
+                            println!(
+                                "Magic mode toggled: {} -> {}",
+                                if was_enabled { "ON" } else { "OFF" },
+                                if new_state { "ON" } else { "OFF" }
+                            );
+                        }
                     }
                 }
                 return true;

@@ -25,9 +25,9 @@ impl MoonshineBackend {
             intra_threads: config.threads,
             inter_threads: 1,
             execution_provider: if config.gpu_enabled {
-                Some("cuda".to_string())
+                crate::backend::onnx_utils::ExecutionProviderPreference::PreferGpu
             } else {
-                None
+                crate::backend::onnx_utils::ExecutionProviderPreference::CpuOnly
             },
         };
 

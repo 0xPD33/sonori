@@ -244,6 +244,7 @@ impl Tooltip {
             ButtonType::RecordToggle => "Record",
             ButtonType::ModeToggle => "Switch Mode",
             ButtonType::Accept => "Accept",
+            ButtonType::MagicMode => "Magic Mode",
         }
     }
 

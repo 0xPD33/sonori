@@ -242,6 +242,32 @@ impl Default for PostProcessConfig {
     }
 }
 
+/// Configuration for transcription enhancement ("Magic Mode")
+/// Uses llama.cpp with GGUF models for GPU-accelerated inference
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EnhancementConfig {
+    /// Enable enhancement by default when magic mode is toggled
+    pub enabled: bool,
+    /// Model identifier (HuggingFace format): "owner/repo/filename.gguf"
+    pub model: Option<String>,
+    /// Custom system prompt for the enhancement model
+    pub system_prompt: Option<String>,
+    /// Maximum tokens to generate (default: 256)
+    pub max_tokens: usize,
+}
+
+impl Default for EnhancementConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model: None,
+            system_prompt: None,
+            max_tokens: 256,
+        }
+    }
+}
+
 impl Default for SoundConfig {
     fn default() -> Self {
         Self {
@@ -502,6 +528,9 @@ pub struct AppConfig {
     /// Transcription post-processing configuration
     pub post_process_config: PostProcessConfig,
 
+    /// LFM enhancement configuration ("Magic Mode")
+    pub enhancement_config: EnhancementConfig,
+
     /// UI appearance configuration
     pub ui_config: UiConfig,
 
@@ -695,6 +724,7 @@ impl Default for AppConfig {
             sound_config: SoundConfig::default(),
             debug_config: DebugConfig::default(),
             post_process_config: PostProcessConfig::default(),
+            enhancement_config: EnhancementConfig::default(),
             ui_config: UiConfig::default(),
             compute_type: None,
             device: None,

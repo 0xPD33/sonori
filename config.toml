@@ -88,6 +88,18 @@ remove_trailing_dashes = true
 normalize_whitespace = true
 
 # =============================================================================
+# ENHANCEMENT (Magic Mode)
+# =============================================================================
+# Post-processes transcriptions through an LLM to clean up grammar, remove
+# filler words, and transform raw speech into clear text.
+
+[enhancement_config]
+enabled = false                        # Enable magic mode
+# model = "owner/repo/filename.gguf"   # HuggingFace GGUF model path
+# max_tokens = 256                     # Maximum tokens to generate
+# system_prompt = ""                   # Custom system prompt
+
+# =============================================================================
 # SYSTEM INTEGRATION
 # =============================================================================
 

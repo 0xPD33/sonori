@@ -133,6 +133,8 @@ pub struct TranscriptionProcessor {
     transcription_done_tx: mpsc::UnboundedSender<()>,
     transcription_stats: Arc<Mutex<TranscriptionStats>>,
     audio_visualization_data: Arc<RwLock<AudioVisualizationData>>,
+    magic_mode_enabled: Arc<AtomicBool>,
+    enhancement_model: Arc<Mutex<Option<Box<dyn crate::enhancement::EnhancementModel>>>>,
 }
 
 impl TranscriptionProcessor {
@@ -144,6 +146,7 @@ impl TranscriptionProcessor {
         transcription_done_tx: mpsc::UnboundedSender<()>,
         transcription_stats: Arc<Mutex<TranscriptionStats>>,
         audio_visualization_data: Arc<RwLock<AudioVisualizationData>>,
+        magic_mode_enabled: Arc<AtomicBool>,
     ) -> Self {
         Self {
             backend,
@@ -153,6 +156,8 @@ impl TranscriptionProcessor {
             transcription_done_tx,
             transcription_stats,
             audio_visualization_data,
+            magic_mode_enabled,
+            enhancement_model: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -314,6 +319,8 @@ impl TranscriptionProcessor {
         let transcription_done_tx = self.transcription_done_tx.clone();
         let transcription_stats = self.transcription_stats.clone();
         let audio_visualization_data = self.audio_visualization_data.clone();
+        let magic_mode_enabled = self.magic_mode_enabled.clone();
+        let enhancement_model = self.enhancement_model.clone();
 
         let app_config = read_app_config();
         let log_stats_enabled = app_config.debug_config.log_stats_enabled;
@@ -417,14 +424,24 @@ impl TranscriptionProcessor {
 
                         if is_manual_segment {
                             // Handle manual mode segments with longer timeout and batch processing
+                            let magic_mode_clone = magic_mode_enabled.clone();
+                            let enhancement_model_clone = enhancement_model.clone();
                             tokio::task::spawn_blocking(move || {
-                                let transcription = Self::process_manual_segment(
+                                let mut transcription = Self::process_manual_segment(
                                     &backend_clone,
                                     &segment,
                                     &language_clone,
                                     &stats_clone,
                                     &audio_viz_clone,
                                 );
+
+                                // Apply LFM enhancement if magic mode is enabled
+                                if !transcription.is_empty() && magic_mode_clone.load(Ordering::Relaxed) {
+                                    transcription = Self::enhance_transcription(
+                                        &transcription,
+                                        &enhancement_model_clone,
+                                    );
+                                }
 
                                 if !transcription.is_empty() {
                                     let message =
@@ -698,5 +715,100 @@ impl TranscriptionProcessor {
         }
 
         chunk_ranges
+    }
+
+    /// Enhance transcription using the configured enhancement model (llama.cpp/GGUF)
+    /// Lazily loads the model if not already loaded
+    fn enhance_transcription(
+        transcription: &str,
+        enhancement_model: &Arc<Mutex<Option<Box<dyn crate::enhancement::EnhancementModel>>>>,
+    ) -> String {
+        use crate::config::read_app_config;
+
+        let config = read_app_config();
+        let enhancement_config = &config.enhancement_config;
+
+        // Try to get or load the enhancement model
+        let mut model_guard = enhancement_model.lock();
+
+        // If model is not loaded, try to load it based on config
+        if model_guard.is_none() {
+            // Get model path - download GGUF from HuggingFace if needed
+            // Model format: "owner/repo/filename.gguf"
+            let model_path = match &enhancement_config.model {
+                Some(model) => {
+                    if crate::download::is_enhancement_gguf_available(model) {
+                        crate::download::get_enhancement_gguf_path(model).ok()
+                    } else {
+                        // Try to download (blocking - not ideal but works for now)
+                        eprintln!("Enhancement model not found, attempting download...");
+                        eprintln!("Model: {}", model);
+
+                        // Use tokio runtime to download
+                        let rt = tokio::runtime::Runtime::new().ok();
+                        if let Some(rt) = rt {
+                            match rt.block_on(crate::download::download_enhancement_gguf(model)) {
+                                Ok(path) => Some(path),
+                                Err(e) => {
+                                    eprintln!("Failed to download enhancement model: {:?}", e);
+                                    None
+                                }
+                            }
+                        } else {
+                            eprintln!("Failed to create tokio runtime for download");
+                            None
+                        }
+                    }
+                }
+                None => {
+                    eprintln!("No enhancement model configured");
+                    eprintln!("Set [enhancement_config].model = \"owner/repo/filename.gguf\"");
+                    None
+                }
+            };
+
+            match model_path {
+                Some(path) => {
+                    if crate::enhancement::is_model_available(&path) {
+                        println!("Loading enhancement model from: {:?}", path);
+                        match crate::enhancement::load_model(&path) {
+                            Ok(model) => {
+                                println!("Enhancement model '{}' loaded successfully", model.name());
+                                *model_guard = Some(model);
+                            }
+                            Err(e) => {
+                                eprintln!("Failed to load enhancement model: {:?}", e);
+                                return transcription.to_string();
+                            }
+                        }
+                    } else {
+                        eprintln!("Enhancement model not found at: {:?}", path);
+                        return transcription.to_string();
+                    }
+                }
+                None => {
+                    eprintln!("No enhancement model available!");
+                    eprintln!("Configure [enhancement_config].model in config.toml");
+                    return transcription.to_string();
+                }
+            }
+        }
+
+        // Now we have the model loaded, enhance the transcription
+        if let Some(ref model) = *model_guard {
+            let system_prompt = enhancement_config.system_prompt.as_deref();
+            match model.enhance(transcription, system_prompt) {
+                Ok(enhanced) => {
+                    println!("Transcription enhanced successfully");
+                    enhanced
+                }
+                Err(e) => {
+                    eprintln!("Enhancement failed: {:?}", e);
+                    transcription.to_string()
+                }
+            }
+        } else {
+            transcription.to_string()
+        }
     }
 }

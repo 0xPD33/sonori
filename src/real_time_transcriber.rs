@@ -216,6 +216,9 @@ pub struct RealTimeTranscriber {
 
     // Sound effects
     sound_player: Option<Arc<crate::sound_player::SoundPlayer>>,
+
+    // Enhancement mode
+    magic_mode_enabled: Arc<AtomicBool>,
 }
 
 impl RealTimeTranscriber {
@@ -379,6 +382,9 @@ impl RealTimeTranscriber {
 
             // Sound effects
             sound_player,
+
+            // Enhancement mode (starts disabled)
+            magic_mode_enabled: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -418,6 +424,7 @@ impl RealTimeTranscriber {
             self.transcription_done_tx.clone(),
             self.transcription_stats.clone(),
             self.audio_visualization_data.clone(),
+            self.magic_mode_enabled.clone(),
         );
 
         // Get config
@@ -1165,6 +1172,11 @@ impl RealTimeTranscriber {
     /// Get the recording state reference
     pub fn get_recording(&self) -> Arc<AtomicBool> {
         self.recording.clone()
+    }
+
+    /// Get the magic mode (LFM enhancement) state reference
+    pub fn get_magic_mode_enabled(&self) -> Arc<AtomicBool> {
+        self.magic_mode_enabled.clone()
     }
 
     /// Get the transcript history reference

@@ -57,6 +57,7 @@ pub struct WindowState {
     pub timer_badge: TimerBadge,
     pub running: Option<Arc<AtomicBool>>,
     pub recording: Option<Arc<AtomicBool>>,
+    pub magic_mode_enabled: Option<Arc<AtomicBool>>,
     transcription_mode_ref:
         Arc<parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>>,
     last_known_mode: crate::real_time_transcriber::TranscriptionMode,
@@ -82,6 +83,7 @@ impl WindowState {
         window: Box<dyn Window>,
         running: Option<Arc<AtomicBool>>,
         recording: Option<Arc<AtomicBool>>,
+        magic_mode_enabled: Option<Arc<AtomicBool>>,
         transcription_mode: crate::real_time_transcriber::TranscriptionMode,
         manual_session_sender: Option<
             tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>,
@@ -96,6 +98,7 @@ impl WindowState {
         spectrogram_height: u32,
         text_area_height: u32,
         gap: u32,
+        enhancement_enabled: bool,
     ) -> Self {
         let window: Arc<dyn Window> = Arc::from(window);
 
@@ -212,6 +215,7 @@ impl WindowState {
             transcription_mode,
             text_area_height,
             gap,
+            enhancement_enabled,
         );
 
         // Load button icons
@@ -274,6 +278,7 @@ impl WindowState {
         // Create event handler
         let event_handler = EventHandler::new(
             recording.clone(),
+            magic_mode_enabled.clone(),
             manual_session_sender,
             transcription_mode_ref.clone(),
         );
@@ -325,6 +330,7 @@ impl WindowState {
             // Transcriber state references
             running,
             recording,
+            magic_mode_enabled,
             transcription_mode_ref,
             last_known_mode,
 

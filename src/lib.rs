@@ -4,6 +4,7 @@ pub mod backend;
 pub mod config;
 pub mod copy;
 pub mod download;
+pub mod enhancement;
 pub mod portal_input;
 pub mod portal_tokens;
 pub mod post_processor;

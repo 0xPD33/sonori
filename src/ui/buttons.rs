@@ -37,6 +37,7 @@ pub enum ButtonType {
     RecordToggle, // Toggle manual recording (play/pause)
     Accept,       // Accept and finish current manual session (texture only, not in layout)
     ModeToggle,   // Switch between real-time/manual modes
+    MagicMode,    // Toggle LFM enhancement mode (manual mode only)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -80,6 +81,7 @@ pub struct ButtonManager {
     active_button: Option<ButtonType>,
     recording: Option<Arc<AtomicBool>>,
     transcription_mode: crate::real_time_transcriber::TranscriptionMode,
+    enhancement_enabled: bool,
     // Texture cache
     copy_texture: Option<ButtonTexture>,
     reset_texture: Option<ButtonTexture>,
@@ -125,10 +127,13 @@ impl Button {
         // Create rotation uniform buffer and bind group for shader-based buttons
         let (rotation_buffer, rotation_bind_group) = if button_type == ButtonType::Close
             || button_type == ButtonType::ModeToggle
+            || button_type == ButtonType::MagicMode
         {
-            // Create rotation uniform buffer (now includes mode for ModeToggle)
+            // Create rotation uniform buffer (includes mode for ModeToggle and MagicMode)
             let initial_data = if button_type == ButtonType::ModeToggle {
                 [0.0f32, 0.0f32] // rotation, mode (0.0 = RealTime by default)
+            } else if button_type == ButtonType::MagicMode {
+                [0.0f32, 0.0f32] // rotation, mode (0.0 = off by default)
             } else {
                 [0.0f32, 0.0f32] // rotation, unused mode field
             };
@@ -139,11 +144,13 @@ impl Button {
             });
 
             // Create bind group layout with correct visibility for this button type
-            let bind_group_visibility = if button_type == ButtonType::ModeToggle {
-                // ModeToggle fragment shader needs access to the mode uniform
+            let bind_group_visibility = if button_type == ButtonType::ModeToggle
+                || button_type == ButtonType::MagicMode
+            {
+                // ModeToggle and MagicMode fragment shaders need access to the mode uniform
                 wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT
             } else {
-                // Close and CancelRecording only need vertex access
+                // Close only needs vertex access
                 wgpu::ShaderStages::VERTEX
             };
 
@@ -180,13 +187,16 @@ impl Button {
         // Create appropriate pipeline layout based on button type
         let pipeline_layout = if button_type == ButtonType::Close
             || button_type == ButtonType::ModeToggle
+            || button_type == ButtonType::MagicMode
         {
             // For shader-based buttons - use the same visibility logic as the bind group
-            let pipeline_visibility = if button_type == ButtonType::ModeToggle {
-                // ModeToggle fragment shader needs access to the mode uniform
+            let pipeline_visibility = if button_type == ButtonType::ModeToggle
+                || button_type == ButtonType::MagicMode
+            {
+                // ModeToggle and MagicMode fragment shaders need access to the mode uniform
                 wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT
             } else {
-                // Close and CancelRecording only need vertex access
+                // Close only needs vertex access
                 wgpu::ShaderStages::VERTEX
             };
 
@@ -262,6 +272,7 @@ impl Button {
                     ButtonType::RecordToggle => Some("vs_copy"),
                     ButtonType::Accept => Some("vs_copy"), // Use texture-based rendering
                     ButtonType::ModeToggle => Some("vs_close"), // Use close vertex shader
+                    ButtonType::MagicMode => Some("vs_close"), // Use close vertex shader (rotation support)
                 },
                 buffers: &[wgpu::VertexBufferLayout {
                     array_stride: 8,
@@ -280,6 +291,7 @@ impl Button {
                     ButtonType::RecordToggle => Some("fs_copy"),
                     ButtonType::Accept => Some("fs_copy"), // Use texture-based rendering
                     ButtonType::ModeToggle => Some("fs_mode_toggle"), // Custom shader for R/M text
+                    ButtonType::MagicMode => Some("fs_magic_mode"), // Custom shader for star shape
                 },
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
@@ -424,8 +436,10 @@ impl Button {
     // Update rotation buffer with current rotation and mode values
     fn update_rotation_buffer(&self, queue: &wgpu::Queue, mode: Option<f32>) {
         if let Some(buffer) = &self.rotation_buffer {
-            let data = if self.button_type == ButtonType::ModeToggle {
-                [self.rotation, mode.unwrap_or(0.0)] // Include mode for ModeToggle
+            let data = if self.button_type == ButtonType::ModeToggle
+                || self.button_type == ButtonType::MagicMode
+            {
+                [self.rotation, mode.unwrap_or(0.0)] // Include mode for ModeToggle/MagicMode
             } else {
                 [self.rotation, 0.0] // Only rotation for other buttons
             };
@@ -441,13 +455,17 @@ impl Button {
         transcription_mode: Option<crate::real_time_transcriber::TranscriptionMode>,
     ) {
         // Update rotation buffer if needed
-        if self.button_type == ButtonType::Close || self.button_type == ButtonType::ModeToggle {
+        if self.button_type == ButtonType::Close
+            || self.button_type == ButtonType::ModeToggle
+            || self.button_type == ButtonType::MagicMode
+        {
             let mode_value = if self.button_type == ButtonType::ModeToggle {
                 transcription_mode.map(|mode| match mode {
                     crate::real_time_transcriber::TranscriptionMode::RealTime => 0.0,
                     crate::real_time_transcriber::TranscriptionMode::Manual => 1.0,
                 })
             } else {
+                // For MagicMode, mode_value will be set by the caller
                 None
             };
             self.update_rotation_buffer(queue, mode_value);
@@ -489,7 +507,10 @@ impl Button {
         render_pass.set_pipeline(&self.pipeline);
 
         // Set the appropriate bind group
-        if self.button_type == ButtonType::Close || self.button_type == ButtonType::ModeToggle {
+        if self.button_type == ButtonType::Close
+            || self.button_type == ButtonType::ModeToggle
+            || self.button_type == ButtonType::MagicMode
+        {
             // Set rotation uniform bind group for shader-based buttons
             if let Some(bind_group) = &self.rotation_bind_group {
                 render_pass.set_bind_group(0, bind_group, &[]);
@@ -556,22 +577,7 @@ impl ButtonManager {
 
     /// Update all button positions based on current transcription mode
     fn update_all_button_positions(&mut self) {
-        let button_types = match self.transcription_mode {
-            TranscriptionMode::RealTime => vec![
-                ButtonType::Pause,
-                ButtonType::Copy,
-                ButtonType::Reset,
-                ButtonType::ModeToggle,
-                ButtonType::Close,
-            ],
-            TranscriptionMode::Manual => vec![
-                ButtonType::RecordToggle,
-                ButtonType::Copy,
-                ButtonType::Reset,
-                ButtonType::ModeToggle,
-                ButtonType::Close,
-            ],
-        };
+        let button_types = Self::get_button_types(self.transcription_mode, self.enhancement_enabled);
 
         let layout = self.calculate_button_layout(&button_types);
         let params = Self::calculate_layout_params(self.window_width);
@@ -617,31 +623,13 @@ impl ButtonManager {
         transcription_mode: TranscriptionMode,
         text_area_height: u32,
         gap: u32,
+        enhancement_enabled: bool,
     ) -> Self {
         // Store the original text_area_height for button positioning
         // Buttons should be positioned within the text area, above the gap
 
         // Define button sets based on transcription mode
-        let button_types = match transcription_mode {
-            TranscriptionMode::RealTime => {
-                vec![
-                    ButtonType::Pause,
-                    ButtonType::Copy,
-                    ButtonType::Reset,
-                    ButtonType::ModeToggle, // Always visible
-                    ButtonType::Close,
-                ]
-            }
-            TranscriptionMode::Manual => {
-                vec![
-                    ButtonType::RecordToggle,
-                    ButtonType::Copy,
-                    ButtonType::Reset,
-                    ButtonType::ModeToggle, // Always visible
-                    ButtonType::Close,
-                ]
-            }
-        };
+        let button_types = Self::get_button_types(transcription_mode, enhancement_enabled);
 
         // Calculate button layout
         let bottom_buttons: Vec<_> = button_types
@@ -704,6 +692,7 @@ impl ButtonManager {
             active_button: None,
             recording: None,
             transcription_mode,
+            enhancement_enabled,
             copy_texture: None,
             reset_texture: None,
             pause_texture: None,
@@ -714,6 +703,32 @@ impl ButtonManager {
             config: format,
             window_width: window_size.width,
             window_height: window_size.height,
+        }
+    }
+
+    /// Get button types based on transcription mode and enhancement config
+    fn get_button_types(mode: TranscriptionMode, enhancement_enabled: bool) -> Vec<ButtonType> {
+        match mode {
+            TranscriptionMode::RealTime => vec![
+                ButtonType::Pause,
+                ButtonType::Copy,
+                ButtonType::Reset,
+                ButtonType::ModeToggle,
+                ButtonType::Close,
+            ],
+            TranscriptionMode::Manual => {
+                let mut buttons = vec![ButtonType::RecordToggle];
+                if enhancement_enabled {
+                    buttons.push(ButtonType::MagicMode);
+                }
+                buttons.extend([
+                    ButtonType::Copy,
+                    ButtonType::Reset,
+                    ButtonType::ModeToggle,
+                    ButtonType::Close,
+                ]);
+                buttons
+            }
         }
     }
 
@@ -793,24 +808,10 @@ impl ButtonManager {
         self.window_height = window_size.height;
 
         // Define the correct button order based on current mode
-        let button_order = match self.transcription_mode {
-            TranscriptionMode::RealTime => {
-                vec![
-                    ButtonType::Pause,
-                    ButtonType::Copy,
-                    ButtonType::Reset,
-                    ButtonType::ModeToggle,
-                ]
-            }
-            TranscriptionMode::Manual => {
-                vec![
-                    ButtonType::RecordToggle,
-                    ButtonType::Copy,
-                    ButtonType::Reset,
-                    ButtonType::ModeToggle,
-                ]
-            }
-        };
+        let button_order: Vec<_> = Self::get_button_types(self.transcription_mode, self.enhancement_enabled)
+            .into_iter()
+            .filter(|&bt| bt != ButtonType::Close)
+            .collect();
 
         // Filter to only buttons that actually exist
         let bottom_buttons: Vec<_> = button_order
@@ -1045,26 +1046,7 @@ impl ButtonManager {
 
     fn update_button_layout_for_mode(&mut self) {
         // Define button sets based on transcription mode
-        let new_button_types = match self.transcription_mode {
-            TranscriptionMode::RealTime => {
-                vec![
-                    ButtonType::Pause,
-                    ButtonType::Copy,
-                    ButtonType::Reset,
-                    ButtonType::ModeToggle,
-                    ButtonType::Close,
-                ]
-            }
-            TranscriptionMode::Manual => {
-                vec![
-                    ButtonType::RecordToggle,
-                    ButtonType::Copy,
-                    ButtonType::Reset,
-                    ButtonType::ModeToggle,
-                    ButtonType::Close,
-                ]
-            }
-        };
+        let new_button_types = Self::get_button_types(self.transcription_mode, self.enhancement_enabled);
 
         // Remove buttons that are no longer needed
         let current_types: Vec<ButtonType> = self.buttons.keys().cloned().collect();
@@ -1141,24 +1123,10 @@ impl ButtonManager {
 
     fn recalculate_button_positions(&mut self) {
         // Define the correct button order based on current mode
-        let button_order = match self.transcription_mode {
-            TranscriptionMode::RealTime => {
-                vec![
-                    ButtonType::Pause,
-                    ButtonType::Copy,
-                    ButtonType::Reset,
-                    ButtonType::ModeToggle,
-                ]
-            }
-            TranscriptionMode::Manual => {
-                vec![
-                    ButtonType::RecordToggle,
-                    ButtonType::Copy,
-                    ButtonType::Reset,
-                    ButtonType::ModeToggle,
-                ]
-            }
-        };
+        let button_order: Vec<_> = Self::get_button_types(self.transcription_mode, self.enhancement_enabled)
+            .into_iter()
+            .filter(|&bt| bt != ButtonType::Close)
+            .collect();
 
         // Filter to only buttons that actually exist
         let bottom_buttons: Vec<_> = button_order
@@ -1262,25 +1230,11 @@ impl ButtonManager {
     /// Get the bounding box for the bottom button panel (excludes Close button)
     /// Returns (x, y, width, height) in pixels
     pub fn get_button_panel_bounds(&self) -> Option<(f32, f32, f32, f32)> {
-        // Get the button order based on current mode
-        let button_order = match self.transcription_mode {
-            TranscriptionMode::RealTime => {
-                vec![
-                    ButtonType::Pause,
-                    ButtonType::Copy,
-                    ButtonType::Reset,
-                    ButtonType::ModeToggle,
-                ]
-            }
-            TranscriptionMode::Manual => {
-                vec![
-                    ButtonType::RecordToggle,
-                    ButtonType::Copy,
-                    ButtonType::Reset,
-                    ButtonType::ModeToggle,
-                ]
-            }
-        };
+        // Get the button order based on current mode (excluding Close)
+        let button_order: Vec<_> = Self::get_button_types(self.transcription_mode, self.enhancement_enabled)
+            .into_iter()
+            .filter(|&bt| bt != ButtonType::Close)
+            .collect();
 
         // Filter to only buttons that exist
         let bottom_buttons: Vec<_> = button_order

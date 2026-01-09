@@ -657,3 +657,79 @@ pub fn get_whisper_cpp_model_path(
     let filename = format!("ggml-{}{}.bin", model_name, quant_suffix);
     Ok(models_dir.join(filename))
 }
+
+// =============================================================================
+// Enhancement Model Download Functions
+// =============================================================================
+// GGUF models are downloaded from HuggingFace.
+// Format: "owner/repo/filename.gguf"
+
+/// Get the enhancement model directory
+pub fn get_enhancement_model_dir() -> Result<PathBuf> {
+    let models_dir = get_models_dir()?;
+    Ok(models_dir.join("enhancement"))
+}
+
+/// Download a GGUF model from HuggingFace for enhancement
+///
+/// # Arguments
+/// * `model` - Format: "owner/repo/filename.gguf"
+///
+/// # Returns
+/// Path to the downloaded GGUF file
+pub async fn download_enhancement_gguf(model: &str) -> Result<PathBuf> {
+    let model_dir = get_enhancement_model_dir()?;
+
+    if !model_dir.exists() {
+        fs::create_dir_all(&model_dir)?;
+    }
+
+    // Parse model string: "owner/repo/filename.gguf"
+    let parts: Vec<&str> = model.splitn(3, '/').collect();
+    if parts.len() < 3 {
+        return Err(anyhow::anyhow!(
+            "Invalid model format. Expected: owner/repo/filename.gguf"
+        ));
+    }
+
+    let repo = format!("{}/{}", parts[0], parts[1]);
+    let filename = parts[2];
+    let output_path = model_dir.join(filename);
+
+    if output_path.exists() {
+        println!("Enhancement GGUF model already exists at: {:?}", output_path);
+        return Ok(output_path);
+    }
+
+    // Build HuggingFace URL
+    let url = format!(
+        "https://huggingface.co/{}/resolve/main/{}",
+        repo, filename
+    );
+
+    println!("Downloading enhancement model: {}", filename);
+    println!("  From: {}", url);
+    println!("  To: {:?}", output_path);
+
+    download_file(&url, &output_path).await?;
+
+    println!("Enhancement model downloaded successfully!");
+    Ok(output_path)
+}
+
+/// Get the expected path for an enhancement GGUF model (without downloading)
+pub fn get_enhancement_gguf_path(model: &str) -> Result<PathBuf> {
+    let model_dir = get_enhancement_model_dir()?;
+
+    // Parse model string to get filename
+    let filename = model.split('/').last().unwrap_or(model);
+    Ok(model_dir.join(filename))
+}
+
+/// Check if an enhancement GGUF model exists
+pub fn is_enhancement_gguf_available(model: &str) -> bool {
+    match get_enhancement_gguf_path(model) {
+        Ok(path) => path.exists(),
+        Err(_) => false,
+    }
+}

@@ -2,16 +2,26 @@ use anyhow::Result;
 use ndarray::{ArrayD, IxDyn};
 use ort::session::{builder::GraphOptimizationLevel, Session};
 use ort::value::Tensor;
-use std::sync::OnceLock;
 use std::path::Path;
+use std::sync::OnceLock;
 
 static ORT_ENV_INITIALIZED: OnceLock<anyhow::Result<()>> = OnceLock::new();
+
+/// Execution provider preference for ONNX sessions
+#[derive(Debug, Clone, Default)]
+pub enum ExecutionProviderPreference {
+    /// Use CPU only
+    #[default]
+    CpuOnly,
+    /// Prefer GPU (CUDA), fall back to CPU if unavailable
+    PreferGpu,
+}
 
 #[derive(Debug, Clone)]
 pub struct OnnxSessionOptions {
     pub intra_threads: usize,
     pub inter_threads: usize,
-    pub execution_provider: Option<String>,
+    pub execution_provider: ExecutionProviderPreference,
 }
 
 impl Default for OnnxSessionOptions {
@@ -19,7 +29,7 @@ impl Default for OnnxSessionOptions {
         Self {
             intra_threads: 1,
             inter_threads: 1,
-            execution_provider: None,
+            execution_provider: ExecutionProviderPreference::CpuOnly,
         }
     }
 }
@@ -36,15 +46,21 @@ pub fn init_ort_environment() -> Result<()> {
 pub fn load_session(path: impl AsRef<Path>, options: &OnnxSessionOptions) -> Result<Session> {
     init_ort_environment()?;
 
-    let builder = Session::builder()?
+    let mut builder = Session::builder()?
         .with_optimization_level(GraphOptimizationLevel::Level3)?
         .with_intra_threads(options.intra_threads)?
         .with_inter_threads(options.inter_threads)?;
 
-    // Note: Execution provider configuration in ort 2.0 works differently.
-    // We would need to use `with_execution_providers` and likely import providers.
-    // For now, we rely on automatic provider registration if features are enabled.
-    // If explicit control is needed, we will need to update this logic.
+    // Configure execution providers based on preference
+    #[cfg(feature = "ort-cuda")]
+    if matches!(
+        options.execution_provider,
+        ExecutionProviderPreference::PreferGpu
+    ) {
+        use ort::execution_providers::cuda::CUDAExecutionProvider;
+        builder = builder.with_execution_providers([CUDAExecutionProvider::default().build()])?;
+        println!("ONNX session configured with CUDA execution provider");
+    }
 
     let session = builder.commit_from_file(path)?;
     Ok(session)
