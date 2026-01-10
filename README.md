@@ -35,13 +35,13 @@ Real-time or on-demand transcription, entirely on your device.
 - **Audio Visualization** - Spectrogram display shows audio input in real-time
 - **System Tray Integration** - Quick access with window control and status display
 - **Typewriter Effect** - Character-by-character text reveal animation when transcription completes
-- **Visual State Indicators** - MagicMode button shows wand icon with sparkles when active
 
 ### Optional Features
 - **GPU Acceleration** - Vulkan-based acceleration (Whisper.cpp backend only)
 - **Global Shortcuts** - System-wide hotkeys via XDG Desktop Portal (e.g., Super+\ to toggle recording)
 - **Auto-Paste** - Automatic text injection via XDG Desktop Portal RemoteDesktop
 - **Sound Feedback** - Audio cues for recording state changes
+- **Magic Mode** - Post-process transcriptions through a local LLM to clean up grammar, remove filler words, and improve readability
 
 ### Roadmap
 
