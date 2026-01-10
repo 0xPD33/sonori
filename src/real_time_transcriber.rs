@@ -383,8 +383,8 @@ impl RealTimeTranscriber {
             // Sound effects
             sound_player,
 
-            // Enhancement mode (starts disabled)
-            magic_mode_enabled: Arc::new(AtomicBool::new(false)),
+            // Enhancement mode (initialized from config)
+            magic_mode_enabled: Arc::new(AtomicBool::new(app_config.enhancement_config.enabled)),
         })
     }
 

@@ -288,16 +288,15 @@ impl EventHandler {
                     }
                     ButtonType::MagicMode => {
                         // Toggle magic mode (LFM enhancement)
+                        button_manager.toggle_enhancement();
+                        let new_state = button_manager.is_enhancement_enabled();
                         if let Some(magic_mode) = &self.magic_mode_enabled {
-                            let was_enabled = magic_mode.load(Ordering::Relaxed);
-                            let new_state = !was_enabled;
                             magic_mode.store(new_state, Ordering::Relaxed);
-                            println!(
-                                "Magic mode toggled: {} -> {}",
-                                if was_enabled { "ON" } else { "OFF" },
-                                if new_state { "ON" } else { "OFF" }
-                            );
                         }
+                        println!(
+                            "Magic mode toggled: now {}",
+                            if new_state { "ON" } else { "OFF" }
+                        );
                     }
                 }
                 return true;
