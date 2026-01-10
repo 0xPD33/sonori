@@ -34,6 +34,8 @@ Real-time or on-demand transcription, entirely on your device.
 - **CLI Mode** - Run without GUI using `--cli` flag for headless/terminal usage
 - **Audio Visualization** - Spectrogram display shows audio input in real-time
 - **System Tray Integration** - Quick access with window control and status display
+- **Typewriter Effect** - Character-by-character text reveal animation when transcription completes
+- **Visual State Indicators** - MagicMode button shows wand icon with sparkles when active
 
 ### Optional Features
 - **GPU Acceleration** - Vulkan-based acceleration (Whisper.cpp backend only)
