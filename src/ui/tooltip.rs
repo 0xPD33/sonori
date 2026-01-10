@@ -208,6 +208,8 @@ impl Tooltip {
             ButtonType::Play,
             ButtonType::RecordToggle,
             ButtonType::ModeToggle,
+            ButtonType::Accept,
+            ButtonType::MagicMode,
         ] {
             let text = Self::get_tooltip_text(button_type);
             let (width, height) =

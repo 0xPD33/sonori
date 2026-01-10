@@ -201,41 +201,69 @@ fn fs_mode_toggle(in: VertexOutput) -> @location(0) vec4<f32> {
     return color;
 }
 
-// Fragment shader for magic mode button - draws a sparkle/star shape
-// mode: 0.0 = off (dim), 1.0 = on (bright gold)
+// Fragment shader for magic mode button - draws a magic wand
+// mode: 0.0 = off (wand only, dim), 1.0 = on (wand with sparkles, bright gold)
 @fragment
 fn fs_magic_mode(in: VertexOutput) -> @location(0) vec4<f32> {
     var color = vec4<f32>(0.0, 0.0, 0.0, 0.0); // Start transparent
 
-    // Coordinates from 0-1, centered at 0.5
     let uv = in.tex_coords;
-    let centered = uv - vec2<f32>(0.5, 0.5);
+    let is_on = rotation_data.mode > 0.5;
 
-    // Calculate distance from center and angle
-    let dist = length(centered);
-    let angle = atan2(centered.y, centered.x);
+    // Wand parameters - diagonal, tip pointing upper-right
+    let wand_start = vec2<f32>(0.15, 0.85);   // Handle end (bottom-left)
+    let wand_end = vec2<f32>(0.75, 0.2);      // Tip (upper-right)
+    let wand_dir = normalize(wand_end - wand_start);
+    let wand_length = length(wand_end - wand_start);
 
-    // Create a 4-pointed star shape
-    let num_points = 4.0;
-    let star_angle = abs(cos(angle * num_points));
-    let inner_radius = 0.1;
-    let outer_radius = 0.35;
-    let star_radius = mix(inner_radius, outer_radius, star_angle);
+    // Project point onto wand line
+    let to_point = uv - wand_start;
+    let proj_length = dot(to_point, wand_dir);
+    let proj_point = wand_start + wand_dir * clamp(proj_length, 0.0, wand_length);
+    let dist_to_wand = length(uv - proj_point);
 
-    // Check if we're inside the star
-    let on_star = dist < star_radius;
+    // Wand thickness varies - thicker at handle, thinner at tip
+    let t = clamp(proj_length / wand_length, 0.0, 1.0);
+    let wand_thickness = mix(0.09, 0.035, t);  // Handle to tip
 
-    // Also add small sparkle dots at the corners
-    let sparkle_dist = 0.08;
-    let sparkle_size = 0.04;
-    let on_sparkle1 = length(uv - vec2<f32>(0.85, 0.15)) < sparkle_size;
-    let on_sparkle2 = length(uv - vec2<f32>(0.15, 0.85)) < sparkle_size;
+    let on_wand = dist_to_wand < wand_thickness && proj_length >= 0.0 && proj_length <= wand_length;
 
-    if (on_star || on_sparkle1 || on_sparkle2) {
-        // Color based on mode: dim white when off, bright gold when on
-        let is_on = rotation_data.mode > 0.5;
+    // Small star at the tip of the wand
+    let tip_star_center = wand_end + wand_dir * 0.02;
+    let tip_offset = uv - tip_star_center;
+    let tip_dist = length(tip_offset);
+    let tip_angle = atan2(tip_offset.y, tip_offset.x);
+    let tip_star_radius = mix(0.02, 0.055, abs(cos(tip_angle * 4.0)));
+    let on_tip_star = tip_dist < tip_star_radius;
+
+    // Sparkles - only visible when on
+    var on_sparkle = false;
+    if (is_on) {
+        // Sparkle 1 - above and right of tip
+        let sparkle1_center = vec2<f32>(0.88, 0.12);
+        let sparkle1_offset = uv - sparkle1_center;
+        let sparkle1_dist = length(sparkle1_offset);
+        let sparkle1_angle = atan2(sparkle1_offset.y, sparkle1_offset.x);
+        let sparkle1_radius = mix(0.01, 0.045, abs(cos(sparkle1_angle * 4.0)));
+        let on_sparkle1 = sparkle1_dist < sparkle1_radius;
+
+        // Sparkle 2 - left of tip
+        let sparkle2_center = vec2<f32>(0.58, 0.08);
+        let sparkle2_offset = uv - sparkle2_center;
+        let sparkle2_dist = length(sparkle2_offset);
+        let sparkle2_angle = atan2(sparkle2_offset.y, sparkle2_offset.x);
+        let sparkle2_radius = mix(0.01, 0.035, abs(cos(sparkle2_angle * 4.0)));
+        let on_sparkle2 = sparkle2_dist < sparkle2_radius;
+
+        // Sparkle 3 - small dot right of tip
+        let on_sparkle3 = length(uv - vec2<f32>(0.9, 0.28)) < 0.022;
+
+        on_sparkle = on_sparkle1 || on_sparkle2 || on_sparkle3;
+    }
+
+    if (on_wand || on_tip_star || on_sparkle) {
         if (is_on) {
-            // Bright gold/yellow when enabled
+            // Bright gold when enabled
             color = vec4<f32>(1.0, 0.85, 0.3, 0.95);
         } else {
             // Dim white when disabled

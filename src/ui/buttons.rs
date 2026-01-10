@@ -88,6 +88,8 @@ pub struct ButtonManager {
     pause_texture: Option<ButtonTexture>,
     play_texture: Option<ButtonTexture>,
     accept_texture: Option<ButtonTexture>,
+    magic_wand_on_texture: Option<ButtonTexture>,
+    magic_wand_off_texture: Option<ButtonTexture>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::TextureFormat,
@@ -127,13 +129,10 @@ impl Button {
         // Create rotation uniform buffer and bind group for shader-based buttons
         let (rotation_buffer, rotation_bind_group) = if button_type == ButtonType::Close
             || button_type == ButtonType::ModeToggle
-            || button_type == ButtonType::MagicMode
         {
-            // Create rotation uniform buffer (includes mode for ModeToggle and MagicMode)
+            // Create rotation uniform buffer (includes mode for ModeToggle)
             let initial_data = if button_type == ButtonType::ModeToggle {
                 [0.0f32, 0.0f32] // rotation, mode (0.0 = RealTime by default)
-            } else if button_type == ButtonType::MagicMode {
-                [0.0f32, 0.0f32] // rotation, mode (0.0 = off by default)
             } else {
                 [0.0f32, 0.0f32] // rotation, unused mode field
             };
@@ -144,10 +143,8 @@ impl Button {
             });
 
             // Create bind group layout with correct visibility for this button type
-            let bind_group_visibility = if button_type == ButtonType::ModeToggle
-                || button_type == ButtonType::MagicMode
-            {
-                // ModeToggle and MagicMode fragment shaders need access to the mode uniform
+            let bind_group_visibility = if button_type == ButtonType::ModeToggle {
+                // ModeToggle fragment shader needs access to the mode uniform
                 wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT
             } else {
                 // Close only needs vertex access
@@ -187,13 +184,10 @@ impl Button {
         // Create appropriate pipeline layout based on button type
         let pipeline_layout = if button_type == ButtonType::Close
             || button_type == ButtonType::ModeToggle
-            || button_type == ButtonType::MagicMode
         {
             // For shader-based buttons - use the same visibility logic as the bind group
-            let pipeline_visibility = if button_type == ButtonType::ModeToggle
-                || button_type == ButtonType::MagicMode
-            {
-                // ModeToggle and MagicMode fragment shaders need access to the mode uniform
+            let pipeline_visibility = if button_type == ButtonType::ModeToggle {
+                // ModeToggle fragment shader needs access to the mode uniform
                 wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT
             } else {
                 // Close only needs vertex access
@@ -272,7 +266,7 @@ impl Button {
                     ButtonType::RecordToggle => Some("vs_copy"),
                     ButtonType::Accept => Some("vs_copy"), // Use texture-based rendering
                     ButtonType::ModeToggle => Some("vs_close"), // Use close vertex shader
-                    ButtonType::MagicMode => Some("vs_close"), // Use close vertex shader (rotation support)
+                    ButtonType::MagicMode => Some("vs_copy"),  // Use texture-based rendering
                 },
                 buffers: &[wgpu::VertexBufferLayout {
                     array_stride: 8,
@@ -291,7 +285,7 @@ impl Button {
                     ButtonType::RecordToggle => Some("fs_copy"),
                     ButtonType::Accept => Some("fs_copy"), // Use texture-based rendering
                     ButtonType::ModeToggle => Some("fs_mode_toggle"), // Custom shader for R/M text
-                    ButtonType::MagicMode => Some("fs_magic_mode"), // Custom shader for star shape
+                    ButtonType::MagicMode => Some("fs_copy"), // Use texture-based rendering
                 },
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
@@ -436,10 +430,8 @@ impl Button {
     // Update rotation buffer with current rotation and mode values
     fn update_rotation_buffer(&self, queue: &wgpu::Queue, mode: Option<f32>) {
         if let Some(buffer) = &self.rotation_buffer {
-            let data = if self.button_type == ButtonType::ModeToggle
-                || self.button_type == ButtonType::MagicMode
-            {
-                [self.rotation, mode.unwrap_or(0.0)] // Include mode for ModeToggle/MagicMode
+            let data = if self.button_type == ButtonType::ModeToggle {
+                [self.rotation, mode.unwrap_or(0.0)] // Include mode for ModeToggle
             } else {
                 [self.rotation, 0.0] // Only rotation for other buttons
             };
@@ -457,7 +449,6 @@ impl Button {
         // Update rotation buffer if needed
         if self.button_type == ButtonType::Close
             || self.button_type == ButtonType::ModeToggle
-            || self.button_type == ButtonType::MagicMode
         {
             let mode_value = if self.button_type == ButtonType::ModeToggle {
                 transcription_mode.map(|mode| match mode {
@@ -465,7 +456,6 @@ impl Button {
                     crate::real_time_transcriber::TranscriptionMode::Manual => 1.0,
                 })
             } else {
-                // For MagicMode, mode_value will be set by the caller
                 None
             };
             self.update_rotation_buffer(queue, mode_value);
@@ -509,7 +499,6 @@ impl Button {
         // Set the appropriate bind group
         if self.button_type == ButtonType::Close
             || self.button_type == ButtonType::ModeToggle
-            || self.button_type == ButtonType::MagicMode
         {
             // Set rotation uniform bind group for shader-based buttons
             if let Some(bind_group) = &self.rotation_bind_group {
@@ -698,6 +687,8 @@ impl ButtonManager {
             pause_texture: None,
             play_texture: None,
             accept_texture: None,
+            magic_wand_on_texture: None,
+            magic_wand_off_texture: None,
             device: device.clone(),
             queue: queue.clone(),
             config: format,
@@ -775,6 +766,8 @@ impl ButtonManager {
         pause_image_bytes: Option<&[u8]>,
         play_image_bytes: Option<&[u8]>,
         accept_image_bytes: Option<&[u8]>,
+        magic_wand_on_image_bytes: Option<&[u8]>,
+        magic_wand_off_image_bytes: Option<&[u8]>,
         format: wgpu::TextureFormat,
     ) {
         // Load all button textures using the helper function
@@ -796,6 +789,31 @@ impl ButtonManager {
 
         if let Some(image_bytes) = accept_image_bytes {
             self.load_single_texture(device, queue, image_bytes, "Accept Button Texture", ButtonType::Accept, format);
+        }
+
+        // Load magic wand textures
+        if let Some(image_bytes) = magic_wand_on_image_bytes {
+            if let Ok(texture) = ButtonTexture::from_bytes(device, queue, image_bytes, Some("Magic Wand On Texture"), format) {
+                self.magic_wand_on_texture = Some(texture);
+            }
+        }
+
+        if let Some(image_bytes) = magic_wand_off_image_bytes {
+            if let Ok(texture) = ButtonTexture::from_bytes(device, queue, image_bytes, Some("Magic Wand Off Texture"), format) {
+                self.magic_wand_off_texture = Some(texture);
+            }
+        }
+
+        // Assign initial texture based on enhancement_enabled state
+        if let Some(button) = self.buttons.get_mut(&ButtonType::MagicMode) {
+            let texture = if self.enhancement_enabled {
+                self.magic_wand_on_texture.clone()
+            } else {
+                self.magic_wand_off_texture.clone()
+            };
+            if let Some(tex) = texture {
+                button.texture = Some(tex);
+            }
         }
 
         // Manual mode buttons use play/pause textures:
@@ -1010,6 +1028,18 @@ impl ButtonManager {
                 self.update_record_toggle_button_texture();
             }
 
+            // Update magic wand texture based on enhancement state
+            if let Some(magic_button) = self.buttons.get_mut(&ButtonType::MagicMode) {
+                let texture = if self.enhancement_enabled {
+                    self.magic_wand_on_texture.clone()
+                } else {
+                    self.magic_wand_off_texture.clone()
+                };
+                if let Some(tex) = texture {
+                    magic_button.texture = Some(tex);
+                }
+            }
+
             // Update animations for all buttons
             self.update_animations();
 
@@ -1042,6 +1072,18 @@ impl ButtonManager {
             // Update button layout for the new mode
             self.update_button_layout_for_mode();
         }
+    }
+
+    pub fn set_enhancement_enabled(&mut self, enabled: bool) {
+        self.enhancement_enabled = enabled;
+    }
+
+    pub fn toggle_enhancement(&mut self) {
+        self.enhancement_enabled = !self.enhancement_enabled;
+    }
+
+    pub fn is_enhancement_enabled(&self) -> bool {
+        self.enhancement_enabled
     }
 
     fn update_button_layout_for_mode(&mut self) {
