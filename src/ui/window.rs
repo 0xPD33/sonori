@@ -76,7 +76,11 @@ pub struct WindowState {
     hover_animation_progress: f32, // 0.0 to 1.0
     is_hovering: bool,
     last_hover_update: std::time::Instant,
-    }
+    // Typewriter effect for transcription reveal
+    typewriter: super::typewriter::TypewriterEffect,
+    typewriter_enabled: bool,
+    last_processing_state: crate::ui::common::ProcessingState,
+}
 
 impl WindowState {
     pub fn new(
@@ -224,6 +228,8 @@ impl WindowState {
         let pause_icon = include_bytes!("../../assets/pause.png");
         let play_icon = include_bytes!("../../assets/play.png");
         let accept_icon = include_bytes!("../../assets/accept.png");
+        let magic_wand_on_icon = include_bytes!("../../assets/magic_wand_24_sparkles.png");
+        let magic_wand_off_icon = include_bytes!("../../assets/magic_wand_24_plain.png");
 
         // ModeToggle will use shader-based text rendering (R/M)
 
@@ -235,6 +241,8 @@ impl WindowState {
             Some(pause_icon),
             Some(play_icon),
             Some(accept_icon),
+            Some(magic_wand_on_icon),
+            Some(magic_wand_off_icon),
             config.format,
         );
 
@@ -351,6 +359,11 @@ impl WindowState {
             hover_animation_progress: 0.0,
             is_hovering: false,
             last_hover_update: std::time::Instant::now(),
+
+            // Typewriter effect
+            typewriter: super::typewriter::TypewriterEffect::new(),
+            typewriter_enabled: ui_config.typewriter_effect,
+            last_processing_state: crate::ui::common::ProcessingState::Idle,
         }
     }
 
@@ -616,6 +629,33 @@ impl WindowState {
             (false, crate::ui::common::ProcessingState::Idle)
         };
 
+        // Trigger typewriter effect when transcription completes (manual mode)
+        if self.typewriter_enabled && transcription_mode == crate::real_time_transcriber::TranscriptionMode::Manual {
+            // Detect transition from Transcribing to Idle with text
+            let state_transition = self.last_processing_state == crate::ui::common::ProcessingState::Transcribing
+                && processing_state == crate::ui::common::ProcessingState::Idle
+                && !display_text.is_empty();
+
+            // Also detect when text content changes while idle (e.g., enhancement result)
+            let text_changed = processing_state == crate::ui::common::ProcessingState::Idle
+                && !display_text.is_empty()
+                && display_text != self.typewriter.get_visible_text()
+                && !self.typewriter.is_active();
+
+            if state_transition || text_changed {
+                self.typewriter.start(display_text.clone());
+            }
+
+            self.last_processing_state = processing_state;
+        }
+
+        // Get the text to display (may be typewriter-animated)
+        let render_text = if self.typewriter.is_active() {
+            self.typewriter.update().to_string()
+        } else {
+            display_text.clone()
+        };
+
         // Choose text color based on speaking state
         let text_color = if should_show_animation {
             self.loading_animation.get_processing_color(processing_state)
@@ -677,7 +717,7 @@ impl WindowState {
             self.text_window.render(
                 &mut encoder,
                 &view,
-                &display_text,
+                &render_text,
                 text_area_width,
                 text_area_height,
                 self.gap,

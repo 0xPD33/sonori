@@ -17,6 +17,7 @@ pub mod text_processor;
 pub mod text_renderer;
 pub mod text_window;
 pub mod timer_badge;
+pub mod typewriter;
 pub mod viewport;
 pub mod window;
 

@@ -421,6 +421,9 @@ pub struct UiConfig {
 
     /// Whether to show the pulsing recording indicator
     pub show_recording_indicator: bool,
+
+    /// Whether to enable typewriter effect when transcription completes (manual mode)
+    pub typewriter_effect: bool,
 }
 
 impl Default for UiConfig {
@@ -431,6 +434,7 @@ impl Default for UiConfig {
             idle_color: [1.0, 0.85, 0.15, 1.0],              // Gold
             recording_indicator_color: [0.9, 0.2, 0.2, 1.0], // Red
             show_recording_indicator: true,
+            typewriter_effect: true,
         }
     }
 }

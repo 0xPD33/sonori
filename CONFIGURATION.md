@@ -334,6 +334,9 @@ These parameters fine-tune the VAD behavior (defaults work well for most users):
 #### Window Behavior
 - `show_in_system_tray`: Show application icon in system tray (default: true)
 
+#### UI Configuration
+- `typewriter_effect`: Animate text reveal character-by-character when transcription completes in manual mode (default: true)
+
 ### Enhancement Configuration (Magic Mode)
 
 The enhancement feature ("Magic Mode") post-processes transcriptions through a local LLM to clean up grammar, remove filler words (um, uh, like), and transform raw speech into clear, well-structured text.
