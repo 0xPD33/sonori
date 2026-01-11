@@ -122,7 +122,7 @@ window_position = "BottomCenter"       # BottomCenter, TopCenter, MiddleCenter, 
 show_in_system_tray = true
 
 [ui]
-typewriter_effect = true                 # Animate text reveal in manual mode
+typewriter_effect = false                # Animate text reveal in manual mode
 
 # =============================================================================
 # DEBUGGING

@@ -335,7 +335,7 @@ These parameters fine-tune the VAD behavior (defaults work well for most users):
 - `show_in_system_tray`: Show application icon in system tray (default: true)
 
 #### UI Configuration
-- `typewriter_effect`: Animate text reveal character-by-character when transcription completes in manual mode (default: true)
+- `typewriter_effect`: Animate text reveal character-by-character when transcription completes in manual mode (default: false)
 
 ### Enhancement Configuration (Magic Mode)
 
