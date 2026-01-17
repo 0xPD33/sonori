@@ -287,9 +287,9 @@ impl EventHandler {
                         // UI thread continues immediately - transcription system handles mode switch
                     }
                     ButtonType::MagicMode => {
-                        // Toggle magic mode (LFM enhancement)
-                        button_manager.toggle_enhancement();
-                        let new_state = button_manager.is_enhancement_enabled();
+                        // Toggle magic mode active state (LFM enhancement)
+                        button_manager.toggle_magic_mode();
+                        let new_state = button_manager.is_magic_mode_active();
                         if let Some(magic_mode) = &self.magic_mode_enabled {
                             magic_mode.store(new_state, Ordering::Relaxed);
                         }

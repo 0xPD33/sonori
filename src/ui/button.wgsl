@@ -17,6 +17,12 @@ struct RotationUniform {
 @group(0) @binding(0) var t_diffuse: texture_2d<f32>;
 @group(0) @binding(1) var s_diffuse: sampler;
 
+// Opacity uniform for single-texture buttons with state-based opacity
+struct OpacityUniform {
+    opacity: f32,
+}
+@group(0) @binding(2) var<uniform> opacity_data: OpacityUniform;
+
 // Vertex shader for copy button
 @vertex
 fn vs_copy(@location(0) position: vec2<f32>) -> VertexOutput {
@@ -78,6 +84,17 @@ fn fs_copy(in: VertexOutput) -> @location(0) vec4<f32> {
     var color = textureSample(t_diffuse, s_diffuse, in.tex_coords);
     // Make button semi-transparent (85% opacity)
     color.a *= 0.85;
+
+    return color;
+}
+
+// Fragment shader for texture buttons with dynamic opacity (e.g., MagicMode)
+@fragment
+fn fs_texture_opacity(in: VertexOutput) -> @location(0) vec4<f32> {
+    // Sample the texture
+    var color = textureSample(t_diffuse, s_diffuse, in.tex_coords);
+    // Apply dynamic opacity from uniform
+    color.a *= opacity_data.opacity;
 
     return color;
 }

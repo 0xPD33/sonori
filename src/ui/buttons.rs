@@ -1,4 +1,3 @@
-use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -72,6 +71,10 @@ pub struct Button {
     rotation: f32,
     rotation_buffer: Option<wgpu::Buffer>,
     rotation_bind_group: Option<wgpu::BindGroup>,
+    // Opacity support for single-texture buttons with state-based opacity
+    opacity: f32,
+    opacity_buffer: Option<wgpu::Buffer>,
+    opacity_bind_group: Option<wgpu::BindGroup>,
 }
 
 pub struct ButtonManager {
@@ -81,15 +84,15 @@ pub struct ButtonManager {
     active_button: Option<ButtonType>,
     recording: Option<Arc<AtomicBool>>,
     transcription_mode: crate::real_time_transcriber::TranscriptionMode,
-    enhancement_enabled: bool,
+    enhancement_enabled: bool,  // Config: whether MagicMode feature is available (shows button)
+    magic_mode_active: bool,    // Runtime: whether MagicMode is currently toggled on (affects opacity)
     // Texture cache
     copy_texture: Option<ButtonTexture>,
     reset_texture: Option<ButtonTexture>,
     pause_texture: Option<ButtonTexture>,
     play_texture: Option<ButtonTexture>,
     accept_texture: Option<ButtonTexture>,
-    magic_wand_on_texture: Option<ButtonTexture>,
-    magic_wand_off_texture: Option<ButtonTexture>,
+    magic_wand_texture: Option<ButtonTexture>,  // Single texture with opacity control
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::TextureFormat,
@@ -125,6 +128,21 @@ impl Button {
             label: Some("Button Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("button.wgsl").into()),
         });
+
+        // Create opacity buffer and bind group for opacity-based texture buttons (MagicMode)
+        let (opacity_buffer, opacity_bind_group) = if button_type == ButtonType::MagicMode {
+            // Create opacity uniform buffer with default opacity
+            let opacity_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Opacity Uniform Buffer"),
+                contents: bytemuck::cast_slice(&[1.0f32]), // Default to full opacity
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+
+            // We'll create the bind group later when we have the texture in load_textures
+            (Some(opacity_buffer), None::<wgpu::BindGroup>)
+        } else {
+            (None, None)
+        };
 
         // Create rotation uniform buffer and bind group for shader-based buttons
         let (rotation_buffer, rotation_bind_group) = if button_type == ButtonType::Close
@@ -214,8 +232,48 @@ impl Button {
                 bind_group_layouts: &[&bind_group_layout],
                 push_constant_ranges: &[],
             })
+        } else if button_type == ButtonType::MagicMode {
+            // For MagicMode: texture + sampler + opacity uniform
+            let bind_group_layout =
+                device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    entries: &[
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 0,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Texture {
+                                multisampled: false,
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            },
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 1,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 2,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Uniform,
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                    ],
+                    label: Some("MagicMode Texture Opacity Bind Group Layout"),
+                });
+
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("MagicMode Pipeline Layout"),
+                bind_group_layouts: &[&bind_group_layout],
+                push_constant_ranges: &[],
+            })
         } else {
-            // For buttons that use textures
+            // For buttons that use textures only (no opacity)
             // Get the texture bind group layout for the shader
             let bind_group_layout = if let Some(tex) = &texture_for_button {
                 &tex.bind_group_layout
@@ -285,7 +343,7 @@ impl Button {
                     ButtonType::RecordToggle => Some("fs_copy"),
                     ButtonType::Accept => Some("fs_copy"), // Use texture-based rendering
                     ButtonType::ModeToggle => Some("fs_mode_toggle"), // Custom shader for R/M text
-                    ButtonType::MagicMode => Some("fs_copy"), // Use texture-based rendering
+                    ButtonType::MagicMode => Some("fs_texture_opacity"), // Texture with dynamic opacity
                 },
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
@@ -337,6 +395,9 @@ impl Button {
             rotation: 0.0,
             rotation_buffer,
             rotation_bind_group,
+            opacity: 1.0,
+            opacity_buffer,
+            opacity_bind_group,
         }
     }
 
@@ -439,6 +500,18 @@ impl Button {
         }
     }
 
+    // Update opacity buffer for opacity-based buttons
+    fn update_opacity_buffer(&self, queue: &wgpu::Queue) {
+        if let Some(buffer) = &self.opacity_buffer {
+            queue.write_buffer(buffer, 0, bytemuck::cast_slice(&[self.opacity]));
+        }
+    }
+
+    // Set opacity for this button
+    fn set_opacity(&mut self, opacity: f32) {
+        self.opacity = opacity;
+    }
+
     fn render(
         &self,
         view: &wgpu::TextureView,
@@ -459,6 +532,11 @@ impl Button {
                 None
             };
             self.update_rotation_buffer(queue, mode_value);
+        }
+
+        // Update opacity buffer for MagicMode
+        if self.button_type == ButtonType::MagicMode {
+            self.update_opacity_buffer(queue);
         }
 
         // Create a new render pass for this button
@@ -502,6 +580,11 @@ impl Button {
         {
             // Set rotation uniform bind group for shader-based buttons
             if let Some(bind_group) = &self.rotation_bind_group {
+                render_pass.set_bind_group(0, bind_group, &[]);
+            }
+        } else if self.button_type == ButtonType::MagicMode {
+            // Set opacity bind group for MagicMode (texture + sampler + opacity)
+            if let Some(bind_group) = &self.opacity_bind_group {
                 render_pass.set_bind_group(0, bind_group, &[]);
             }
         } else if let Some(texture) = &self.texture {
@@ -682,13 +765,13 @@ impl ButtonManager {
             recording: None,
             transcription_mode,
             enhancement_enabled,
+            magic_mode_active: false,  // Start inactive, can be toggled by user
             copy_texture: None,
             reset_texture: None,
             pause_texture: None,
             play_texture: None,
             accept_texture: None,
-            magic_wand_on_texture: None,
-            magic_wand_off_texture: None,
+            magic_wand_texture: None,
             device: device.clone(),
             queue: queue.clone(),
             config: format,
@@ -766,8 +849,7 @@ impl ButtonManager {
         pause_image_bytes: Option<&[u8]>,
         play_image_bytes: Option<&[u8]>,
         accept_image_bytes: Option<&[u8]>,
-        magic_wand_on_image_bytes: Option<&[u8]>,
-        magic_wand_off_image_bytes: Option<&[u8]>,
+        magic_wand_image_bytes: Option<&[u8]>,
         format: wgpu::TextureFormat,
     ) {
         // Load all button textures using the helper function
@@ -791,28 +873,75 @@ impl ButtonManager {
             self.load_single_texture(device, queue, image_bytes, "Accept Button Texture", ButtonType::Accept, format);
         }
 
-        // Load magic wand textures
-        if let Some(image_bytes) = magic_wand_on_image_bytes {
-            if let Ok(texture) = ButtonTexture::from_bytes(device, queue, image_bytes, Some("Magic Wand On Texture"), format) {
-                self.magic_wand_on_texture = Some(texture);
-            }
-        }
+        // Load magic wand texture (single texture with opacity control)
+        if let Some(image_bytes) = magic_wand_image_bytes {
+            if let Ok(texture) = ButtonTexture::from_bytes(device, queue, image_bytes, Some("Magic Wand Texture"), format) {
+                self.magic_wand_texture = Some(texture.clone());
 
-        if let Some(image_bytes) = magic_wand_off_image_bytes {
-            if let Ok(texture) = ButtonTexture::from_bytes(device, queue, image_bytes, Some("Magic Wand Off Texture"), format) {
-                self.magic_wand_off_texture = Some(texture);
-            }
-        }
+                // Create the opacity bind group for the MagicMode button
+                if let Some(button) = self.buttons.get_mut(&ButtonType::MagicMode) {
+                    if let Some(opacity_buffer) = &button.opacity_buffer {
+                        // Create bind group layout for texture + sampler + opacity
+                        let bind_group_layout =
+                            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                                entries: &[
+                                    wgpu::BindGroupLayoutEntry {
+                                        binding: 0,
+                                        visibility: wgpu::ShaderStages::FRAGMENT,
+                                        ty: wgpu::BindingType::Texture {
+                                            multisampled: false,
+                                            view_dimension: wgpu::TextureViewDimension::D2,
+                                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                                        },
+                                        count: None,
+                                    },
+                                    wgpu::BindGroupLayoutEntry {
+                                        binding: 1,
+                                        visibility: wgpu::ShaderStages::FRAGMENT,
+                                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                                        count: None,
+                                    },
+                                    wgpu::BindGroupLayoutEntry {
+                                        binding: 2,
+                                        visibility: wgpu::ShaderStages::FRAGMENT,
+                                        ty: wgpu::BindingType::Buffer {
+                                            ty: wgpu::BufferBindingType::Uniform,
+                                            has_dynamic_offset: false,
+                                            min_binding_size: None,
+                                        },
+                                        count: None,
+                                    },
+                                ],
+                                label: Some("MagicMode Opacity Bind Group Layout"),
+                            });
 
-        // Assign initial texture based on enhancement_enabled state
-        if let Some(button) = self.buttons.get_mut(&ButtonType::MagicMode) {
-            let texture = if self.enhancement_enabled {
-                self.magic_wand_on_texture.clone()
-            } else {
-                self.magic_wand_off_texture.clone()
-            };
-            if let Some(tex) = texture {
-                button.texture = Some(tex);
+                        // Create the bind group with texture, sampler, and opacity
+                        let opacity_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            layout: &bind_group_layout,
+                            entries: &[
+                                wgpu::BindGroupEntry {
+                                    binding: 0,
+                                    resource: wgpu::BindingResource::TextureView(&texture.view),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 1,
+                                    resource: wgpu::BindingResource::Sampler(&texture.sampler),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 2,
+                                    resource: opacity_buffer.as_entire_binding(),
+                                },
+                            ],
+                            label: Some("MagicMode Opacity Bind Group"),
+                        });
+
+                        button.opacity_bind_group = Some(opacity_bind_group);
+                        button.texture = Some(texture);
+
+                        // Set initial opacity based on magic mode active state
+                        button.opacity = if self.magic_mode_active { 0.85 } else { 0.4 };
+                    }
+                }
             }
         }
 
@@ -1028,16 +1157,9 @@ impl ButtonManager {
                 self.update_record_toggle_button_texture();
             }
 
-            // Update magic wand texture based on enhancement state
+            // Update magic wand opacity based on magic mode active state
             if let Some(magic_button) = self.buttons.get_mut(&ButtonType::MagicMode) {
-                let texture = if self.enhancement_enabled {
-                    self.magic_wand_on_texture.clone()
-                } else {
-                    self.magic_wand_off_texture.clone()
-                };
-                if let Some(tex) = texture {
-                    magic_button.texture = Some(tex);
-                }
+                magic_button.set_opacity(if self.magic_mode_active { 0.85 } else { 0.4 });
             }
 
             // Update animations for all buttons
@@ -1074,14 +1196,27 @@ impl ButtonManager {
         }
     }
 
+    /// Set whether magic mode feature is enabled (config - controls button visibility)
     pub fn set_enhancement_enabled(&mut self, enabled: bool) {
         self.enhancement_enabled = enabled;
     }
 
-    pub fn toggle_enhancement(&mut self) {
-        self.enhancement_enabled = !self.enhancement_enabled;
+    /// Set whether magic mode is currently active (runtime toggle state - controls opacity)
+    pub fn set_magic_mode_active(&mut self, active: bool) {
+        self.magic_mode_active = active;
     }
 
+    /// Toggle magic mode active state
+    pub fn toggle_magic_mode(&mut self) {
+        self.magic_mode_active = !self.magic_mode_active;
+    }
+
+    /// Check if magic mode is currently active (toggled on)
+    pub fn is_magic_mode_active(&self) -> bool {
+        self.magic_mode_active
+    }
+
+    /// Check if magic mode feature is enabled (config)
     pub fn is_enhancement_enabled(&self) -> bool {
         self.enhancement_enabled
     }

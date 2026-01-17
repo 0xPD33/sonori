@@ -228,8 +228,7 @@ impl WindowState {
         let pause_icon = include_bytes!("../../assets/pause.png");
         let play_icon = include_bytes!("../../assets/play.png");
         let accept_icon = include_bytes!("../../assets/accept.png");
-        let magic_wand_on_icon = include_bytes!("../../assets/magic_wand_24_sparkles.png");
-        let magic_wand_off_icon = include_bytes!("../../assets/magic_wand_24_plain.png");
+        let magic_wand_icon = include_bytes!("../../assets/magic-wand.png");
 
         // ModeToggle will use shader-based text rendering (R/M)
 
@@ -241,8 +240,7 @@ impl WindowState {
             Some(pause_icon),
             Some(play_icon),
             Some(accept_icon),
-            Some(magic_wand_on_icon),
-            Some(magic_wand_off_icon),
+            Some(magic_wand_icon),
             config.format,
         );
 
