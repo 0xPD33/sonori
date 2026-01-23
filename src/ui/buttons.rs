@@ -586,6 +586,9 @@ impl Button {
             // Set opacity bind group for MagicMode (texture + sampler + opacity)
             if let Some(bind_group) = &self.opacity_bind_group {
                 render_pass.set_bind_group(0, bind_group, &[]);
+            } else {
+                // Skip rendering if bind group not set up (can happen after mode switch)
+                return;
             }
         } else if let Some(texture) = &self.texture {
             // Set texture bind group for other buttons
@@ -1185,6 +1188,13 @@ impl ButtonManager {
     pub fn set_transcription_mode(&mut self, mode: TranscriptionMode) {
         if self.transcription_mode != mode {
             let old_mode = self.transcription_mode;
+
+            // Reset magic_mode_active when leaving Manual mode to prevent stale state
+            if old_mode == TranscriptionMode::Manual && self.magic_mode_active {
+                self.magic_mode_active = false;
+                println!("ButtonManager: Reset magic_mode_active when leaving Manual mode");
+            }
+
             self.transcription_mode = mode;
             println!(
                 "ButtonManager: Switching from {:?} to {:?} mode",
@@ -1290,6 +1300,74 @@ impl ButtonManager {
                 if let Some(tex) = texture {
                     if let Some(button) = self.buttons.get_mut(&ButtonType::Pause) {
                         button.texture = Some(tex);
+                    }
+                }
+            }
+            ButtonType::MagicMode => {
+                // Assign magic wand texture and set up opacity bind group
+                if let Some(texture) = &self.magic_wand_texture {
+                    if let Some(button) = self.buttons.get_mut(&ButtonType::MagicMode) {
+                        if let Some(opacity_buffer) = &button.opacity_buffer {
+                            // Create bind group layout for texture + sampler + opacity
+                            let bind_group_layout =
+                                self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                                    entries: &[
+                                        wgpu::BindGroupLayoutEntry {
+                                            binding: 0,
+                                            visibility: wgpu::ShaderStages::FRAGMENT,
+                                            ty: wgpu::BindingType::Texture {
+                                                multisampled: false,
+                                                view_dimension: wgpu::TextureViewDimension::D2,
+                                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                                            },
+                                            count: None,
+                                        },
+                                        wgpu::BindGroupLayoutEntry {
+                                            binding: 1,
+                                            visibility: wgpu::ShaderStages::FRAGMENT,
+                                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                                            count: None,
+                                        },
+                                        wgpu::BindGroupLayoutEntry {
+                                            binding: 2,
+                                            visibility: wgpu::ShaderStages::FRAGMENT,
+                                            ty: wgpu::BindingType::Buffer {
+                                                ty: wgpu::BufferBindingType::Uniform,
+                                                has_dynamic_offset: false,
+                                                min_binding_size: None,
+                                            },
+                                            count: None,
+                                        },
+                                    ],
+                                    label: Some("MagicMode Opacity Bind Group Layout"),
+                                });
+
+                            // Create the bind group with texture, sampler, and opacity
+                            let opacity_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                                layout: &bind_group_layout,
+                                entries: &[
+                                    wgpu::BindGroupEntry {
+                                        binding: 0,
+                                        resource: wgpu::BindingResource::TextureView(&texture.view),
+                                    },
+                                    wgpu::BindGroupEntry {
+                                        binding: 1,
+                                        resource: wgpu::BindingResource::Sampler(&texture.sampler),
+                                    },
+                                    wgpu::BindGroupEntry {
+                                        binding: 2,
+                                        resource: opacity_buffer.as_entire_binding(),
+                                    },
+                                ],
+                                label: Some("MagicMode Opacity Bind Group"),
+                            });
+
+                            button.opacity_bind_group = Some(opacity_bind_group);
+                            button.texture = Some(texture.clone());
+
+                            // Set initial opacity based on magic mode active state (inactive after mode switch)
+                            button.opacity = 0.4; // Inactive state
+                        }
                     }
                 }
             }
