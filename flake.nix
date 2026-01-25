@@ -70,6 +70,7 @@
               libiconv
               openssl.dev
               alsa-lib
+              pipewire  # For ALSA-PipeWire plugin compatibility
               portaudio
               fftw
               curl
@@ -89,6 +90,7 @@
             # Environment variables
             RUST_SRC_PATH = "${toolchain}/lib/rustlib/src/rust/library";
             LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";  # For whisper-rs-sys bindgen
+            ALSA_PLUGIN_DIR = "${pkgs.pipewire}/lib/alsa-lib";  # For ALSA-PipeWire integration
 
             # OpenBLAS configuration for whisper.cpp acceleration
             BLAS_INCLUDE_DIRS = "${pkgs.openblas.dev}/include";
@@ -107,7 +109,8 @@
               libiconv
               openssl.dev
               vulkan-loader
-              openblas  # Add OpenBLAS to library path
+              openblas
+              pipewire  # For ALSA-PipeWire plugin compatibility
             ]);
             OPENSSL_STATIC = "0";
             OPENSSL_DIR = pkgs.openssl.dev;
@@ -181,6 +184,7 @@
               libiconv
               openssl.dev
               alsa-lib
+              pipewire  # For ALSA-PipeWire plugin compatibility
               portaudio
               fftw
               curl
@@ -220,8 +224,10 @@
                   pkgs.openblas
                   pkgs.onnxruntime  # Uses same protobuf as sentencepiece (unified via overlay)
                   pkgs.alsa-lib
+                  pkgs.pipewire  # For ALSA-PipeWire plugin compatibility
                   pkgs.portaudio
                 ]} \
+                --set ALSA_PLUGIN_DIR ${pkgs.pipewire}/lib/alsa-lib \
                 --prefix VK_DRIVER_FILES : /run/opengl-driver/share/vulkan/icd.d/nvidia_icd.x86_64.json:/run/opengl-driver/share/vulkan/icd.d/radeon_icd.x86_64.json:/run/opengl-driver/share/vulkan/icd.d/intel_icd.x86_64.json:/run/opengl-driver/share/vulkan/icd.d/intel_hasvk_icd.x86_64.json \
                 --prefix VK_ICD_FILENAMES : /run/opengl-driver/share/vulkan/icd.d/nvidia_icd.x86_64.json:/run/opengl-driver/share/vulkan/icd.d/radeon_icd.x86_64.json:/run/opengl-driver/share/vulkan/icd.d/intel_icd.x86_64.json:/run/opengl-driver/share/vulkan/icd.d/intel_hasvk_icd.x86_64.json
 
