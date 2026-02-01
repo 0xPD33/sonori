@@ -768,7 +768,7 @@ impl ButtonManager {
             recording: None,
             transcription_mode,
             enhancement_enabled,
-            magic_mode_active: false,  // Start inactive, can be toggled by user
+            magic_mode_active: false,
             copy_texture: None,
             reset_texture: None,
             pause_texture: None,
