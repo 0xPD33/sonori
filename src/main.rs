@@ -6,6 +6,7 @@ use std::sync::Arc;
 use sonori::config::{read_app_config_with_path, AppConfig};
 use sonori::copy;
 use sonori::download;
+use sonori::ipc::{self, IpcCommand};
 use sonori::portal_input;
 use sonori::real_time_transcriber::{RealTimeTranscriber, TranscriptionMode};
 use sonori::ui::common::ProcessingState;
@@ -18,7 +19,7 @@ mod global_shortcuts;
 
 use ashpd::register_host_app;
 use ashpd::AppID;
-use clap::{Parser, ValueEnum};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::sync::mpsc as std_mpsc;
 use std::thread;
 use std::time::Duration;
@@ -29,11 +30,35 @@ enum TranscriptionModeArg {
     Manual,
 }
 
+/// IPC subcommands for controlling a running Sonori instance
+#[derive(Subcommand, Debug)]
+enum Command {
+    /// Toggle recording (start if stopped, stop if recording)
+    Toggle,
+    /// Start a recording session
+    Start,
+    /// Stop the current recording session
+    Stop,
+    /// Cancel the current session without processing
+    Cancel,
+    /// Get current status as JSON
+    Status,
+    /// Switch transcription mode
+    SwitchMode {
+        /// Mode to switch to: "manual" or "realtime"
+        mode: String,
+    },
+}
+
 #[derive(Parser)]
 #[command(name = "sonori")]
 #[command(about = "Real-time speech transcription with Whisper")]
 #[command(version)]
 struct Args {
+    /// Subcommand to control a running Sonori instance
+    #[command(subcommand)]
+    command: Option<Command>,
+
     /// Run in CLI mode (no GUI)
     #[arg(
         long,
@@ -53,6 +78,11 @@ struct Args {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+
+    // Handle IPC subcommands (control running instance)
+    if let Some(cmd) = args.command {
+        return handle_ipc_command(cmd).await;
+    }
 
     println!("Loading configuration...");
     let (mut app_config, config_path) = read_app_config_with_path();
@@ -594,6 +624,21 @@ async fn run_gui_mode(
         });
     }
 
+    // IPC server: enable external control via CLI (for niri/sway keybindings)
+    {
+        let ipc_server = ipc::IpcServer::new(
+            manual_session_sender.clone(),
+            transcription_mode_ref.clone(),
+            recording.clone(),
+            running.clone(),
+        );
+        tokio::spawn(async move {
+            if let Err(e) = ipc_server.run().await {
+                eprintln!("IPC server error: {}", e);
+            }
+        });
+    }
+
     // Run the UI with AtomicBool values directly and pass the configuration
     ui::run_with_audio_data(
         audio_visualization_data,
@@ -608,4 +653,38 @@ async fn run_gui_mode(
     );
 
     Ok(())
+}
+
+/// Handle IPC subcommands by sending them to the running Sonori instance
+async fn handle_ipc_command(cmd: Command) -> anyhow::Result<()> {
+    let ipc_cmd = match cmd {
+        Command::Toggle => IpcCommand::Toggle,
+        Command::Start => IpcCommand::Start,
+        Command::Stop => IpcCommand::Stop,
+        Command::Cancel => IpcCommand::Cancel,
+        Command::Status => IpcCommand::Status,
+        Command::SwitchMode { mode } => IpcCommand::SwitchMode { mode },
+    };
+
+    match ipc::send_command(ipc_cmd).await {
+        Ok(response) => {
+            if let Some(status) = response.status {
+                // Status command: print JSON
+                println!("{}", serde_json::to_string_pretty(&status)?);
+            } else if let Some(message) = response.message {
+                // Other commands: print message
+                if response.success {
+                    println!("{}", message);
+                } else {
+                    eprintln!("Error: {}", message);
+                    std::process::exit(1);
+                }
+            }
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    }
 }
