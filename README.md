@@ -59,7 +59,7 @@ Real-time or on-demand transcription, entirely on your device.
 
 **Platform:** Linux x86_64 only
 
-**Tested on:** NixOS with KDE Plasma/KWin (Wayland)
+**Tested on:** NixOS with KDE Plasma/KWin and niri (Wayland)
 
 ### Compositor (Wayland)
 
@@ -73,6 +73,7 @@ Real-time or on-demand transcription, entirely on your device.
 | Compositor | Status |
 |------------|--------|
 | KDE Plasma (KWin) | ✅ Full support |
+| niri | ✅ Full support (use IPC for keybindings) |
 | Hyprland | ✅ Should work |
 | Sway | ✅ Should work |
 | GNOME (Mutter) | ❌ No layer shell (use CLI mode) |
@@ -250,6 +251,26 @@ sonori --cli
 | `--manual` | Shorthand for `--mode manual` |
 | `--help` | Show help information |
 | `--version` | Display version |
+
+### IPC Commands (External Control)
+
+Control a running Sonori instance via CLI subcommands. Useful for compositor keybindings on niri, sway, etc. where XDG GlobalShortcuts portal isn't available.
+
+```bash
+sonori toggle      # Toggle recording on/off
+sonori start       # Start recording session
+sonori stop        # Stop recording session
+sonori cancel      # Cancel session without processing
+sonori status      # Get current status (JSON)
+sonori switch-mode manual|realtime
+```
+
+**Example niri keybinding** (`~/.config/niri/config.kdl`):
+```kdl
+binds {
+    Mod+backslash { spawn "sonori" "toggle"; }
+}
+```
 
 ## Configuration
 
