@@ -367,7 +367,8 @@ fn create_window(
             .with_anchor(anchor)
             .with_layer(Layer::Overlay)
             .with_margin(MARGIN as i32, MARGIN as i32, MARGIN as i32, MARGIN as i32)
-            .with_output(monitor.native_id())
+            // FIXME: Specifying output causes crashes on niri - let compositor choose
+            // .with_output(monitor.native_id())
             .with_keyboard_interactivity(keyboard_mode);
 
         w = w.with_platform_attributes(Box::new(wayland_attrs))

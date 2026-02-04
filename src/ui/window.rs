@@ -437,7 +437,31 @@ impl WindowState {
             // Fade out when not hovering
             self.hover_animation_progress = (self.hover_animation_progress - delta_time * animation_speed).max(0.0);
         }
-        let output = self.surface.get_current_texture().unwrap();
+        let output = match self.surface.get_current_texture() {
+            Ok(output) => output,
+            Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
+                // Reconfigure the surface if it's outdated or lost
+                self.surface.configure(&self.device, &self.config);
+                match self.surface.get_current_texture() {
+                    Ok(output) => output,
+                    Err(e) => {
+                        eprintln!("Failed to get surface texture after reconfigure: {:?}", e);
+                        return;
+                    }
+                }
+            }
+            Err(wgpu::SurfaceError::Timeout) => {
+                eprintln!("Surface texture acquisition timed out");
+                return;
+            }
+            Err(wgpu::SurfaceError::OutOfMemory) => {
+                panic!("GPU out of memory");
+            }
+            Err(e) => {
+                eprintln!("Surface error: {:?}", e);
+                return;
+            }
+        };
         let view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
