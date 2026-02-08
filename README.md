@@ -39,7 +39,7 @@ Real-time or on-demand transcription, entirely on your device.
 ### Optional Features
 - **GPU Acceleration** - Vulkan-based acceleration (Whisper.cpp backend only)
 - **Global Shortcuts** - System-wide hotkeys via XDG Desktop Portal (e.g., Super+\ to toggle recording)
-- **Auto-Paste** - Automatic text injection via XDG Desktop Portal RemoteDesktop
+- **Auto-Paste** - Automatic text injection via XDG Desktop Portal, with wtype/dotool fallback for compositors without portal support
 - **Sound Feedback** - Audio cues for recording state changes
 - **Magic Mode** - Post-process transcriptions through a local LLM to clean up grammar, remove filler words, and improve readability
 
@@ -67,7 +67,7 @@ Real-time or on-demand transcription, entirely on your device.
 |----------|----------|---------|
 | `zwlr_layer_shell_v1` | **Yes** | Transparent overlay rendering |
 | XDG Portal: GlobalShortcuts | No | System-wide hotkeys |
-| XDG Portal: RemoteDesktop | No | Auto-paste via keyboard injection |
+| XDG Portal: RemoteDesktop | No | Auto-paste via portal (fallback: wtype/dotool) |
 
 **Compositor Compatibility:**
 | Compositor | Status |
@@ -311,9 +311,10 @@ Required for UI rendering and optional GPU-accelerated transcription.
 - Check portal is running: `systemctl --user status xdg-desktop-portal`
 
 **Auto-Paste** (`portal_input_enabled`):
-- Uses RemoteDesktop portal for keyboard injection
-- Some compositors require screencast permission as fallback
-- Falls back to clipboard-only if declined
+- Uses XDG RemoteDesktop portal for keyboard injection (KDE Plasma)
+- Falls back to `wtype` when portal is unavailable (sway, Hyprland, niri, river, labwc, COSMIC)
+- Falls back to `dotool` if wtype also fails (works on all compositors via uinput — requires `input` group membership)
+- Copies text to clipboard via `wl-copy`, then simulates the configured paste shortcut
 
 ### Model Issues
 
