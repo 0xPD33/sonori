@@ -81,6 +81,7 @@
               shaderc  # Provides glslc shader compiler for Vulkan
               rust-analyzer-unwrapped
               wtype
+              dotool
               vulkan-loader
               toolchain
             ];
@@ -192,6 +193,7 @@
               sentencepiece  # Overridden via overlay to use system protobuf
               abseil-cpp     # Required by sentencepiece with package provider
               wtype
+              dotool
               vulkan-loader
               vulkan-headers
               openblas
