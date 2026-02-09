@@ -215,6 +215,11 @@
             postInstall = ''
               # Wrap binary with required library paths and Vulkan environment
               wrapProgram $out/bin/sonori \
+                --prefix PATH : ${pkgs.lib.makeBinPath [
+                  pkgs.wl-clipboard
+                  pkgs.wtype
+                  pkgs.dotool
+                ]} \
                 --prefix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath [
                   pkgs.libxkbcommon
                   pkgs.wayland
