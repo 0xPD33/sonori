@@ -24,7 +24,7 @@ use super::window::MARGIN;
 use crate::config::AppConfig;
 
 pub fn run() {
-    let event_loop = EventLoop::new().unwrap();
+    let event_loop = EventLoop::new().expect("Failed to create event loop. Ensure a display server (Wayland/X11) is available.");
     let app_config = crate::config::AppConfig::default();
     let mut app = WindowApp {
         windows: HashMap::new(),
@@ -41,7 +41,7 @@ pub fn run() {
         tray_update_tx: None,
         tray_command_rx: None,
     };
-    event_loop.run_app(&mut app).unwrap();
+    event_loop.run_app(&mut app).expect("Event loop exited with error");
 }
 
 pub fn run_with_audio_data(
@@ -59,7 +59,7 @@ pub fn run_with_audio_data(
     tray_update_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::system_tray::TrayUpdate>>,
     tray_command_rx: Option<tokio::sync::mpsc::UnboundedReceiver<crate::system_tray::TrayCommand>>,
 ) {
-    let event_loop = EventLoop::new().unwrap();
+    let event_loop = EventLoop::new().expect("Failed to create event loop. Ensure a display server (Wayland/X11) is available.");
     let mut app = WindowApp {
         windows: HashMap::new(),
         audio_data: Some(audio_data),
@@ -74,7 +74,7 @@ pub fn run_with_audio_data(
         tray_command_rx,
     };
 
-    event_loop.run_app(&mut app).unwrap();
+    event_loop.run_app(&mut app).expect("Event loop exited with error");
 }
 
 pub struct WindowApp {
@@ -310,7 +310,7 @@ fn create_window(
     w: WindowAttributes,
     scale_factor: f64,
     monitor_mode: VideoMode,
-    monitor: MonitorHandle,
+    _monitor: MonitorHandle,
     running: Option<Arc<AtomicBool>>,
     recording: Option<Arc<AtomicBool>>,
     magic_mode_enabled: Option<Arc<AtomicBool>>,
@@ -387,7 +387,7 @@ fn create_window(
 
     WindowState::new(
         ev.create_window(w)
-            .unwrap(),
+            .expect("Failed to create application window"),
         running,
         recording,
         magic_mode_enabled,

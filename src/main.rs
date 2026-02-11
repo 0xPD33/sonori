@@ -1,6 +1,4 @@
-use std::io::Write;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 // Use library modules (the binary should not redeclare modules)
 use sonori::config::{read_app_config_with_path, AppConfig};
@@ -9,7 +7,6 @@ use sonori::download;
 use sonori::ipc::{self, IpcCommand};
 use sonori::portal_input;
 use sonori::real_time_transcriber::{RealTimeTranscriber, TranscriptionMode};
-use sonori::ui::common::ProcessingState;
 use sonori::sound_player::SoundPlayer;
 use sonori::system_tray;
 use sonori::ui;
@@ -236,7 +233,7 @@ async fn run_manual_cli(mut transcriber: RealTimeTranscriber) -> anyhow::Result<
     let mut transcript_rx = transcriber.get_transcript_rx();
     let running = transcriber.get_running();
     // Get transcription mode to determine configuration behavior
-    let transcription_mode = transcriber.get_transcription_mode();
+    let _transcription_mode = transcriber.get_transcription_mode();
 
     // Set up Ctrl+C handler
     let running_clone = running.clone();
@@ -443,9 +440,7 @@ async fn run_gui_mode(
             }
         }
 
-        // Just exit the process - the main thread will handle transcriber shutdown
-        println!("Shutdown signal processed, exiting process");
-        std::process::exit(0);
+        println!("Shutdown monitor detected shutdown, waiting for event loop to exit");
     });
 
     // Clipboard worker: forward transcript chunks to clipboard
@@ -669,6 +664,10 @@ async fn run_gui_mode(
         tray_update_tx,
         tray_command_rx,
     );
+
+    // UI has exited, perform cleanup
+    let mut transcriber = transcriber;
+    transcriber.shutdown().await?;
 
     Ok(())
 }

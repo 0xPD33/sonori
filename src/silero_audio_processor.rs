@@ -127,7 +127,7 @@ pub struct SileroVad {
     sample_buffer: Vec<f32>,
     frame_buffer: Array2<f32>,
     sample_rate_f64: f64,
-    segment_buffer: Vec<f32>,
+    _segment_buffer: Vec<f32>,
     frame_counter: usize,
     buffer_check_interval: usize,
     samples_since_trim: usize,
@@ -183,7 +183,7 @@ impl SileroVad {
             sample_buffer,
             frame_buffer,
             sample_rate_f64,
-            segment_buffer,
+            _segment_buffer: segment_buffer,
             frame_counter: 0,
             buffer_check_interval,
             samples_since_trim: 0,
@@ -244,10 +244,10 @@ impl SileroVad {
         let res = self.session.run(SessionInputs::ValueSlice::<3>(&inps))?;
 
         // Update internal state
-        self.state = res["stateN"].try_extract_array().unwrap().to_owned();
+        self.state = res["stateN"].try_extract_array()?.to_owned();
 
         // Extract and return the speech probability
-        let output_tensor = res["output"].try_extract_tensor::<f32>().unwrap();
+        let output_tensor = res["output"].try_extract_tensor::<f32>()?;
         Ok(output_tensor.1[0])
     }
 
@@ -322,7 +322,7 @@ impl SileroVad {
         }
 
         // Update time_offset BEFORE extracting segment so calculations are correct
-        let old_time_offset = self.time_offset;
+        let _old_time_offset = self.time_offset;
         self.time_offset = new_time_offset;
 
         if let Some(start_time) = self.speech_start_time {
@@ -480,7 +480,7 @@ impl SileroVad {
     fn extract_speech_segment(&mut self, start_time: f64, end_time: f64) -> Vec<f32> {
         // Precompute constants once
         let context_duration = 0.1; // 100ms pre-roll buffer (industry standard)
-        let context_samples = (context_duration * self.sample_rate_f64) as usize;
+        let _context_samples = (context_duration * self.sample_rate_f64) as usize;
 
         // Adjust times for the current buffer window - doing calculations only once
         // Use asymmetric padding: add context before speech (for onset detection),

@@ -98,7 +98,7 @@ impl AudioProcessor {
         let audio_processor = self.audio_processor.clone();
         let audio_visualization_data = self.audio_visualization_data.clone();
         let segment_tx = self.segment_tx.clone();
-        let config = self.config.clone();
+        let _config = self.config.clone();
         let buffer_size = self.buffer_size;
         let transcription_mode = self.transcription_mode.clone();
         let manual_audio_buffer = self.manual_audio_buffer.clone();
@@ -113,6 +113,7 @@ impl AudioProcessor {
         let mut audio_buffer = Vec::with_capacity(buffer_size);
         let preroll_max_samples = ((sample_rate * 150) / 1000).max(buffer_size);
         let mut preroll_buffer: VecDeque<f32> = VecDeque::with_capacity(preroll_max_samples);
+        let mut visualization_buffer = Vec::with_capacity(buffer_size);
 
         // Start audio processing task
         tokio::spawn(async move {
@@ -204,6 +205,7 @@ impl AudioProcessor {
                                     preroll_max_samples,
                                     sample_rate,
                                     &session_id_ref,
+                                    &mut visualization_buffer,
                                 )
                                 .await;
                             }
@@ -216,6 +218,7 @@ impl AudioProcessor {
                                     manual_buffer_max_size,
                                     &recording,
                                     sample_rate,
+                                    &mut visualization_buffer,
                                 )
                                 .await;
 
@@ -259,6 +262,7 @@ impl AudioProcessor {
         preroll_max_samples: usize,
         sample_rate: usize,
         session_id_ref: &Arc<RwLock<Option<String>>>,
+        visualization_buffer: &mut Vec<f32>,
     ) {
         let (segments_result, vad_speaking) = {
             let mut processor = audio_processor.lock();
@@ -267,15 +271,17 @@ impl AudioProcessor {
             (result, speaking)
         };
 
-        let new_samples: Vec<f32> = audio_buffer.iter().take(buffer_size).copied().collect();
         let was_speaking = *latest_is_speaking;
 
         let mut reset_history = false;
         {
             let mut audio_data = audio_visualization_data.write();
 
-            if audio_data.samples != new_samples {
-                audio_data.samples = new_samples;
+            visualization_buffer.clear();
+            visualization_buffer.extend_from_slice(&audio_buffer[..buffer_size.min(audio_buffer.len())]);
+            if audio_data.samples != *visualization_buffer {
+                audio_data.samples.clear();
+                audio_data.samples.extend_from_slice(visualization_buffer);
             }
 
             match &segments_result {
@@ -366,12 +372,15 @@ impl AudioProcessor {
         manual_buffer_max_size: usize,
         recording: &Arc<AtomicBool>,
         sample_rate: usize,
+        visualization_buffer: &mut Vec<f32>,
     ) -> bool {
         // Update visualization data
         if let Some(mut audio_data) = audio_visualization_data.try_write() {
-            let new_samples: Vec<f32> = audio_buffer.iter().take(buffer_size).copied().collect();
-            if audio_data.samples != new_samples {
-                audio_data.samples = new_samples;
+            visualization_buffer.clear();
+            visualization_buffer.extend_from_slice(&audio_buffer[..buffer_size.min(audio_buffer.len())]);
+            if audio_data.samples != *visualization_buffer {
+                audio_data.samples.clear();
+                audio_data.samples.extend_from_slice(visualization_buffer);
             }
             // In manual mode, show recording indicator
             audio_data.is_speaking = true;

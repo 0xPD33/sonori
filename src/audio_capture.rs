@@ -71,8 +71,10 @@ impl AudioCapture {
     ) -> Result<(), anyhow::Error> {
         self.initialize_audio()?;
 
-        let pa = self.pa.as_ref().unwrap();
-        let input_settings = self.input_settings.as_ref().unwrap().clone();
+        let pa = self.pa.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("PortAudio not initialized"))?;
+        let input_settings = self.input_settings.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Audio input settings not initialized"))?.clone();
 
         // Clone the recording Arc before moving it into the closure
         let recording_for_callback = recording.clone();
@@ -83,15 +85,24 @@ impl AudioCapture {
             // Only send samples when recording is active
             if recording_for_callback.load(Ordering::Relaxed) {
                 let samples = buffer.to_vec();
-                if let Err(e) = tx.blocking_send(samples) {
-                    eprintln!("Failed to send samples: {}", e);
-                    if let Some(mut stats) = stats_for_callback.try_lock() {
-                        let total = stats.record_audio_drop(1);
-                        eprintln!("Audio channel drop recorded (total: {})", total);
+                match tx.try_send(samples) {
+                    Ok(_) => {
+                        // Increment counter after successful send
+                        samples_sent_for_callback.fetch_add(1, Ordering::Release);
                     }
-                } else {
-                    // Increment counter after successful send
-                    samples_sent_for_callback.fetch_add(1, Ordering::Release);
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        if let Some(mut stats) = stats_for_callback.try_lock() {
+                            let total = stats.record_audio_drop(1);
+                            eprintln!("Audio channel full, dropped samples (total: {})", total);
+                        }
+                    }
+                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                        eprintln!("Failed to send samples: channel closed");
+                        if let Some(mut stats) = stats_for_callback.try_lock() {
+                            let total = stats.record_audio_drop(1);
+                            eprintln!("Audio channel drop recorded (total: {})", total);
+                        }
+                    }
                 }
             }
 

@@ -194,7 +194,7 @@ impl TranscriptionProcessor {
 
         let backend_lock = backend.lock();
 
-        if backend_lock.is_none() {
+        let Some(backend_ref) = backend_lock.as_ref() else {
             let total_duration = start_time.elapsed();
             if log_stats_enabled {
                 println!(
@@ -207,14 +207,12 @@ impl TranscriptionProcessor {
                 audio_data.set_processing_state(ProcessingState::Idle);
             }
             return "[backend not available]".to_string();
-        }
+        };
 
         // Apply initial prompt for whisper.cpp backend (if provided)
         if let Some(prompt) = initial_prompt {
             app_config.whisper_cpp_options.initial_prompt = Some(prompt.to_string());
         }
-
-        let backend_ref = backend_lock.as_ref().unwrap();
         let inference_start = Instant::now();
 
         let result = match backend_ref {

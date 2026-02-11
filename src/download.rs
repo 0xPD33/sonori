@@ -155,7 +155,8 @@ fn convert_model(model_name: &str, output_dir: &Path) -> Result<()> {
     let conversion_script = format!(
         "ct2-transformers-converter --force --model {} --output_dir {} --copy_files preprocessor_config.json tokenizer.json",
         model_name,
-        output_dir.to_str().unwrap()
+        output_dir.to_str()
+            .ok_or_else(|| anyhow::anyhow!("Model output path contains invalid UTF-8: {:?}", output_dir))?
     );
 
     let status = if on_nixos {
@@ -169,7 +170,8 @@ fn convert_model(model_name: &str, output_dir: &Path) -> Result<()> {
         if model_conversion_shell_nix.exists() {
             println!("Found shell.nix at {:?}", model_conversion_shell_nix);
             Command::new("nix-shell")
-                .arg(model_conversion_shell_nix.to_str().unwrap())
+                .arg(model_conversion_shell_nix.to_str()
+                    .ok_or_else(|| anyhow::anyhow!("shell.nix path contains invalid UTF-8: {:?}", model_conversion_shell_nix))?)
                 .arg("--command")
                 .arg(&conversion_script)
                 .status()

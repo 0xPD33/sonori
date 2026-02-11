@@ -1,9 +1,7 @@
-use parking_lot::Mutex;
-use std::error::Error;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use wgpu::{self, util::DeviceExt};
+use wgpu::{self};
 use winit::{
     dpi::{PhysicalPosition, PhysicalSize},
     event::{ElementState, MouseButton, MouseScrollDelta},
@@ -74,7 +72,7 @@ pub struct WindowState {
     present_mode: wgpu::PresentMode,
     // Hover animation state
     hover_animation_progress: f32, // 0.0 to 1.0
-    is_hovering: bool,
+    _is_hovering: bool,
     last_hover_update: std::time::Instant,
     // Typewriter effect for transcription reveal
     typewriter: super::typewriter::TypewriterEffect,
@@ -111,23 +109,15 @@ impl WindowState {
             ..Default::default()
         });
 
-        let surface = match instance.create_surface(window.clone()) {
-            Ok(surface) => surface,
-            Err(e) => {
-                eprintln!("Failed to create surface: {:?}", e.source());
-                panic!("Surface creation failed");
-            }
-        };
+        let surface = instance.create_surface(window.clone())
+            .expect("Failed to create GPU surface. Ensure your display server and GPU drivers are working.");
 
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::default(),
             compatible_surface: Some(&surface),
             force_fallback_adapter: false,
         }))
-        .unwrap_or_else(|_| {
-            eprintln!("Failed to find a suitable GPU adapter");
-            panic!("No suitable GPU adapter found");
-        });
+        .expect("No suitable GPU adapter found. Ensure Vulkan drivers are installed.");
 
         let (device, queue) = pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
@@ -138,7 +128,7 @@ impl WindowState {
                 trace: wgpu::Trace::Off,
             },
         ))
-        .unwrap();
+        .expect("Failed to request GPU device. Ensure Vulkan drivers are installed and GPU is available.");
 
         // Use dynamic sizing values
         let fixed_width = window_width;
@@ -355,7 +345,7 @@ impl WindowState {
 
             // Hover animation state
             hover_animation_progress: 0.0,
-            is_hovering: false,
+            _is_hovering: false,
             last_hover_update: std::time::Instant::now(),
 
             // Typewriter effect
@@ -512,8 +502,8 @@ impl WindowState {
         }
 
         // Determine if scrollbar is needed and the actual width to use for text area
-        let mut need_scrollbar: bool = false;
-        let mut text_area_width: u32;
+        let need_scrollbar: bool;
+        let text_area_width: u32;
         let text_area_height = self.layout_manager.get_text_area_height();
 
         // Always ensure the spectrogram is initialized
@@ -549,8 +539,6 @@ impl WindowState {
                 }
                 is_speaking = false;
                 self.scroll_state.reset();
-                need_scrollbar = false;
-                text_area_width = self.layout_manager.calculate_text_area_width(false);
                 self.scrollbar.max_scroll_offset = 0.0;
                 self.scrollbar.scroll_offset = 0.0;
                 empty_samples.clone() // Use silence buffer for decay animation
