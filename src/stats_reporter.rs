@@ -1,4 +1,3 @@
-use anyhow::Result;
 use chrono;
 use parking_lot::Mutex;
 use std::fs::{File, OpenOptions};

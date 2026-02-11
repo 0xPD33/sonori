@@ -25,7 +25,7 @@ pub enum TrayUpdate {
 
 /// StatusNotifierItem implementation
 struct StatusNotifierItem {
-    command_tx: mpsc::UnboundedSender<TrayCommand>,
+    _command_tx: mpsc::UnboundedSender<TrayCommand>,
     is_recording: Arc<AtomicBool>,
     transcription_mode: Arc<parking_lot::Mutex<TranscriptionMode>>,
 }
@@ -255,7 +255,7 @@ pub async fn run_system_tray(
 
     // Create our StatusNotifierItem
     let sni = StatusNotifierItem {
-        command_tx: command_tx.clone(),
+        _command_tx: command_tx.clone(),
         is_recording: is_recording.clone(),
         transcription_mode: transcription_mode.clone(),
     };

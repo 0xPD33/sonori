@@ -164,8 +164,8 @@ impl TextWindow {
         text_area_width: u32,
         text_area_height: u32,
         gap: u32,
-        text_x: f32,
-        text_y: f32,
+        _text_x: f32,
+        _text_y: f32,
         hover_bind_group: &wgpu::BindGroup,
     ) {
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -206,7 +206,7 @@ impl TextWindow {
         text: &str,
         text_area_width: u32,
         text_area_height: u32,
-        gap: u32,
+        _gap: u32,
         text_x: f32,
         text_y: f32,
         text_scale: f32,

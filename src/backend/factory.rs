@@ -4,7 +4,7 @@ use super::ctranslate2::CT2Backend;
 use super::traits::TranscriptionError;
 use super::whisper_cpp::WhisperCppBackend;
 use super::{BackendConfig, BackendType, TranscriptionBackend};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Create a transcription backend based on type and configuration
 ///

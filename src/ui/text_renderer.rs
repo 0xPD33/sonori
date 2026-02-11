@@ -19,8 +19,8 @@ pub struct TextRenderer {
     device: Arc<Device>,
     queue: Arc<Queue>,
     size: PhysicalSize<u32>,
-    surface_format: wgpu::TextureFormat,
-    cache_ref: Cache,
+    _surface_format: wgpu::TextureFormat,
+    _cache_ref: Cache,
     viewport: Viewport,
 }
 
@@ -71,8 +71,8 @@ impl TextRenderer {
             device,
             queue,
             size,
-            surface_format,
-            cache_ref,
+            _surface_format: surface_format,
+            _cache_ref: cache_ref,
             viewport,
         }
     }

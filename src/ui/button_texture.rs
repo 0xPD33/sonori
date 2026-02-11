@@ -50,7 +50,7 @@ impl ButtonTexture {
         queue: &Queue,
         img: &DynamicImage,
         label: Option<&str>,
-        format: TextureFormat,
+        _format: TextureFormat,
     ) -> Result<Self, String> {
         // Convert image to RGBA
         let rgba = img.to_rgba8();
@@ -159,7 +159,7 @@ impl ButtonTexture {
     pub fn create_default(
         device: &Device,
         queue: &Queue,
-        format: TextureFormat,
+        _format: TextureFormat,
     ) -> Result<Self, String> {
         // Create a simple 32x32 checkerboard pattern
         let size = 24;

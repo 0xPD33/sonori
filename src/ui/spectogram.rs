@@ -1,6 +1,6 @@
 use rustfft::{num_complex::Complex, FftPlanner};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Instant;
 use wgpu::{util::DeviceExt, Buffer, Device, Queue, RenderPipeline, TextureView};
 use winit::dpi::PhysicalSize;
 
@@ -55,7 +55,7 @@ pub struct Spectrogram {
     config: SpectrogramConfig,
 
     // WGPU resources
-    device: Arc<Device>,
+    _device: Arc<Device>,
     queue: Arc<Queue>,
     render_pipeline: RenderPipeline,
     vertex_buffer: Buffer,
@@ -71,10 +71,10 @@ pub struct Spectrogram {
     is_speaking: bool,
 
     // FFT resources
-    fft: Arc<dyn rustfft::Fft<f32>>,
-    fft_input: Vec<Complex<f32>>,
-    fft_output: Vec<Complex<f32>>,
-    window: Vec<f32>, // Hann window for better frequency resolution
+    _fft: Arc<dyn rustfft::Fft<f32>>,
+    _fft_input: Vec<Complex<f32>>,
+    _fft_output: Vec<Complex<f32>>,
+    _window: Vec<f32>, // Hann window for better frequency resolution
 
     // Performance optimization: cached values
     bar_instance_template: Vec<BarInstanceTemplate>,
@@ -83,7 +83,7 @@ pub struct Spectrogram {
 /// Internal structure for pre-computing bar instance properties
 #[derive(Clone, Debug)]
 struct BarInstanceTemplate {
-    position_factor: f32, // Position factor for edge tapering
+    _position_factor: f32, // Position factor for edge tapering
     edge_factor: f32,     // Pre-computed edge tapering factor
     norm_x: f32,          // Normalized x position
     norm_width: f32,      // Normalized width
@@ -262,9 +262,9 @@ impl Spectrogram {
             })
             .collect();
 
-        let mut spectrogram = Self {
+        let spectrogram = Self {
             config: SpectrogramConfig::default(),
-            device,
+            _device: device,
             queue,
             render_pipeline,
             vertex_buffer,
@@ -274,10 +274,10 @@ impl Spectrogram {
             size,
             last_update: Instant::now(),
             is_speaking: false,
-            fft,
-            fft_input,
-            fft_output,
-            window,
+            _fft: fft,
+            _fft_input: fft_input,
+            _fft_output: fft_output,
+            _window: window,
             bar_instance_template,
         };
 
@@ -572,7 +572,7 @@ fn create_bar_instance_template(num_bars: usize, width: u32, config: &Spectrogra
             let norm_x = x / width as f32 * 2.0 - 1.0;
 
             BarInstanceTemplate {
-                position_factor,
+                _position_factor: position_factor,
                 edge_factor,
                 norm_x,
                 norm_width,

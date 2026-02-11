@@ -10,10 +10,10 @@ use crate::portal_tokens::PortalTokens;
 
 /// Manages an XDG Desktop Portal RemoteDesktop session to inject keystrokes
 pub struct PortalInput {
-    connection: zbus::Connection,
+    _connection: zbus::Connection,
     rd: RemoteDesktop<'static>,
     rd_session: Session<'static, RemoteDesktop<'static>>,
-    screencast_active: bool,
+    _screencast_active: bool,
 }
 
 impl PortalInput {
@@ -52,10 +52,10 @@ impl PortalInput {
         }
 
         Ok(Self {
-            connection,
+            _connection: connection,
             rd,
             rd_session,
-            screencast_active: start_screencast,
+            _screencast_active: start_screencast,
         })
     }
 

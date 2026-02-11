@@ -77,7 +77,7 @@ pub struct Tooltip {
     swash_cache: glyphon::SwashCache,
     text_atlas: glyphon::TextAtlas,
     text_renderer: glyphon::TextRenderer,
-    cache: glyphon::Cache,
+    _cache: glyphon::Cache,
     viewport: glyphon::Viewport,
 }
 
@@ -230,7 +230,7 @@ impl Tooltip {
             swash_cache,
             text_atlas,
             text_renderer,
-            cache,
+            _cache: cache,
             viewport,
         }
     }
@@ -466,7 +466,7 @@ impl Tooltip {
         let text_x = tooltip_x + TOOLTIP_PADDING_X;
         let text_y = tooltip_y + TOOLTIP_PADDING_Y;
 
-        use glyphon::{Attrs, Buffer, Color, Family, Metrics, Resolution, Shaping, TextArea, TextBounds};
+        use glyphon::{Attrs, Buffer, Color, Family, Metrics, Shaping, TextArea, TextBounds};
 
         let line_height = TOOLTIP_FONT_SIZE * TOOLTIP_LINE_HEIGHT_MULTIPLIER;
         let metrics = Metrics::new(TOOLTIP_FONT_SIZE, line_height);

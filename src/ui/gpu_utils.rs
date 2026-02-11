@@ -1,12 +1,11 @@
 use std::sync::Arc;
 use wgpu::{self, util::DeviceExt};
-use winit::dpi::PhysicalSize;
 
 /// Shared utility for GPU quad rendering to reduce code duplication
 pub struct GpuQuadRenderer {
-    device: Arc<wgpu::Device>,
+    _device: Arc<wgpu::Device>,
     vertex_buffer: wgpu::Buffer,
-    pipeline_layout: wgpu::PipelineLayout,
+    _pipeline_layout: wgpu::PipelineLayout,
     pipeline: wgpu::RenderPipeline,
 }
 
@@ -88,9 +87,9 @@ impl GpuQuadRenderer {
         });
 
         Self {
-            device: device.clone(),
+            _device: device.clone(),
             vertex_buffer,
-            pipeline_layout,
+            _pipeline_layout: pipeline_layout,
             pipeline,
         }
     }

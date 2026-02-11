@@ -4,7 +4,7 @@
 
 use super::traits::TranscriptionError;
 use super::{BackendCapabilities, BackendConfig, BackendType, QuantizationLevel};
-use ct2rs::{ComputeType, Config, Device, Whisper, WhisperOptions};
+use ct2rs::{ComputeType, Config, Device, Whisper};
 use std::path::Path;
 
 /// CTranslate2 backend wrapper

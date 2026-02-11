@@ -1,6 +1,5 @@
 use std::sync::Arc;
-use wgpu::{self, util::DeviceExt};
-use winit::dpi::PhysicalSize;
+use wgpu;
 
 use super::gpu_utils::GpuQuadRenderer;
 use super::common::ProcessingState;
@@ -16,6 +15,7 @@ pub struct LoadingAnimation {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
 enum AnimationState {
     /// Dots animation (for loading/transcribing)
     Dots,
@@ -115,7 +115,7 @@ impl LoadingAnimation {
             let actual_size = dot_size * scale;
 
             // Create a colored circle for the dot with translucency
-            let dot_color = [color[0], color[1], color[2], color[3] * opacity];
+            let _dot_color = [color[0], color[1], color[2], color[3] * opacity];
 
             self.renderer.render_quad(
                 encoder,
@@ -153,7 +153,7 @@ impl LoadingAnimation {
 
             // Calculate opacity based on position in the cycle
             let opacity = (angle.sin() + 1.0) / 2.0;
-            let segment_color = [color[0], color[1], color[2], color[3] * opacity];
+            let _segment_color = [color[0], color[1], color[2], color[3] * opacity];
 
             self.renderer.render_quad(
                 encoder,
@@ -182,7 +182,7 @@ impl LoadingAnimation {
         let check_size = size * 0.6;
 
         // Green color for success
-        let success_color = [0.2, 0.8, 0.2, color[3]];
+        let _success_color = [0.2, 0.8, 0.2, color[3]];
 
         // Simple checkmark made of two lines (rendered as rotated quads)
         // Vertical line
@@ -224,7 +224,7 @@ impl LoadingAnimation {
         let x_size = size * 0.6;
 
         // Red color for error
-        let error_color = [0.9, 0.2, 0.2, color[3]];
+        let _error_color = [0.9, 0.2, 0.2, color[3]];
 
         // Render X as two diagonal lines
         let line_width = x_size * 0.15;
@@ -262,7 +262,7 @@ impl LoadingAnimation {
         center_x: f32,
         center_y: f32,
         size: f32,
-        color: [f32; 4],
+        _color: [f32; 4],
         progress: f32,
     ) {
         // Single dot that gently pulses
@@ -290,7 +290,7 @@ impl LoadingAnimation {
         center_x: f32,
         center_y: f32,
         size: f32,
-        color: [f32; 4],
+        _color: [f32; 4],
     ) {
         // Two vertical bars (pause icon)
         let bar_width = size * 0.12;

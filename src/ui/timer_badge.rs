@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use wgpu::{self, Device, Queue, TextureView};
+use wgpu::{self, Device};
 
 /// Timer badge overlay component for showing recording duration
 pub struct TimerBadge {
@@ -18,7 +18,7 @@ pub struct TimerBadge {
     swash_cache: glyphon::SwashCache,
     text_atlas: glyphon::TextAtlas,
     text_renderer: glyphon::TextRenderer,
-    cache: glyphon::Cache,
+    _cache: glyphon::Cache,
     viewport: glyphon::Viewport,
     device: Arc<Device>,
 }
@@ -31,7 +31,7 @@ impl TimerBadge {
         format: wgpu::TextureFormat,
         ui_config: &crate::config::UiConfig,
     ) -> Self {
-        let mut font_system = glyphon::FontSystem::new();
+        let font_system = glyphon::FontSystem::new();
         let swash_cache = glyphon::SwashCache::new();
         let cache = glyphon::Cache::new(device);
         let viewport = glyphon::Viewport::new(device, &cache);
@@ -54,7 +54,7 @@ impl TimerBadge {
             swash_cache,
             text_atlas,
             text_renderer,
-            cache,
+            _cache: cache,
             viewport,
             device: Arc::clone(device),
         }

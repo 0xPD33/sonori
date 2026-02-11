@@ -184,7 +184,7 @@ impl EventHandler {
         scroll_offset: &mut f32,
         max_scroll_offset: &mut f32,
         running: &Option<Arc<AtomicBool>>,
-        event_loop: Option<&dyn ActiveEventLoop>,
+        _event_loop: Option<&dyn ActiveEventLoop>,
     ) -> bool {
         if self.hovering_transcript {
             if let Some(button_type) = button_manager.handle_pointer_event(button, state, position)

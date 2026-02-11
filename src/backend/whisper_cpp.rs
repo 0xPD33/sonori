@@ -14,7 +14,7 @@ use whisper_rs::{
 /// whisper.cpp backend wrapper
 pub struct WhisperCppBackend {
     /// The underlying whisper-rs context (holds loaded model)
-    context: WhisperContext,
+    _context: WhisperContext,
 
     /// Reusable state for transcription (eliminates per-call allocation overhead)
     state: Mutex<WhisperState>,
@@ -62,7 +62,7 @@ impl WhisperCppBackend {
         })?;
 
         Ok(Self {
-            context,
+            _context: context,
             state: Mutex::new(state),
             config: backend_config.clone(),
         })

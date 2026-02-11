@@ -193,7 +193,7 @@ pub struct RealTimeTranscriber {
     segment_tx: mpsc::Sender<AudioSegment>,
     segment_rx: Option<mpsc::Receiver<AudioSegment>>,
     transcription_done_tx: mpsc::UnboundedSender<()>,
-    transcription_done_rx: Option<mpsc::UnboundedReceiver<()>>,
+    _transcription_done_rx: Option<mpsc::UnboundedReceiver<()>>,
 
     // Statistics
     transcription_stats: Arc<Mutex<TranscriptionStats>>,
@@ -365,7 +365,7 @@ impl RealTimeTranscriber {
             segment_tx,
             segment_rx: Some(segment_rx),
             transcription_done_tx,
-            transcription_done_rx: Some(transcription_done_rx),
+            _transcription_done_rx: Some(transcription_done_rx),
             transcription_stats,
             stats_reporter: None,
             transcription_handle: None,

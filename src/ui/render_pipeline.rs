@@ -1,6 +1,4 @@
-use std::sync::Arc;
 use wgpu::{self, util::DeviceExt};
-use winit::dpi::PhysicalSize;
 
 pub struct RenderPipelines {
     pub rounded_rect_pipeline: wgpu::RenderPipeline,
@@ -137,7 +135,7 @@ impl RenderPipelines {
     }
 
     pub fn draw_background(&self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView) {
-        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Clear Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: view,

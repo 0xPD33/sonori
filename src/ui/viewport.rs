@@ -73,8 +73,8 @@ impl Viewport {
     /// Create a viewport for a scrollbar thumb with dynamic positioning
     pub fn for_scrollbar_thumb(
         window_width: u32,
-        text_area_height: u32,
-        gap: u32,
+        _text_area_height: u32,
+        _gap: u32,
         thumb_y: f32,
         thumb_height: f32,
     ) -> Self {

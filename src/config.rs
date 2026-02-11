@@ -1,8 +1,7 @@
-use crate::backend::{BackendConfig, BackendType};
+use crate::backend::BackendConfig;
 use crate::silero_audio_processor::VadConfig as SileroVadConfig;
 use ct2rs::WhisperOptions;
 use serde::{Deserialize, Serialize};
-use winit::keyboard::KeyCode;
 
 /// Audio sample rate in Hz - hardcoded to 16000 (required by Silero VAD)
 pub const SAMPLE_RATE: usize = 16000;

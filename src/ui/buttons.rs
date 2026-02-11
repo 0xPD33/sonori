@@ -80,7 +80,7 @@ pub struct Button {
 pub struct ButtonManager {
     buttons: std::collections::HashMap<ButtonType, Button>,
     text_area_height: u32,
-    gap: u32,
+    _gap: u32,
     active_button: Option<ButtonType>,
     recording: Option<Arc<AtomicBool>>,
     transcription_mode: crate::real_time_transcriber::TranscriptionMode,
@@ -613,7 +613,7 @@ impl ButtonManager {
         }
     }
 
-    /// Calculate button layout for a set of button types
+    #[allow(dead_code)]
     fn calculate_button_layout(&self, button_types: &[ButtonType]) -> Vec<(ButtonType, (u32, u32))> {
         let params = Self::calculate_layout_params(self.window_width);
         let bottom_buttons: Vec<_> = button_types
@@ -650,7 +650,7 @@ impl ButtonManager {
         layout
     }
 
-    /// Update all button positions based on current transcription mode
+    #[allow(dead_code)]
     fn update_all_button_positions(&mut self) {
         let button_types = Self::get_button_types(self.transcription_mode, self.enhancement_enabled);
 
@@ -763,7 +763,7 @@ impl ButtonManager {
         Self {
             buttons,
             text_area_height,
-            gap,
+            _gap: gap,
             active_button: None,
             recording: None,
             transcription_mode,
@@ -982,7 +982,7 @@ impl ButtonManager {
                 let button_x = start_x + (i as u32) * (button_size + button_spacing);
                 // Position buttons much closer to the bottom of the text area (95% of text area height)
                 let button_size = Self::calculate_button_size(self.window_width, false);
-            let button_spacing = Self::calculate_button_spacing(self.window_width);
+            let _button_spacing = Self::calculate_button_spacing(self.window_width);
             let button_margin = Self::calculate_button_margin(self.window_width);
             let button_y = (self.text_area_height as f32 * 0.95) as u32 - button_size - button_margin;
                 button.position = (button_x, button_y);
@@ -1060,7 +1060,7 @@ impl ButtonManager {
 
     pub fn handle_pointer_event(
         &mut self,
-        button: MouseButton,
+        _button: MouseButton,
         state: ElementState,
         position: PhysicalPosition<f64>,
     ) -> Option<ButtonType> {
@@ -1402,7 +1402,7 @@ impl ButtonManager {
                 let button_x = start_x + (i as u32) * (button_size + button_spacing);
                 // Position buttons much closer to the bottom of the text area (95% of text area height)
                 let button_size = Self::calculate_button_size(self.window_width, false);
-            let button_spacing = Self::calculate_button_spacing(self.window_width);
+            let _button_spacing = Self::calculate_button_spacing(self.window_width);
             let button_margin = Self::calculate_button_margin(self.window_width);
             let button_y = (self.text_area_height as f32 * 0.95) as u32 - button_size - button_margin;
                 button.position = (button_x, button_y);

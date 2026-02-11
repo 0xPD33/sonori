@@ -1,6 +1,5 @@
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::time::{Duration, Instant};
 
 /// Stores statistics about transcription performance
 #[derive(Default, Clone)]

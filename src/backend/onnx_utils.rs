@@ -46,7 +46,7 @@ pub fn init_ort_environment() -> Result<()> {
 pub fn load_session(path: impl AsRef<Path>, options: &OnnxSessionOptions) -> Result<Session> {
     init_ort_environment()?;
 
-    let mut builder = Session::builder()?
+    let builder = Session::builder()?
         .with_optimization_level(GraphOptimizationLevel::Level3)?
         .with_intra_threads(options.intra_threads)?
         .with_inter_threads(options.inter_threads)?;

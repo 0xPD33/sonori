@@ -4,7 +4,6 @@
 /// into a single, reusable context for easier resource management.
 
 use std::sync::Arc;
-use winit::window::Window;
 
 /// Wraps WGPU rendering resources
 pub struct RenderContext {
@@ -68,7 +67,7 @@ impl RenderContext {
     pub fn submit_and_present(
         &self,
         encoder: wgpu::CommandEncoder,
-        mut surface_texture: wgpu::SurfaceTexture,
+        surface_texture: wgpu::SurfaceTexture,
     ) {
         self.queue.submit(std::iter::once(encoder.finish()));
         surface_texture.present();
@@ -77,8 +76,6 @@ impl RenderContext {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn test_render_context_dimensions() {
         // This would require actual WGPU setup, so we skip the test

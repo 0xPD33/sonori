@@ -1,5 +1,5 @@
-use std::time::{Duration, Instant};
-use wgpu::{util::DeviceExt, Device, Queue, RenderPipeline, TextureView};
+use std::time::Instant;
+use wgpu::{util::DeviceExt, RenderPipeline, TextureView};
 use winit::dpi::PhysicalSize;
 
 // Animation constants
@@ -28,8 +28,8 @@ impl Vertex {
 
 /// Button panel background with fade animation
 pub struct ButtonPanel {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
+    _device: wgpu::Device,
+    _queue: wgpu::Queue,
     render_pipeline: RenderPipeline,
     vertex_buffer: wgpu::Buffer,
     animation_progress: f32, // 0.0 = hidden, 1.0 = visible
@@ -118,8 +118,8 @@ impl ButtonPanel {
         });
 
         Self {
-            device,
-            queue,
+            _device: device,
+            _queue: queue,
             render_pipeline,
             vertex_buffer,
             animation_progress: 0.0,
