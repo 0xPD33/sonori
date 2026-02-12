@@ -1089,17 +1089,23 @@ impl RealTimeTranscriber {
         // Stop audio capture
         self.audio_capture.lock().stop();
 
+        let shutdown_timeout = Duration::from_secs(3);
+
         // Wait for the audio processor to finish
         if let Some(handle) = self.audio_handle.take() {
-            if let Err(e) = handle.await {
-                eprintln!("Audio processor task panicked: {:?}", e);
+            match tokio::time::timeout(shutdown_timeout, handle).await {
+                Ok(Err(e)) => eprintln!("Audio processor task panicked: {:?}", e),
+                Err(_) => eprintln!("Audio processor shutdown timed out"),
+                _ => {}
             }
         }
 
         // Wait for the transcription processor to finish
         if let Some(handle) = self.transcription_handle.take() {
-            if let Err(e) = handle.await {
-                eprintln!("Transcription processor task panicked: {:?}", e);
+            match tokio::time::timeout(shutdown_timeout, handle).await {
+                Ok(Err(e)) => eprintln!("Transcription processor task panicked: {:?}", e),
+                Err(_) => eprintln!("Transcription processor shutdown timed out"),
+                _ => {}
             }
         }
 
