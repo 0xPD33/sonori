@@ -1,5 +1,5 @@
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use winit::{
     dpi::PhysicalPosition,
@@ -20,8 +20,7 @@ pub struct EventHandler {
     pub magic_mode_enabled: Option<Arc<AtomicBool>>,
     pub manual_session_sender:
         Option<tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>>,
-    pub transcription_mode_ref:
-        Arc<parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>>,
+    pub transcription_mode_ref: Arc<AtomicU8>,
 }
 
 impl EventHandler {
@@ -31,9 +30,7 @@ impl EventHandler {
         manual_session_sender: Option<
             tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>,
         >,
-        transcription_mode_ref: Arc<
-            parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>,
-        >,
+        transcription_mode_ref: Arc<AtomicU8>,
     ) -> Self {
         Self {
             cursor_position: None,
@@ -51,8 +48,9 @@ impl EventHandler {
         target_scroll_offset: &mut f32,
         max_scroll_offset: f32,
         delta: MouseScrollDelta,
+        line_height: f32,
     ) {
-        let line_scroll_speed = 15.0;
+        let line_scroll_speed = line_height;
         let pixel_scroll_multiplier = 0.75;
 
         let prev_target_offset = *target_scroll_offset;
@@ -256,7 +254,7 @@ impl EventHandler {
                     }
                     ButtonType::ModeToggle => {
                         // IMMEDIATE UI response: Calculate new mode and send command asynchronously
-                        let current_mode = *self.transcription_mode_ref.lock();
+                        let current_mode = crate::real_time_transcriber::TranscriptionMode::from_u8(self.transcription_mode_ref.load(Ordering::Relaxed));
                         let new_mode = match current_mode {
                             crate::real_time_transcriber::TranscriptionMode::RealTime => {
                                 crate::real_time_transcriber::TranscriptionMode::Manual

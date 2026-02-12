@@ -13,6 +13,14 @@ impl TextProcessor {
         }
     }
 
+    /// Update metrics to match the actual rendered font size
+    pub fn update_metrics(&mut self, text_scale: f32) {
+        let font_size = 10.0 * text_scale;
+        self.line_height = font_size * 1.1;
+        // Average character width for SansSerif proportional font
+        self.char_width = font_size * 0.55;
+    }
+
     /// Clean up whitespace in the text, removing consecutive spaces
     pub fn clean_whitespace(&self, text: &str) -> String {
         let text = text.trim();

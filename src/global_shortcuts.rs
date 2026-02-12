@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use ashpd::desktop::global_shortcuts::{GlobalShortcuts, NewShortcut};
 use ashpd::ActivationToken;
 use futures_util::StreamExt;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration};
@@ -23,7 +23,7 @@ pub struct GlobalShortcutsManager {
     accelerator: String,
     shortcut_mode: ShortcutMode,
     manual_session_tx: mpsc::Sender<ManualSessionCommand>,
-    transcription_mode: Arc<parking_lot::Mutex<TranscriptionMode>>,
+    transcription_mode: Arc<AtomicU8>,
     recording: Arc<AtomicBool>,
     running: Arc<AtomicBool>,
 }
@@ -34,7 +34,7 @@ impl GlobalShortcutsManager {
         accelerator: String,
         shortcut_mode: ShortcutMode,
         manual_session_tx: mpsc::Sender<ManualSessionCommand>,
-        transcription_mode: Arc<parking_lot::Mutex<TranscriptionMode>>,
+        transcription_mode: Arc<AtomicU8>,
         recording: Arc<AtomicBool>,
         running: Arc<AtomicBool>,
     ) -> Self {
@@ -156,7 +156,7 @@ impl GlobalShortcutsManager {
         }
 
         // Only act in Manual mode
-        let mode = *self.transcription_mode.lock();
+        let mode = TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed));
         if mode != TranscriptionMode::Manual {
             return;
         }
@@ -196,7 +196,7 @@ impl GlobalShortcutsManager {
             return;
         }
 
-        let mode = *self.transcription_mode.lock();
+        let mode = TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed));
         if mode != TranscriptionMode::Manual {
             return;
         }
@@ -273,7 +273,7 @@ pub async fn run_listener(
     accelerator: &str,
     shortcut_mode: ShortcutMode,
     manual_session_tx: mpsc::Sender<ManualSessionCommand>,
-    transcription_mode_ref: Arc<parking_lot::Mutex<TranscriptionMode>>,
+    transcription_mode_ref: Arc<std::sync::atomic::AtomicU8>,
     recording: Arc<AtomicBool>,
     running: Arc<AtomicBool>,
 ) -> Result<()> {

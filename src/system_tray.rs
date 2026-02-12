@@ -1,5 +1,5 @@
 use anyhow::Result;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use zbus::{connection, interface, Connection};
@@ -27,14 +27,14 @@ pub enum TrayUpdate {
 struct StatusNotifierItem {
     _command_tx: mpsc::UnboundedSender<TrayCommand>,
     is_recording: Arc<AtomicBool>,
-    transcription_mode: Arc<parking_lot::Mutex<TranscriptionMode>>,
+    transcription_mode: Arc<AtomicU8>,
 }
 
 /// DBusMenu implementation for context menu
 struct DbusMenu {
     command_tx: mpsc::UnboundedSender<TrayCommand>,
     is_recording: Arc<AtomicBool>,
-    transcription_mode: Arc<parking_lot::Mutex<TranscriptionMode>>,
+    transcription_mode: Arc<AtomicU8>,
 }
 
 #[interface(name = "org.kde.StatusNotifierItem")]
@@ -90,7 +90,7 @@ impl StatusNotifierItem {
             "Idle"
         };
 
-        let mode = match *self.transcription_mode.lock() {
+        let mode = match TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed)) {
             TranscriptionMode::RealTime => "Real-time",
             TranscriptionMode::Manual => "Manual",
         };
@@ -138,7 +138,7 @@ impl DbusMenu {
         use zbus::zvariant::Value;
 
         let is_recording = self.is_recording.load(Ordering::Relaxed);
-        let mode = *self.transcription_mode.lock();
+        let mode = TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed));
         let is_manual = matches!(mode, TranscriptionMode::Manual);
 
         // Build menu items
@@ -206,7 +206,7 @@ impl DbusMenu {
         let command = match id {
             MENU_TOGGLE_RECORDING => {
                 // Send the appropriate command based on current mode
-                let mode = *self.transcription_mode.lock();
+                let mode = TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed));
                 match mode {
                     TranscriptionMode::Manual => Some(TrayCommand::ToggleManualSession),
                     TranscriptionMode::RealTime => Some(TrayCommand::ToggleRecording),
@@ -244,7 +244,7 @@ impl DbusMenu {
 /// Start the system tray service
 pub async fn run_system_tray(
     is_recording: Arc<AtomicBool>,
-    transcription_mode: Arc<parking_lot::Mutex<TranscriptionMode>>,
+    transcription_mode: Arc<AtomicU8>,
     running: Arc<AtomicBool>,
 ) -> Result<(
     mpsc::UnboundedSender<TrayUpdate>,
@@ -294,7 +294,7 @@ pub async fn run_system_tray(
                         // Note: Properties will update when queried by the tray
                     }
                     TrayUpdate::Mode(mode) => {
-                        *transcription_mode_clone.lock() = mode;
+                        transcription_mode_clone.store(mode.as_u8(), Ordering::Relaxed);
                     }
                     TrayUpdate::Transcript(_text) => {
                         // No longer displaying transcript preview

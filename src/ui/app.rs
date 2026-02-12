@@ -1,6 +1,6 @@
 use parking_lot::RwLock;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use winit::{
     application::ApplicationHandler,
@@ -35,8 +35,8 @@ pub fn run() {
         current_modifiers: Modifiers::default(),
         config: app_config,
         manual_session_sender: None,
-        transcription_mode_ref: Arc::new(parking_lot::Mutex::new(
-            crate::real_time_transcriber::TranscriptionMode::RealTime,
+        transcription_mode_ref: Arc::new(AtomicU8::new(
+            crate::real_time_transcriber::TranscriptionMode::RealTime.as_u8(),
         )),
         tray_update_tx: None,
         tray_command_rx: None,
@@ -53,9 +53,7 @@ pub fn run_with_audio_data(
     manual_session_sender: Option<
         tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>,
     >,
-    transcription_mode_ref: Arc<
-        parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>,
-    >,
+    transcription_mode_ref: Arc<AtomicU8>,
     tray_update_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::system_tray::TrayUpdate>>,
     tray_command_rx: Option<tokio::sync::mpsc::UnboundedReceiver<crate::system_tray::TrayCommand>>,
 ) {
@@ -87,8 +85,7 @@ pub struct WindowApp {
     pub config: AppConfig,
     pub manual_session_sender:
         Option<tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>>,
-    pub transcription_mode_ref:
-        Arc<parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>>,
+    pub transcription_mode_ref: Arc<AtomicU8>,
     pub tray_update_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::system_tray::TrayUpdate>>,
     pub tray_command_rx:
         Option<tokio::sync::mpsc::UnboundedReceiver<crate::system_tray::TrayCommand>>,
@@ -195,7 +192,7 @@ impl ApplicationHandler for WindowApp {
                 self.running.clone(),
                 self.recording.clone(),
                 self.magic_mode_enabled.clone(),
-                *self.transcription_mode_ref.lock(),
+                crate::real_time_transcriber::TranscriptionMode::from_u8(self.transcription_mode_ref.load(Ordering::Relaxed)),
                 self.manual_session_sender.clone(),
                 self.transcription_mode_ref.clone(),
                 &self.config.display_config,
@@ -244,7 +241,7 @@ impl ApplicationHandler for WindowApp {
                     // Tab - Toggle manual session (temporary, works when window focused)
                     // TODO: Once global shortcut (Super+Tab) works unfocused, remove this
                     if key_code == KeyCode::Tab {
-                        let current_mode = *self.transcription_mode_ref.lock();
+                        let current_mode = crate::real_time_transcriber::TranscriptionMode::from_u8(self.transcription_mode_ref.load(Ordering::Relaxed));
                         if current_mode == crate::real_time_transcriber::TranscriptionMode::Manual {
                             window.toggle_manual_session();
                         }
@@ -318,9 +315,7 @@ fn create_window(
     manual_session_sender: Option<
         tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>,
     >,
-    transcription_mode_ref: Arc<
-        parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>,
-    >,
+    transcription_mode_ref: Arc<AtomicU8>,
     display_config: &crate::config::DisplayConfig,
     enhancement_enabled: bool,
 ) -> WindowState {

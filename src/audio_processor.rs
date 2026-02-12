@@ -3,7 +3,7 @@ use parking_lot::{Mutex, RwLock};
 use std::collections::VecDeque;
 use std::fs;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::time::Duration;
@@ -27,7 +27,7 @@ pub struct AudioProcessor {
     transcription_stats: Arc<Mutex<TranscriptionStats>>,
 
     // Manual mode fields
-    transcription_mode: Arc<Mutex<TranscriptionMode>>,
+    transcription_mode: Arc<AtomicU8>,
     manual_audio_buffer: Arc<Mutex<Vec<f32>>>,
     manual_buffer_max_size: usize,
     manual_session_tx: mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>,
@@ -52,7 +52,7 @@ impl AudioProcessor {
         audio_processor: Arc<Mutex<SileroVad>>,
         audio_visualization_data: Arc<RwLock<AudioVisualizationData>>,
         segment_tx: mpsc::Sender<AudioSegment>,
-        transcription_mode: Arc<Mutex<TranscriptionMode>>,
+        transcription_mode: Arc<AtomicU8>,
         transcription_stats: Arc<Mutex<TranscriptionStats>>,
         manual_session_tx: mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>,
         app_config: AppConfig,
@@ -64,7 +64,7 @@ impl AudioProcessor {
         let manual_audio_buffer = Arc::new(Mutex::new(Vec::with_capacity(manual_buffer_max_size)));
 
         // Initialize session ID based on transcription mode
-        let initial_session_id = match *transcription_mode.lock() {
+        let initial_session_id = match TranscriptionMode::from_u8(transcription_mode.load(Ordering::Relaxed)) {
             TranscriptionMode::RealTime => Some("realtime".to_string()),
             TranscriptionMode::Manual => None, // Will be set when session starts
         };
@@ -189,7 +189,7 @@ impl AudioProcessor {
                         }
 
                         // Route to appropriate processing based on current mode
-                        let current_mode = *transcription_mode.lock();
+                        let current_mode = TranscriptionMode::from_u8(transcription_mode.load(Ordering::Relaxed));
                         match current_mode {
                             TranscriptionMode::RealTime => {
                                 Self::process_realtime_audio(

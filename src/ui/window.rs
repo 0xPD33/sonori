@@ -56,8 +56,7 @@ pub struct WindowState {
     pub running: Option<Arc<AtomicBool>>,
     pub recording: Option<Arc<AtomicBool>>,
     pub magic_mode_enabled: Option<Arc<AtomicBool>>,
-    transcription_mode_ref:
-        Arc<parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>>,
+    transcription_mode_ref: Arc<std::sync::atomic::AtomicU8>,
     last_known_mode: crate::real_time_transcriber::TranscriptionMode,
     // Dynamic sizing
     pub window_width: u32,
@@ -90,9 +89,7 @@ impl WindowState {
         manual_session_sender: Option<
             tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>,
         >,
-        transcription_mode_ref: Arc<
-            parking_lot::Mutex<crate::real_time_transcriber::TranscriptionMode>,
-        >,
+        transcription_mode_ref: Arc<std::sync::atomic::AtomicU8>,
         display_config: &crate::config::DisplayConfig,
         window_width: u32,
         window_height: u32,
@@ -407,7 +404,7 @@ impl WindowState {
         }
 
         // Check if transcription mode has changed
-        let current_mode = *self.transcription_mode_ref.lock();
+        let current_mode = crate::real_time_transcriber::TranscriptionMode::from_u8(self.transcription_mode_ref.load(std::sync::atomic::Ordering::Relaxed));
         if current_mode != self.last_known_mode {
             self.button_manager.set_transcription_mode(current_mode);
             self.last_known_mode = current_mode;
@@ -579,6 +576,15 @@ impl WindowState {
             self.scroll_state.update_transcript_len(display_text.len());
         }
 
+        // Calculate text scale with constrained growth to keep text smaller
+        let base_width = 240.0;
+        let max_scale = 1.4; // Reduced from 1.5 to 1.4 for better proportions
+        let raw_scale = self.window_width as f32 / base_width;
+        let text_scale = raw_scale.min(max_scale).max(0.85); // Increased minimum to 0.85x for better readability
+
+        // Update text processor metrics to match actual rendered font size
+        self.text_processor.update_metrics(text_scale);
+
         // Calculate text layout using the text processor
         let layout_info = self.text_processor.calculate_layout(
             &display_text,
@@ -608,14 +614,8 @@ impl WindowState {
         // Get text position from the layout manager
         let (text_x, text_y) = self.layout_manager.get_text_position(self.scroll_state.scroll_offset);
 
-        // Calculate text scale with constrained growth to keep text smaller
-        let base_width = 240.0;
-        let max_scale = 1.4; // Reduced from 1.5 to 1.4 for better proportions
-        let raw_scale = self.window_width as f32 / base_width;
-        let text_scale = raw_scale.min(max_scale).max(0.85); // Increased minimum to 0.85x for better readability
-
         // Get current transcription mode
-        let transcription_mode = *self.transcription_mode_ref.lock();
+        let transcription_mode = crate::real_time_transcriber::TranscriptionMode::from_u8(self.transcription_mode_ref.load(std::sync::atomic::Ordering::Relaxed));
 
         // Check if we should show processing animation instead of text
         let (should_show_animation, processing_state) = if let Some(audio_data) = &self.audio_data {
@@ -813,7 +813,7 @@ impl WindowState {
 
     pub fn handle_scroll(&mut self, delta: MouseScrollDelta) {
         self.event_handler
-            .handle_scroll(&mut self.scroll_state.target_scroll_offset, self.scroll_state.max_scroll_offset, delta);
+            .handle_scroll(&mut self.scroll_state.target_scroll_offset, self.scroll_state.max_scroll_offset, delta, self.text_processor.line_height);
         self.scroll_state.auto_scroll = self.event_handler.auto_scroll;
         self.scrollbar.auto_scroll = self.scroll_state.auto_scroll;
         self.scrollbar.scroll_offset = self.scroll_state.scroll_offset;
@@ -937,7 +937,7 @@ impl WindowState {
 
     pub fn toggle_mode(&mut self) {
         // Switch between manual and real-time modes
-        let current_mode = *self.transcription_mode_ref.lock();
+        let current_mode = crate::real_time_transcriber::TranscriptionMode::from_u8(self.transcription_mode_ref.load(std::sync::atomic::Ordering::Relaxed));
         let new_mode = match current_mode {
             crate::real_time_transcriber::TranscriptionMode::RealTime => {
                 crate::real_time_transcriber::TranscriptionMode::Manual

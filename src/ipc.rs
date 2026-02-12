@@ -8,7 +8,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
@@ -97,7 +97,7 @@ pub fn get_socket_path() -> PathBuf {
 pub struct IpcServer {
     socket_path: PathBuf,
     manual_session_tx: mpsc::Sender<ManualSessionCommand>,
-    transcription_mode: Arc<parking_lot::Mutex<TranscriptionMode>>,
+    transcription_mode: Arc<AtomicU8>,
     recording: Arc<AtomicBool>,
     running: Arc<AtomicBool>,
 }
@@ -105,7 +105,7 @@ pub struct IpcServer {
 impl IpcServer {
     pub fn new(
         manual_session_tx: mpsc::Sender<ManualSessionCommand>,
-        transcription_mode: Arc<parking_lot::Mutex<TranscriptionMode>>,
+        transcription_mode: Arc<AtomicU8>,
         recording: Arc<AtomicBool>,
         running: Arc<AtomicBool>,
     ) -> Self {
@@ -210,7 +210,7 @@ impl IpcServer {
 
     async fn handle_toggle(&self) -> IpcResponse {
         let is_recording = self.recording.load(Ordering::Relaxed);
-        let mode = *self.transcription_mode.lock();
+        let mode = TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed));
 
         // In manual mode, toggle the session
         if mode == TranscriptionMode::Manual {
@@ -236,7 +236,7 @@ impl IpcServer {
     }
 
     async fn handle_start(&self) -> IpcResponse {
-        let mode = *self.transcription_mode.lock();
+        let mode = TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed));
 
         if mode != TranscriptionMode::Manual {
             return IpcResponse::error("Start only works in manual mode");
@@ -251,7 +251,7 @@ impl IpcServer {
     }
 
     async fn handle_stop(&self) -> IpcResponse {
-        let mode = *self.transcription_mode.lock();
+        let mode = TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed));
 
         if mode != TranscriptionMode::Manual {
             return IpcResponse::error("Stop only works in manual mode");
@@ -266,7 +266,7 @@ impl IpcServer {
     }
 
     async fn handle_cancel(&self) -> IpcResponse {
-        let mode = *self.transcription_mode.lock();
+        let mode = TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed));
 
         if mode != TranscriptionMode::Manual {
             return IpcResponse::error("Cancel only works in manual mode");
@@ -281,7 +281,7 @@ impl IpcServer {
     }
 
     fn handle_status(&self) -> IpcResponse {
-        let mode = *self.transcription_mode.lock();
+        let mode = TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed));
         let recording = self.recording.load(Ordering::Relaxed);
 
         let status = IpcStatus {
