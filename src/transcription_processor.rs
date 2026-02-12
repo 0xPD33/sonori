@@ -13,11 +13,14 @@ use crate::ui::common::{AudioVisualizationData, ProcessingState};
 
 /// Extract the last N words from text for use as a prompt
 fn extract_prompt_context(text: &str, max_words: usize) -> String {
-    let words: Vec<&str> = text.split_whitespace().collect();
-    if words.len() <= max_words {
+    let word_count = text.split_whitespace().count();
+    if word_count <= max_words {
         text.to_string()
     } else {
-        words[words.len() - max_words..].join(" ")
+        text.split_whitespace()
+            .skip(word_count - max_words)
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 }
 
@@ -126,7 +129,7 @@ fn find_pause_points(samples: &[f32], sample_rate: usize) -> Vec<usize> {
 
 /// Handles the processing of audio segments for transcription
 pub struct TranscriptionProcessor {
-    backend: Arc<Mutex<Option<TranscriptionBackend>>>,
+    backend: Arc<Mutex<Option<Arc<TranscriptionBackend>>>>,
     backend_ready: Arc<AtomicBool>,
     language: String,
     running: Arc<AtomicBool>,
@@ -139,7 +142,7 @@ pub struct TranscriptionProcessor {
 
 impl TranscriptionProcessor {
     pub fn new(
-        backend: Arc<Mutex<Option<TranscriptionBackend>>>,
+        backend: Arc<Mutex<Option<Arc<TranscriptionBackend>>>>,
         backend_ready: Arc<AtomicBool>,
         language: String,
         running: Arc<AtomicBool>,
@@ -164,7 +167,7 @@ impl TranscriptionProcessor {
     /// Transcribe an audio segment using the backend.
     /// Optionally accepts an initial prompt for chunk continuity (whisper.cpp only; CT2 ignores it).
     fn transcribe_segment(
-        backend: &Arc<Mutex<Option<TranscriptionBackend>>>,
+        backend: &Arc<Mutex<Option<Arc<TranscriptionBackend>>>>,
         segment: &AudioSegment,
         language: &str,
         stats: &Arc<Mutex<TranscriptionStats>>,
@@ -192,9 +195,12 @@ impl TranscriptionProcessor {
         let start_time = Instant::now();
         let segment_duration = (segment.end_time - segment.start_time) as f32;
 
-        let backend_lock = backend.lock();
+        let backend_arc = {
+            let lock = backend.lock();
+            lock.as_ref().map(Arc::clone)
+        }; // lock dropped here
 
-        let Some(backend_ref) = backend_lock.as_ref() else {
+        let Some(backend_ref) = backend_arc.as_ref() else {
             let total_duration = start_time.elapsed();
             if log_stats_enabled {
                 println!(
@@ -215,7 +221,7 @@ impl TranscriptionProcessor {
         }
         let inference_start = Instant::now();
 
-        let result = match backend_ref {
+        let result = match &**backend_ref {
             crate::backend::TranscriptionBackend::CTranslate2(ct2_backend) => ct2_backend
                 .transcribe(
                     &segment.samples,
@@ -301,7 +307,6 @@ impl TranscriptionProcessor {
             }
         };
 
-        drop(backend_lock);
         result
     }
 
@@ -504,7 +509,7 @@ impl TranscriptionProcessor {
 
     /// Process a manual mode segment with specialized handling for longer audio
     fn process_manual_segment(
-        backend: &Arc<Mutex<Option<TranscriptionBackend>>>,
+        backend: &Arc<Mutex<Option<Arc<TranscriptionBackend>>>>,
         segment: &AudioSegment,
         language: &str,
         stats: &Arc<Mutex<TranscriptionStats>>,
@@ -554,7 +559,7 @@ impl TranscriptionProcessor {
     /// Finds natural pauses in speech to split at, avoiding mid-word cuts.
     /// Falls back to time-based splitting if no pauses found or continuous speech exceeds limits.
     fn process_large_manual_segment(
-        backend: &Arc<Mutex<Option<TranscriptionBackend>>>,
+        backend: &Arc<Mutex<Option<Arc<TranscriptionBackend>>>>,
         segment: &AudioSegment,
         language: &str,
         stats: &Arc<Mutex<TranscriptionStats>>,

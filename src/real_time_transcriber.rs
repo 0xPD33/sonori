@@ -2,7 +2,7 @@ use anyhow::Context;
 use chrono::Utc;
 use parking_lot::{Mutex, RwLock};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, mpsc, oneshot};
@@ -25,6 +25,24 @@ pub enum TranscriptionMode {
     RealTime,
     /// On-demand manual transcription sessions
     Manual,
+}
+
+impl TranscriptionMode {
+    /// Convert to u8 for atomic storage
+    pub fn as_u8(self) -> u8 {
+        match self {
+            TranscriptionMode::RealTime => 0,
+            TranscriptionMode::Manual => 1,
+        }
+    }
+
+    /// Convert from u8 for atomic retrieval
+    pub fn from_u8(val: u8) -> Self {
+        match val {
+            1 => TranscriptionMode::Manual,
+            _ => TranscriptionMode::RealTime, // Default to RealTime for safety
+        }
+    }
 }
 
 /// Transcription with session tracking
@@ -178,7 +196,7 @@ pub struct RealTimeTranscriber {
     recording: Arc<AtomicBool>,
 
     // Model and parameters
-    backend: Arc<Mutex<Option<TranscriptionBackend>>>,
+    backend: Arc<Mutex<Option<Arc<TranscriptionBackend>>>>,
     backend_ready: Arc<AtomicBool>,
     language: String,
 
@@ -207,7 +225,7 @@ pub struct RealTimeTranscriber {
     audio_processor_ref: Option<Arc<crate::audio_processor::AudioProcessor>>,
 
     // Manual mode specific fields
-    transcription_mode: Arc<Mutex<TranscriptionMode>>,
+    transcription_mode: Arc<AtomicU8>,
     current_manual_session: Arc<Mutex<Option<ManualSession>>>,
     processing_manual_session: Arc<Mutex<Option<ManualProcessingSession>>>,
     finalizing_manual_session: Arc<AtomicBool>,
@@ -322,7 +340,7 @@ impl RealTimeTranscriber {
                         capabilities.max_audio_duration,
                         capabilities.supports_streaming
                     );
-                    *backend_clone.lock() = Some(b);
+                    *backend_clone.lock() = Some(Arc::new(b));
                     backend_ready_for_task.store(true, Ordering::Relaxed);
                     println!("Backend ready for transcription");
 
@@ -342,9 +360,9 @@ impl RealTimeTranscriber {
         });
 
         // Initialize transcription mode from config
-        let transcription_mode = Arc::new(Mutex::new(TranscriptionMode::from(
-            app_config.general_config.transcription_mode.as_str(),
-        )));
+        let transcription_mode = Arc::new(AtomicU8::new(
+            TranscriptionMode::from(app_config.general_config.transcription_mode.as_str()).as_u8(),
+        ));
         let current_manual_session = Arc::new(Mutex::new(None));
         let processing_manual_session = Arc::new(Mutex::new(None));
 
@@ -495,7 +513,7 @@ impl RealTimeTranscriber {
                         if let Some(cmd) = command {
                             match cmd {
                                 ManualSessionCommand::StartSession { mut responder } => {
-                                    let current_mode = *transcription_mode.lock();
+                                    let current_mode = TranscriptionMode::from_u8(transcription_mode.load(Ordering::Relaxed));
                                     if current_mode == TranscriptionMode::Manual {
                                         // Check if a session is currently finalizing
                                         if finalizing_manual_session.load(Ordering::Relaxed) {
@@ -552,15 +570,9 @@ impl RealTimeTranscriber {
                                             continue;
                                         }
 
-                                        // Clear manual buffer FIRST (before setting new session ID)
-                                        // This prevents new audio from being added to old buffer
+                                        // Atomically clear buffer and set session ID under both locks
                                         if let Some(ref audio_processor) = audio_processor_ref {
-                                            audio_processor.clear_manual_buffer();
-                                        }
-
-                                        // Update session ID AFTER clearing buffer
-                                        if let Some(ref audio_processor) = audio_processor_ref {
-                                            audio_processor.set_session_id(Some(session_id.clone()));
+                                            audio_processor.start_new_manual_session(session_id.clone());
                                             println!("Set session ID to: {}", session_id);
                                         }
 
@@ -600,11 +612,8 @@ impl RealTimeTranscriber {
                                     }
                                 }
                                 ManualSessionCommand::StopSession { mut responder } => {
-                                    let current_mode = *transcription_mode.lock();
+                                    let current_mode = TranscriptionMode::from_u8(transcription_mode.load(Ordering::Relaxed));
                                     if current_mode == TranscriptionMode::Manual {
-                                        // Create RAII guard to automatically manage finalizing flag
-                                        let _guard = FinalizingGuard::new(finalizing_manual_session.clone());
-
                                         // Move active session into processing state so a new one can begin immediately
                                         let session_id_opt = Self::move_session_to_processing(
                                             &current_manual_session,
@@ -658,7 +667,11 @@ impl RealTimeTranscriber {
                                                 let recording_for_task = recording.clone();
                                                 let audio_capture_for_drain = audio_capture.clone();
                                                 let transcription_stats_for_drain = transcription_stats.clone();
+                                                let finalizing_flag = finalizing_manual_session.clone();
                                                 tokio::spawn(async move {
+                                                    // Guard lives for the entire async task duration
+                                                    let _guard = FinalizingGuard::new(finalizing_flag);
+
                                                     // Wait for channel to drain using sample counters
                                                     let sent_count = audio_capture_for_drain.lock().get_samples_sent_count();
                                                     let received_count = audio_processor.get_samples_received_count();
@@ -700,10 +713,15 @@ impl RealTimeTranscriber {
                                                         audio_data.set_processing_state(ProcessingState::Transcribing);
                                                     }
 
-                                                    if let Err(e) = audio_processor
+                                                    let transcription_result = audio_processor
                                                         .trigger_manual_transcription(sample_rate, Some(captured_session_id.clone()))
-                                                        .await
-                                                    {
+                                                        .await;
+
+                                                    // Drop the guard after transcription completes so new sessions can start
+                                                    // during the cooldown period
+                                                    drop(_guard);
+
+                                                    if let Err(e) = transcription_result {
                                                         eprintln!(
                                                             "Failed to trigger manual transcription for session {}: {}",
                                                             session_id, e
@@ -773,7 +791,7 @@ impl RealTimeTranscriber {
                                     }
                                 }
                                 ManualSessionCommand::CancelSession { mut responder } => {
-                                    let current_mode = *transcription_mode.lock();
+                                    let current_mode = TranscriptionMode::from_u8(transcription_mode.load(Ordering::Relaxed));
                                     if current_mode == TranscriptionMode::Manual {
                                         let mut cancelled = false;
 
@@ -829,8 +847,8 @@ impl RealTimeTranscriber {
                                     // The UI can call get_manual_session_status() directly
                                 }
                                 ManualSessionCommand::SwitchMode(new_mode) => {
-                                    let old_mode = *transcription_mode.lock();
-                                    *transcription_mode.lock() = new_mode;
+                                    let old_mode = TranscriptionMode::from_u8(transcription_mode.load(Ordering::Relaxed));
+                                    transcription_mode.store(new_mode.as_u8(), Ordering::Relaxed);
 
                                     // The UI will detect this change and update the button layout automatically
 
@@ -1191,7 +1209,7 @@ impl RealTimeTranscriber {
 
     /// Get the current transcription mode
     pub fn get_transcription_mode(&self) -> TranscriptionMode {
-        *self.transcription_mode.lock()
+        TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed))
     }
 
     /// Set processing state in the audio visualization data
@@ -1204,7 +1222,7 @@ impl RealTimeTranscriber {
         self.manual_session_tx.clone()
     }
 
-    pub fn get_transcription_mode_ref(&self) -> Arc<Mutex<TranscriptionMode>> {
+    pub fn get_transcription_mode_ref(&self) -> Arc<AtomicU8> {
         self.transcription_mode.clone()
     }
 
@@ -1215,13 +1233,13 @@ impl RealTimeTranscriber {
 
     /// Set the transcription mode
     pub fn set_transcription_mode(&mut self, mode: TranscriptionMode) {
-        *self.transcription_mode.lock() = mode;
+        self.transcription_mode.store(mode.as_u8(), Ordering::Relaxed);
         println!("Transcription mode changed to: {:?}", mode);
     }
 
     /// Start a new manual transcription session
     pub async fn start_manual_session(&self) -> Result<String, anyhow::Error> {
-        if *self.transcription_mode.lock() != TranscriptionMode::Manual {
+        if TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed)) != TranscriptionMode::Manual {
             return Err(anyhow::anyhow!(
                 "Cannot start manual session when not in manual mode"
             ));
@@ -1241,7 +1259,7 @@ impl RealTimeTranscriber {
 
     /// Stop the current manual transcription session and trigger processing
     pub async fn stop_manual_session(&self) -> Result<(), anyhow::Error> {
-        if *self.transcription_mode.lock() != TranscriptionMode::Manual {
+        if TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed)) != TranscriptionMode::Manual {
             return Err(anyhow::anyhow!(
                 "Cannot stop manual session when not in manual mode"
             ));
@@ -1261,7 +1279,7 @@ impl RealTimeTranscriber {
 
     /// Cancel the current manual transcription session
     pub async fn cancel_manual_session(&self) -> Result<(), anyhow::Error> {
-        if *self.transcription_mode.lock() != TranscriptionMode::Manual {
+        if TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed)) != TranscriptionMode::Manual {
             return Err(anyhow::anyhow!(
                 "Cannot cancel manual session when not in manual mode"
             ));
@@ -1281,7 +1299,7 @@ impl RealTimeTranscriber {
 
     /// Get the status of the current manual session
     pub fn get_manual_session_status(&self) -> Option<ManualSessionStatus> {
-        if *self.transcription_mode.lock() != TranscriptionMode::Manual {
+        if TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed)) != TranscriptionMode::Manual {
             return None;
         }
 
@@ -1300,7 +1318,7 @@ impl RealTimeTranscriber {
 
     /// Check if there's an active manual session
     pub fn has_active_manual_session(&self) -> bool {
-        if *self.transcription_mode.lock() != TranscriptionMode::Manual {
+        if TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed)) != TranscriptionMode::Manual {
             return false;
         }
 
@@ -1318,7 +1336,7 @@ impl RealTimeTranscriber {
 
     /// Get the current manual session accumulated audio for processing
     pub fn get_manual_session_audio(&self) -> Option<Vec<f32>> {
-        if *self.transcription_mode.lock() != TranscriptionMode::Manual {
+        if TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed)) != TranscriptionMode::Manual {
             return None;
         }
 
@@ -1330,7 +1348,7 @@ impl RealTimeTranscriber {
 
     /// Add audio data to the current manual session
     pub fn add_audio_to_manual_session(&self, audio_data: &[f32]) -> Result<(), anyhow::Error> {
-        if *self.transcription_mode.lock() != TranscriptionMode::Manual {
+        if TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed)) != TranscriptionMode::Manual {
             return Ok(()); // Silently ignore if not in manual mode
         }
 
