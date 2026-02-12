@@ -77,6 +77,9 @@ pub struct WindowState {
     typewriter: super::typewriter::TypewriterEffect,
     typewriter_enabled: bool,
     last_processing_state: crate::ui::common::ProcessingState,
+    // Reusable buffers to avoid per-frame allocations
+    silence_buffer: Vec<f32>,
+    frame_samples: Vec<f32>,
 }
 
 impl WindowState {
@@ -349,6 +352,10 @@ impl WindowState {
             typewriter: super::typewriter::TypewriterEffect::new(),
             typewriter_enabled: ui_config.typewriter_effect,
             last_processing_state: crate::ui::common::ProcessingState::Idle,
+
+            // Reusable buffers
+            silence_buffer: vec![0.0; 1024],
+            frame_samples: Vec::with_capacity(1024),
         }
     }
 
@@ -482,7 +489,7 @@ impl WindowState {
         // Get audio data once
         let mut display_text: String = String::new();
         let mut is_speaking: bool = false;
-        let empty_samples: Vec<f32> = vec![0.0; 1024]; // Buffer of silence for decay animation
+        let mut processing_state = crate::ui::common::ProcessingState::Idle;
 
         // Check recording state
         let is_recording = self
@@ -517,19 +524,17 @@ impl WindowState {
 
         // Render the spectrogram with either the available audio data or empty data
         if let Some(spectrogram) = &mut self.spectrogram {
-            let samples = if let Some(audio_data) = &self.audio_data {
-                {
-                    let audio_data_lock = audio_data.read();
-                    // Always show the current samples - when paused, these will be the decaying samples
-                    // The audio processor handles the decay animation, not the UI
-                    is_speaking = is_recording && audio_data_lock.is_speaking; // Only show speaking state when recording
-                    let transcript_ref = &audio_data_lock.transcript;
-                    display_text = self.text_processor.clean_whitespace(transcript_ref);
+            if let Some(audio_data) = &self.audio_data {
+                let audio_data_lock = audio_data.read();
+                is_speaking = is_recording && audio_data_lock.is_speaking;
+                let transcript_ref = &audio_data_lock.transcript;
+                display_text = self.text_processor.clean_whitespace(transcript_ref);
+                processing_state = audio_data_lock.processing_state;
 
-                    // Convert to owned vector before dropping the lock
-                    let samples_vec = audio_data_lock.samples.to_vec();
-                    samples_vec
-                }
+                // Reuse frame_samples buffer to avoid per-frame allocation
+                self.frame_samples.clear();
+                self.frame_samples.extend_from_slice(&audio_data_lock.samples);
+                drop(audio_data_lock);
             } else {
                 if is_recording {
                     display_text = "Sonori is ready".to_string();
@@ -538,11 +543,14 @@ impl WindowState {
                 self.scroll_state.reset();
                 self.scrollbar.max_scroll_offset = 0.0;
                 self.scrollbar.scroll_offset = 0.0;
-                empty_samples.clone() // Use silence buffer for decay animation
-            };
+
+                // Reuse silence buffer for decay animation
+                self.frame_samples.clear();
+                self.frame_samples.extend_from_slice(&self.silence_buffer);
+            }
 
             // Always update and render the spectrogram
-            spectrogram.update(&samples);
+            spectrogram.update(&self.frame_samples);
 
             // Create a render pass with a viewport that positions the spectrogram below the text area
             {
@@ -618,25 +626,14 @@ impl WindowState {
         let transcription_mode = crate::real_time_transcriber::TranscriptionMode::from_u8(self.transcription_mode_ref.load(std::sync::atomic::Ordering::Relaxed));
 
         // Check if we should show processing animation instead of text
-        let (should_show_animation, processing_state) = if let Some(audio_data) = &self.audio_data {
-            let audio_data_lock = audio_data.read();
-            let state = audio_data_lock.processing_state;
-            let is_empty = display_text.is_empty();
-            drop(audio_data_lock);
-
-            // Simplified visibility logic - only show loading animation
-            let should_show = match (state, is_empty) {
-                // Show loading animation when loading
-                (crate::ui::common::ProcessingState::Loading, _) => true,
-                // Show loading animation when transcribing with no text yet
-                (crate::ui::common::ProcessingState::Transcribing, true) => true,
-                // Don't show animations for any other states
-                _ => false,
-            };
-
-            (should_show, state)
-        } else {
-            (false, crate::ui::common::ProcessingState::Idle)
+        let is_empty = display_text.is_empty();
+        let should_show_animation = match (processing_state, is_empty) {
+            // Show loading animation when loading
+            (crate::ui::common::ProcessingState::Loading, _) => true,
+            // Show loading animation when transcribing with no text yet
+            (crate::ui::common::ProcessingState::Transcribing, true) => true,
+            // Don't show animations for any other states
+            _ => false,
         };
 
         // Trigger typewriter effect when transcription completes (manual mode)
@@ -660,10 +657,10 @@ impl WindowState {
         }
 
         // Get the text to display (may be typewriter-animated)
-        let render_text = if self.typewriter.is_active() {
-            self.typewriter.update().to_string()
+        let render_text: &str = if self.typewriter.is_active() {
+            self.typewriter.update()
         } else {
-            display_text.clone()
+            &display_text
         };
 
         // Choose text color based on speaking state

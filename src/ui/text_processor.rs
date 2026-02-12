@@ -58,11 +58,10 @@ impl TextProcessor {
         let visible_lines = visible_height / self.line_height;
 
         // Count words and estimate line breaks
-        let words = text.split_whitespace().collect::<Vec<_>>();
         let mut line_count = 1.0;
         let mut current_line_chars = 0.0;
 
-        for word in words {
+        for word in text.split_whitespace() {
             let word_len = word.len() as f32;
 
             if current_line_chars + word_len + 1.0 > chars_per_line {
