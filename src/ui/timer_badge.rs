@@ -21,6 +21,11 @@ pub struct TimerBadge {
     _cache: glyphon::Cache,
     viewport: glyphon::Viewport,
     device: Arc<Device>,
+
+    // Cached buffers
+    cached_time_str: String,
+    cached_timer_buffer: Option<glyphon::Buffer>,
+    cached_indicator_buffer: Option<glyphon::Buffer>,
 }
 
 impl TimerBadge {
@@ -57,6 +62,9 @@ impl TimerBadge {
             _cache: cache,
             viewport,
             device: Arc::clone(device),
+            cached_time_str: String::new(),
+            cached_timer_buffer: None,
+            cached_indicator_buffer: None,
         }
     }
 
@@ -146,19 +154,24 @@ impl TimerBadge {
             use glyphon::{Attrs, Buffer, Color, Family, Metrics, Shaping, TextArea, TextBounds};
 
             let metrics = Metrics::new(font_size, line_height);
-            let mut timer_buffer = Buffer::new(&mut self.font_system, metrics);
-            timer_buffer.set_size(&mut self.font_system, Some(1000.0), Some(50.0));
-            timer_buffer.set_text(
-                &mut self.font_system,
-                &time_str,
-                &Attrs::new().family(Family::Monospace),
-                Shaping::Advanced,
-            );
 
-            // Calculate actual text width from layout
-            let layout = timer_buffer.layout_runs().collect::<Vec<_>>();
-            let text_width = layout
-                .iter()
+            if time_str != self.cached_time_str {
+                let mut timer_buffer = Buffer::new(&mut self.font_system, metrics);
+                timer_buffer.set_size(&mut self.font_system, Some(1000.0), Some(50.0));
+                timer_buffer.set_text(
+                    &mut self.font_system,
+                    &time_str,
+                    &Attrs::new().family(Family::Monospace),
+                    Shaping::Advanced,
+                );
+                self.cached_timer_buffer = Some(timer_buffer);
+                self.cached_time_str = time_str;
+            }
+
+            let timer_buffer = self.cached_timer_buffer.as_ref().unwrap();
+
+            let text_width = timer_buffer
+                .layout_runs()
                 .map(|run| run.line_w)
                 .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
                 .unwrap_or(0.0);
@@ -186,10 +199,19 @@ impl TimerBadge {
             // Build text areas
             let mut text_areas: Vec<TextArea> = Vec::new();
 
-            // Add indicator dot if enabled
-            let indicator_buffer;
             if self.show_indicator {
-                // Pulse opacity between 0.5 and 1.0
+                if self.cached_indicator_buffer.is_none() {
+                    let mut buf = Buffer::new(&mut self.font_system, metrics);
+                    buf.set_size(&mut self.font_system, Some(50.0), Some(50.0));
+                    buf.set_text(
+                        &mut self.font_system,
+                        "●",
+                        &Attrs::new().family(Family::SansSerif),
+                        Shaping::Advanced,
+                    );
+                    self.cached_indicator_buffer = Some(buf);
+                }
+
                 let pulse_value = 0.75 + 0.25 * self.pulse_phase.sin();
                 let indicator_alpha = (pulse_value * self.fade_progress * 255.0) as u8;
                 let indicator_color = Color::rgba(
@@ -199,20 +221,8 @@ impl TimerBadge {
                     indicator_alpha,
                 );
 
-                indicator_buffer = {
-                    let mut buf = Buffer::new(&mut self.font_system, metrics);
-                    buf.set_size(&mut self.font_system, Some(50.0), Some(50.0));
-                    buf.set_text(
-                        &mut self.font_system,
-                        "●",
-                        &Attrs::new().family(Family::SansSerif).color(indicator_color),
-                        Shaping::Advanced,
-                    );
-                    buf
-                };
-
                 text_areas.push(TextArea {
-                    buffer: &indicator_buffer,
+                    buffer: self.cached_indicator_buffer.as_ref().unwrap(),
                     left: content_x,
                     top: text_y,
                     scale: 1.0,
@@ -227,9 +237,8 @@ impl TimerBadge {
                 });
             }
 
-            // Add timer text
             text_areas.push(TextArea {
-                buffer: &timer_buffer,
+                buffer: timer_buffer,
                 left: timer_x,
                 top: text_y,
                 scale: 1.0,

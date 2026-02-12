@@ -78,6 +78,7 @@ pub struct Spectrogram {
 
     // Performance optimization: cached values
     bar_instance_template: Vec<BarInstanceTemplate>,
+    cached_instances: Vec<BarInstance>,
 }
 
 /// Internal structure for pre-computing bar instance properties
@@ -236,14 +237,15 @@ impl Spectrogram {
         let bar_data = vec![0.0; num_bins];
         let target_bar_data = vec![0.0; num_bins];
 
-        // Pre-compute bar instance templates
         let config = SpectrogramConfig::default();
         let bar_instance_template = create_bar_instance_template(num_bins, size.width, &config);
 
-        let instances = create_bar_instances(&bar_data, &bar_instance_template, size.height, &config);
+        let mut cached_instances = Vec::with_capacity(num_bins);
+        fill_bar_instances(&bar_data, &bar_instance_template, size.height, &config, &mut cached_instances);
+
         let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Instance Buffer"),
-            contents: bytemuck::cast_slice(&instances),
+            contents: bytemuck::cast_slice(&cached_instances),
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
 
@@ -279,6 +281,7 @@ impl Spectrogram {
             _fft_output: fft_output,
             _window: window,
             bar_instance_template,
+            cached_instances,
         };
 
         spectrogram
@@ -307,9 +310,11 @@ impl Spectrogram {
                 self.bar_data = new_bar_data;
                 self.target_bar_data = new_target_data;
 
-                // Update the bar instance template for the new width
                 self.bar_instance_template =
                     create_bar_instance_template(optimal_bins, new_size.width, &self.config);
+
+                self.cached_instances.clear();
+                self.cached_instances.reserve(optimal_bins);
             }
         }
 
@@ -492,16 +497,16 @@ impl Spectrogram {
         self.update_instance_buffer();
     }
 
-    /// Updates GPU buffer with current bar instance data
     fn update_instance_buffer(&mut self) {
-        let instances = create_bar_instances(
+        fill_bar_instances(
             &self.bar_data,
             &self.bar_instance_template,
             self.size.height,
             &self.config,
+            &mut self.cached_instances,
         );
         self.queue
-            .write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&instances));
+            .write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&self.cached_instances));
     }
 
     pub fn render(&self, view: &TextureView, encoder: &mut wgpu::CommandEncoder) {
@@ -581,37 +586,30 @@ fn create_bar_instance_template(num_bars: usize, width: u32, config: &Spectrogra
         .collect()
 }
 
-/// Creates bar instances for rendering based on current amplitude values
-/// and pre-computed template data
-fn create_bar_instances(
+fn fill_bar_instances(
     bar_data: &[f32],
     templates: &[BarInstanceTemplate],
     height: u32,
     config: &SpectrogramConfig,
-) -> Vec<BarInstance> {
-    bar_data
-        .iter()
-        .zip(templates.iter())
-        .map(|(&amplitude, template)| {
-            // Apply edge tapering using pre-computed factor
-            let adjusted_amplitude = amplitude * template.edge_factor;
+    instances: &mut Vec<BarInstance>,
+) {
+    instances.clear();
+    instances.reserve(bar_data.len());
 
-            // Calculate bar height with minimum height of 2 pixels
-            let bar_height = (adjusted_amplitude * height as f32).max(2.0);
+    for (&amplitude, template) in bar_data.iter().zip(templates.iter()) {
+        let adjusted_amplitude = amplitude * template.edge_factor;
 
-            // Calculate normalized Y position
-            let norm_y = (height as f32 - bar_height) / (2.0 * height as f32) * 2.0 - 1.0;
-            let norm_height = bar_height / height as f32 * 2.0;
+        let bar_height = (adjusted_amplitude * height as f32).max(2.0);
 
-            // Ensure a minimum opacity so bars are always visible
-            // Use MIN_OPACITY constant for consistent minimum values
-            let color = [1.0, 1.0, 1.0, adjusted_amplitude.max(config.min_opacity)];
+        let norm_y = (height as f32 - bar_height) / (2.0 * height as f32) * 2.0 - 1.0;
+        let norm_height = bar_height / height as f32 * 2.0;
 
-            BarInstance {
-                position: [template.norm_x, norm_y],
-                size: [template.norm_width, norm_height],
-                color,
-            }
-        })
-        .collect()
+        let color = [1.0, 1.0, 1.0, adjusted_amplitude.max(config.min_opacity)];
+
+        instances.push(BarInstance {
+            position: [template.norm_x, norm_y],
+            size: [template.norm_width, norm_height],
+            color,
+        });
+    }
 }

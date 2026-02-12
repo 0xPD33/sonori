@@ -1,6 +1,7 @@
+use std::collections::HashMap;
 use std::f32::consts::PI;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SoundType {
     RecordStart,
     RecordStop,
@@ -17,26 +18,42 @@ const C4: f32 = 261.63;
 
 pub struct SoundGenerator {
     sample_rate: u32,
+    cache: HashMap<SoundType, Vec<f32>>,
 }
 
 impl SoundGenerator {
     pub fn new(sample_rate: u32) -> Self {
-        Self { sample_rate }
+        let mut generator = Self {
+            sample_rate,
+            cache: HashMap::new(),
+        };
+
+        generator.cache.insert(
+            SoundType::RecordStart,
+            generator.generate_two_tone(C5, E5, 0.08, 0.12, 0.35),
+        );
+        generator.cache.insert(
+            SoundType::RecordStop,
+            generator.generate_two_tone(E5, C5, 0.08, 0.12, 0.35),
+        );
+        generator.cache.insert(
+            SoundType::SessionStart,
+            generator.generate_two_tone(C5, G5, 0.1, 0.15, 0.4),
+        );
+        generator.cache.insert(
+            SoundType::SessionComplete,
+            generator.generate_three_tone(G5, E5, C5, 0.12, 0.4),
+        );
+        generator.cache.insert(
+            SoundType::SessionCancel,
+            generator.generate_double_tap(C4, 0.06, 0.04, 0.3),
+        );
+
+        generator
     }
 
-    pub fn generate(&self, sound_type: SoundType) -> Vec<f32> {
-        match sound_type {
-            // Rising major third: C5 → E5 (energetic start)
-            SoundType::RecordStart => self.generate_two_tone(C5, E5, 0.08, 0.12, 0.35),
-            // Falling major third: E5 → C5 (resolved stop)
-            SoundType::RecordStop => self.generate_two_tone(E5, C5, 0.08, 0.12, 0.35),
-            // Rising perfect fifth: C5 → G5 (confident start)
-            SoundType::SessionStart => self.generate_two_tone(C5, G5, 0.1, 0.15, 0.4),
-            // Descending triad: G5 → E5 → C5 (satisfying completion)
-            SoundType::SessionComplete => self.generate_three_tone(G5, E5, C5, 0.12, 0.4),
-            // Quick low double-tap (cancellation)
-            SoundType::SessionCancel => self.generate_double_tap(C4, 0.06, 0.04, 0.3),
-        }
+    pub fn generate(&self, sound_type: SoundType) -> &[f32] {
+        self.cache.get(&sound_type).map(|v| v.as_slice()).unwrap_or(&[])
     }
 
     /// Generate a two-note melodic sequence with crossfade

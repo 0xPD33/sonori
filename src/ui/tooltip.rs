@@ -68,11 +68,10 @@ pub struct Tooltip {
     uniform_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     state: TooltipState,
-    // Pre-calculated text dimensions for each button type
     text_dimensions: std::collections::HashMap<ButtonType, (f32, f32)>,
+    cached_buffers: std::collections::HashMap<ButtonType, glyphon::Buffer>,
     device: Device,
     queue: Queue,
-    // Glyphon text rendering resources
     font_system: glyphon::FontSystem,
     swash_cache: glyphon::SwashCache,
     text_atlas: glyphon::TextAtlas,
@@ -198,8 +197,9 @@ impl Tooltip {
             None,
         );
 
-        // Pre-calculate text dimensions for all button types
         let mut text_dimensions = std::collections::HashMap::new();
+        let mut cached_buffers = std::collections::HashMap::new();
+
         for button_type in [
             ButtonType::Copy,
             ButtonType::Reset,
@@ -215,6 +215,16 @@ impl Tooltip {
             let (width, height) =
                 Self::calculate_text_dimensions(text, TOOLTIP_FONT_SIZE, &mut font_system);
             text_dimensions.insert(button_type, (width, height));
+
+            use glyphon::{Attrs, Buffer, Family, Metrics, Shaping};
+            let line_height = TOOLTIP_FONT_SIZE * TOOLTIP_LINE_HEIGHT_MULTIPLIER;
+            let metrics = Metrics::new(TOOLTIP_FONT_SIZE, line_height);
+            let mut buffer = Buffer::new(&mut font_system, metrics);
+            let tooltip_width = width + TOOLTIP_PADDING_X * 2.0;
+            let tooltip_height = height + TOOLTIP_PADDING_Y * 2.0;
+            buffer.set_size(&mut font_system, Some(tooltip_width), Some(tooltip_height));
+            buffer.set_text(&mut font_system, text, &Attrs::new().family(Family::SansSerif), Shaping::Advanced);
+            cached_buffers.insert(button_type, buffer);
         }
 
         Self {
@@ -224,6 +234,7 @@ impl Tooltip {
             bind_group,
             state: TooltipState::Hidden,
             text_dimensions,
+            cached_buffers,
             device,
             queue,
             font_system,
@@ -461,21 +472,15 @@ impl Tooltip {
 
         drop(render_pass);
 
-        // Render text
-        let text = Self::get_tooltip_text(button_type);
         let text_x = tooltip_x + TOOLTIP_PADDING_X;
         let text_y = tooltip_y + TOOLTIP_PADDING_Y;
 
-        use glyphon::{Attrs, Buffer, Color, Family, Metrics, Shaping, TextArea, TextBounds};
+        use glyphon::{Color, TextArea, TextBounds};
 
-        let line_height = TOOLTIP_FONT_SIZE * TOOLTIP_LINE_HEIGHT_MULTIPLIER;
-        let metrics = Metrics::new(TOOLTIP_FONT_SIZE, line_height);
-        let mut buffer = Buffer::new(&mut self.font_system, metrics);
-        buffer.set_size(&mut self.font_system, Some(tooltip_width), Some(tooltip_height));
-        buffer.set_text(&mut self.font_system, text, &Attrs::new().family(Family::SansSerif), Shaping::Advanced);
+        let buffer = self.cached_buffers.get(&button_type).expect("Cached buffer not found");
 
         let text_area = TextArea {
-            buffer: &buffer,
+            buffer,
             left: text_x,
             top: text_y,
             scale: 1.0,
@@ -485,7 +490,7 @@ impl Tooltip {
                 right: (text_x + text_width) as i32,
                 bottom: (text_y + text_height) as i32,
             },
-            default_color: Color::rgb(255, 255, 255), // White text
+            default_color: Color::rgb(255, 255, 255),
             custom_glyphs: &[],
         };
 

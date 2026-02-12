@@ -79,11 +79,9 @@ impl SoundPlayer {
         sound_type: SoundType,
         volume: f32,
     ) -> Result<()> {
-        let mut samples = generator.generate(sound_type);
+        let cached_samples = generator.generate(sound_type);
 
-        for sample in samples.iter_mut() {
-            *sample *= volume;
-        }
+        let samples: Vec<f32> = cached_samples.iter().map(|&s| s * volume).collect();
 
         let config = device.default_output_config()?;
         let sample_rate = config.sample_rate().0;
