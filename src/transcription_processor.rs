@@ -34,21 +34,25 @@ fn find_pause_points(samples: &[f32], sample_rate: usize) -> Vec<usize> {
             return Vec::new();
         }
     };
-    let model_path = std::path::PathBuf::from(format!("{}/.cache/sonori/models/silero_vad.onnx", home_dir));
+    let model_path =
+        std::path::PathBuf::from(format!("{}/.cache/sonori/models/silero_vad.onnx", home_dir));
 
     if !model_path.exists() {
-        println!("VAD model not found at {:?}, falling back to time-based chunking", model_path);
+        println!(
+            "VAD model not found at {:?}, falling back to time-based chunking",
+            model_path
+        );
         return Vec::new();
     }
 
     // Create VAD with config tuned for finding pauses
     let config = VadConfig {
-        threshold: 0.3,              // Slightly higher threshold for clearer boundaries
+        threshold: 0.3, // Slightly higher threshold for clearer boundaries
         speech_end_threshold: 0.2,
         frame_size: 512,
         sample_rate,
         hangbefore_frames: 3,
-        hangover_frames: 15,         // Shorter hangover to detect pauses faster
+        hangover_frames: 15, // Shorter hangover to detect pauses faster
         hop_samples: 160,
         max_buffer_duration: samples.len() + 1024,
         max_segment_count: 1000,
@@ -59,7 +63,10 @@ fn find_pause_points(samples: &[f32], sample_rate: usize) -> Vec<usize> {
     let mut vad = match SileroVad::new(config, &model_path) {
         Ok(v) => v,
         Err(e) => {
-            println!("Failed to initialize VAD: {:?}, falling back to time-based chunking", e);
+            println!(
+                "Failed to initialize VAD: {:?}, falling back to time-based chunking",
+                e
+            );
             return Vec::new();
         }
     };
@@ -188,7 +195,11 @@ impl TranscriptionProcessor {
                 "Transcribing segment from {:.2}s to {:.2}s{}",
                 segment.start_time,
                 segment.end_time,
-                if initial_prompt.is_some() { " (with prompt)" } else { "" }
+                if initial_prompt.is_some() {
+                    " (with prompt)"
+                } else {
+                    ""
+                }
             );
         }
 
@@ -239,15 +250,14 @@ impl TranscriptionProcessor {
                     segment.sample_rate,
                 )
             }
-            crate::backend::TranscriptionBackend::Moonshine(moonshine_backend) => {
-                moonshine_backend.transcribe(
+            crate::backend::TranscriptionBackend::Moonshine(moonshine_backend) => moonshine_backend
+                .transcribe(
                     &segment.samples,
                     language,
                     &app_config.common_transcription_options,
                     &app_config.moonshine_options,
                     segment.sample_rate,
-                )
-            }
+                ),
             crate::backend::TranscriptionBackend::Parakeet => {
                 Err(crate::backend::TranscriptionError::BackendNotImplemented(
                     "Parakeet backend not yet implemented".to_string(),
@@ -310,6 +320,90 @@ impl TranscriptionProcessor {
         result
     }
 
+    async fn process_segment(
+        segment: AudioSegment,
+        backend: Arc<Mutex<Option<Arc<TranscriptionBackend>>>>,
+        language: String,
+        stats: Arc<Mutex<TranscriptionStats>>,
+        audio_visualization_data: Arc<RwLock<AudioVisualizationData>>,
+        transcript_tx: broadcast::Sender<crate::real_time_transcriber::TranscriptionMessage>,
+        magic_mode_enabled: Arc<AtomicBool>,
+        enhancement_model: Arc<Mutex<Option<Box<dyn crate::enhancement::EnhancementModel>>>>,
+        log_stats_enabled: bool,
+    ) {
+        let segment_info = format!(
+            "Segment {:.2}s-{:.2}s",
+            segment.start_time, segment.end_time
+        );
+        let start_time = Instant::now();
+
+        let processing_result = tokio::task::spawn_blocking(move || {
+            let session_id = segment.session_id.clone();
+
+            if segment.is_manual {
+                let mut transcription = Self::process_manual_segment(
+                    &backend,
+                    &segment,
+                    &language,
+                    &stats,
+                    &audio_visualization_data,
+                );
+
+                // Apply LFM enhancement if magic mode is enabled
+                if !transcription.is_empty() && magic_mode_enabled.load(Ordering::Relaxed) {
+                    transcription = Self::enhance_transcription(&transcription, &enhancement_model);
+                }
+
+                if transcription.is_empty() {
+                    println!("Manual transcription resulted in empty text");
+                    None
+                } else {
+                    Some(crate::real_time_transcriber::TranscriptionMessage {
+                        text: transcription,
+                        session_id,
+                    })
+                }
+            } else {
+                let transcription = Self::transcribe_segment(
+                    &backend,
+                    &segment,
+                    &language,
+                    &stats,
+                    &audio_visualization_data,
+                    None,
+                );
+
+                if transcription.is_empty() {
+                    None
+                } else {
+                    Some(crate::real_time_transcriber::TranscriptionMessage {
+                        text: transcription,
+                        session_id,
+                    })
+                }
+            }
+        })
+        .await;
+
+        match processing_result {
+            Ok(Some(message)) => {
+                if let Err(e) = transcript_tx.send(message) {
+                    eprintln!("Failed to send transcription: {}", e);
+                }
+            }
+            Ok(None) => {}
+            Err(e) => eprintln!("Transcription worker task failed: {}", e),
+        }
+
+        if log_stats_enabled {
+            println!(
+                "Segment processing finished for {} in {:.2}s",
+                segment_info,
+                start_time.elapsed().as_secs_f32()
+            );
+        }
+    }
+
     pub fn start(
         &self,
         mut segment_rx: mpsc::Receiver<AudioSegment>,
@@ -334,15 +428,23 @@ impl TranscriptionProcessor {
 
             // Wait for backend to be ready before processing segments
             println!("Waiting for transcription backend to initialize...");
-            let backend_timeout = std::time::Duration::from_secs(10);
-            let start_wait = std::time::Instant::now();
+            let warn_interval = std::time::Duration::from_secs(10);
+            let mut last_warn = std::time::Instant::now();
 
             while !backend_ready.load(Ordering::Relaxed) {
-                if start_wait.elapsed() > backend_timeout {
-                    eprintln!("ERROR: Backend failed to initialize within timeout");
-                    eprintln!("Transcription will not be available");
+                if !running.load(Ordering::Relaxed) {
+                    println!("Transcription task shutting down before backend initialization");
                     return;
                 }
+
+                if last_warn.elapsed() >= warn_interval {
+                    eprintln!(
+                        "Backend is still initializing (>{}s); continuing to wait",
+                        warn_interval.as_secs()
+                    );
+                    last_warn = std::time::Instant::now();
+                }
+
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             }
 
@@ -355,51 +457,18 @@ impl TranscriptionProcessor {
                 if !running.load(Ordering::Relaxed) {
                     // Before shutting down, process any remaining segments
                     while let Ok(segment) = segment_rx.try_recv() {
-                        let segment_info = format!(
-                            "Segment {:.2}s-{:.2}s",
-                            segment.start_time, segment.end_time
-                        );
-
-                        let thread_start_time = Instant::now();
-
-                        // Process remaining segments
-                        let backend_clone = backend.clone();
-                        let language_clone = language.clone();
-                        let stats_clone = transcription_stats.clone();
-                        let audio_viz_clone = audio_visualization_data.clone();
-                        let tx_clone = transcript_tx.clone();
-                        let session_id = segment.session_id.clone();
-
-                        tokio::task::spawn_blocking(move || {
-                            let transcription = Self::transcribe_segment(
-                                &backend_clone,
-                                &segment,
-                                &language_clone,
-                                &stats_clone,
-                                &audio_viz_clone,
-                                None,
-                            );
-
-                            if !transcription.is_empty() {
-                                let message = crate::real_time_transcriber::TranscriptionMessage {
-                                    text: transcription,
-                                    session_id,
-                                };
-                                if let Err(e) = tx_clone.send(message) {
-                                    eprintln!("Failed to send transcription: {}", e);
-                                }
-                            }
-                        });
-
-                        let thread_processing_time = thread_start_time.elapsed();
-
-                        if log_stats_enabled {
-                            println!(
-                                "Task processing started for {} - Setup time: {:.2}s",
-                                segment_info,
-                                thread_processing_time.as_secs_f32()
-                            );
-                        }
+                        Self::process_segment(
+                            segment,
+                            backend.clone(),
+                            language.clone(),
+                            transcription_stats.clone(),
+                            audio_visualization_data.clone(),
+                            transcript_tx.clone(),
+                            magic_mode_enabled.clone(),
+                            enhancement_model.clone(),
+                            log_stats_enabled,
+                        )
+                        .await;
                     }
                     break;
                 }
@@ -407,93 +476,18 @@ impl TranscriptionProcessor {
                 // Block on receiving segments without timeout - this is much more efficient
                 match segment_rx.recv().await {
                     Some(segment) => {
-                        let segment_info = format!(
-                            "Segment {:.2}s-{:.2}s",
-                            segment.start_time, segment.end_time
-                        );
-
-                        let thread_start_time = Instant::now();
-
-                        // Use explicit flag to determine if this is a manual mode segment
-                        let is_manual_segment = segment.is_manual;
-
-                        // Process in a separate task to avoid blocking
-                        let backend_clone = backend.clone();
-                        let language_clone = language.clone();
-                        let stats_clone = transcription_stats.clone();
-                        let audio_viz_clone = audio_visualization_data.clone();
-                        let tx_clone = transcript_tx.clone();
-                        let session_id = segment.session_id.clone();
-
-                        if is_manual_segment {
-                            // Handle manual mode segments with longer timeout and batch processing
-                            let magic_mode_clone = magic_mode_enabled.clone();
-                            let enhancement_model_clone = enhancement_model.clone();
-                            tokio::task::spawn_blocking(move || {
-                                let mut transcription = Self::process_manual_segment(
-                                    &backend_clone,
-                                    &segment,
-                                    &language_clone,
-                                    &stats_clone,
-                                    &audio_viz_clone,
-                                );
-
-                                // Apply LFM enhancement if magic mode is enabled
-                                if !transcription.is_empty() && magic_mode_clone.load(Ordering::Relaxed) {
-                                    transcription = Self::enhance_transcription(
-                                        &transcription,
-                                        &enhancement_model_clone,
-                                    );
-                                }
-
-                                if !transcription.is_empty() {
-                                    let message =
-                                        crate::real_time_transcriber::TranscriptionMessage {
-                                            text: transcription,
-                                            session_id,
-                                        };
-                                    if let Err(e) = tx_clone.send(message) {
-                                        eprintln!("Failed to send manual transcription: {}", e);
-                                    }
-                                } else {
-                                    println!("Manual transcription resulted in empty text");
-                                }
-                            });
-                        } else {
-                            // Handle real-time segments (existing behavior)
-                            let session_id_rt = session_id.clone();
-                            tokio::task::spawn_blocking(move || {
-                                let transcription = Self::transcribe_segment(
-                                    &backend_clone,
-                                    &segment,
-                                    &language_clone,
-                                    &stats_clone,
-                                    &audio_viz_clone,
-                                    None,
-                                );
-
-                                if !transcription.is_empty() {
-                                    let message =
-                                        crate::real_time_transcriber::TranscriptionMessage {
-                                            text: transcription,
-                                            session_id: session_id_rt,
-                                        };
-                                    if let Err(e) = tx_clone.send(message) {
-                                        eprintln!("Failed to send transcription: {}", e);
-                                    }
-                                }
-                            });
-                        }
-
-                        let thread_processing_time = thread_start_time.elapsed();
-
-                        if log_stats_enabled {
-                            println!(
-                                "Task processing started for {} - Setup time: {:.2}s",
-                                segment_info,
-                                thread_processing_time.as_secs_f32()
-                            );
-                        }
+                        Self::process_segment(
+                            segment,
+                            backend.clone(),
+                            language.clone(),
+                            transcription_stats.clone(),
+                            audio_visualization_data.clone(),
+                            transcript_tx.clone(),
+                            magic_mode_enabled.clone(),
+                            enhancement_model.clone(),
+                            log_stats_enabled,
+                        )
+                        .await;
                     }
                     None => {
                         // Channel closed
@@ -526,7 +520,14 @@ impl TranscriptionProcessor {
             println!(
                 "EXPERIMENTAL: Processing entire recording as single segment (chunking disabled)"
             );
-            let result = Self::transcribe_segment(backend, segment, language, stats, audio_visualization_data, None);
+            let result = Self::transcribe_segment(
+                backend,
+                segment,
+                language,
+                stats,
+                audio_visualization_data,
+                None,
+            );
             let processing_time = start_time.elapsed();
             println!(
                 "Manual segment processing completed in {:.2}s",
@@ -540,11 +541,24 @@ impl TranscriptionProcessor {
         let chunk_threshold = app_config.manual_mode_config.chunk_duration_seconds as f64;
         if duration >= chunk_threshold {
             println!("Large manual segment detected, processing in chunks...");
-            return Self::process_large_manual_segment(backend, segment, language, stats, audio_visualization_data);
+            return Self::process_large_manual_segment(
+                backend,
+                segment,
+                language,
+                stats,
+                audio_visualization_data,
+            );
         }
 
         // Process normally for smaller manual segments
-        let result = Self::transcribe_segment(backend, segment, language, stats, audio_visualization_data, None);
+        let result = Self::transcribe_segment(
+            backend,
+            segment,
+            language,
+            stats,
+            audio_visualization_data,
+            None,
+        );
 
         let processing_time = start_time.elapsed();
         println!(
@@ -581,18 +595,17 @@ impl TranscriptionProcessor {
         let pause_points = find_pause_points(&segment.samples, sample_rate);
 
         if !pause_points.is_empty() {
-            println!("Found {} natural pause point(s) in audio", pause_points.len());
+            println!(
+                "Found {} natural pause point(s) in audio",
+                pause_points.len()
+            );
         } else {
             println!("No natural pauses detected, using time-based chunking");
         }
 
         // Build chunk ranges using pause points as preferred boundaries
-        let chunk_ranges = Self::build_vad_guided_chunks(
-            total_len,
-            max_chunk_samples,
-            &pause_points,
-            sample_rate,
-        );
+        let chunk_ranges =
+            Self::build_vad_guided_chunks(total_len, max_chunk_samples, &pause_points, sample_rate);
 
         println!("Split into {} chunk(s)", chunk_ranges.len());
 
@@ -776,7 +789,10 @@ impl TranscriptionProcessor {
                         println!("Loading enhancement model from: {:?}", path);
                         match crate::enhancement::load_model(&path) {
                             Ok(model) => {
-                                println!("Enhancement model '{}' loaded successfully", model.name());
+                                println!(
+                                    "Enhancement model '{}' loaded successfully",
+                                    model.name()
+                                );
                                 *model_guard = Some(model);
                             }
                             Err(e) => {
