@@ -17,8 +17,6 @@ mod global_shortcuts;
 use ashpd::register_host_app;
 use ashpd::AppID;
 use clap::{Parser, Subcommand, ValueEnum};
-use std::sync::mpsc as std_mpsc;
-use std::thread;
 use std::time::Duration;
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -90,13 +88,16 @@ async fn main() -> anyhow::Result<()> {
 
     // Set stable portal App ID env var early for consistent identity across launches
     if std::env::var_os("XDG_DESKTOP_PORTAL_APPLICATION_ID").is_none() {
-        std::env::set_var("XDG_DESKTOP_PORTAL_APPLICATION_ID", sonori::config::APPLICATION_ID);
+        std::env::set_var(
+            "XDG_DESKTOP_PORTAL_APPLICATION_ID",
+            sonori::config::APPLICATION_ID,
+        );
     }
 
     // Register with the portal system for persistent permissions
     // This is critical for GlobalShortcuts and other portals to recognize the app across launches
-    let app_id = AppID::try_from(sonori::config::APPLICATION_ID)
-        .expect("Invalid application ID constant");
+    let app_id =
+        AppID::try_from(sonori::config::APPLICATION_ID).expect("Invalid application ID constant");
     if let Err(e) = register_host_app(app_id).await {
         eprintln!("Warning: Failed to register host app with portals: {}", e);
         eprintln!("Portal permissions may not persist across restarts.");
@@ -443,16 +444,10 @@ async fn run_gui_mode(
         println!("Shutdown monitor detected shutdown, waiting for event loop to exit");
     });
 
-    // Clipboard worker: forward transcript chunks to clipboard
-    let (clipboard_tx, clipboard_rx) = std_mpsc::channel::<String>();
-    // Portal worker: separate channel to avoid moving the same receiver twice
-    let (portal_tx, portal_rx) = std_mpsc::channel::<String>();
-
-    // In portal mode we will handle clipboard inside the portal worker to ensure paste uses
-    // the correct, freshly-copied contents. Otherwise, run a dedicated clipboard worker.
-
-    let clipboard_tx_clone = clipboard_tx.clone();
-    let portal_tx_clone = portal_tx.clone();
+    // Single bounded queue for clipboard/paste work.
+    // This avoids unbounded growth and keeps worker ownership simple.
+    let (paste_tx, mut paste_rx) = tokio::sync::mpsc::channel::<String>(128);
+    let paste_tx_clone = paste_tx.clone();
     let audio_processor_for_session = transcriber.get_audio_processor();
 
     // Transcript history saving config
@@ -460,7 +455,16 @@ async fn run_gui_mode(
     let transcript_history_path = app_config.debug_config.transcript_history_path.clone();
 
     tokio::spawn(async move {
-        while let Ok(message) = transcript_rx.recv().await {
+        loop {
+            let message = match transcript_rx.recv().await {
+                Ok(message) => message,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    eprintln!("Transcript consumer lagged; skipped {} message(s)", skipped);
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
+
             // Get current session ID to filter stale transcriptions
             let current_session_id = if let Some(ref ap) = audio_processor_for_session {
                 ap.get_session_id()
@@ -490,8 +494,10 @@ async fn run_gui_mode(
                 history.push_str(&transcription);
                 history.clone()
             };
-            let mut audio_data = audio_visualization_data_for_thread.write();
-            audio_data.transcript = updated_transcript;
+            {
+                let mut audio_data = audio_visualization_data_for_thread.write();
+                audio_data.transcript = updated_transcript;
+            }
 
             // Save transcript to history file if enabled
             if let Err(e) = sonori::transcript_writer::append_to_transcript_history(
@@ -506,80 +512,112 @@ async fn run_gui_mode(
             let segment_with_space = if history_len_before > 0 {
                 format!(" {}", transcription)
             } else {
-                transcription.clone()
+                transcription
             };
-            let _ = clipboard_tx_clone.send(segment_with_space.clone());
-            let _ = portal_tx_clone.send(segment_with_space);
+            if let Err(e) = paste_tx_clone.try_send(segment_with_space) {
+                match e {
+                    tokio::sync::mpsc::error::TrySendError::Full(_) => {
+                        eprintln!("Paste queue full; dropping transcript paste update");
+                    }
+                    tokio::sync::mpsc::error::TrySendError::Closed(_) => break,
+                }
+            }
         }
     });
 
-    // Portal paste worker: establish a portal session and paste on demand (only if enabled)
+    // Paste worker: establish portal session when enabled, otherwise use key injection fallback.
     let paste_shortcut = app_config.portal_config.paste_shortcut.clone();
     if app_config.portal_config.enable_xdg_portal {
         let paste_shortcut = paste_shortcut.clone();
         tokio::spawn(async move {
-            // Attempt to start screencast + remote desktop session
-            let portal = portal_input::PortalInput::new().await;
-            let portal = match portal {
-                Ok(p) => p,
+            let portal = match portal_input::PortalInput::new().await {
+                Ok(p) => Some(p),
                 Err(e) => {
-                    eprintln!("Portal integration disabled: {}. Falling back to wtype/dotool.", e);
-                    loop {
-                        match portal_rx.recv_timeout(Duration::from_millis(500)) {
-                            Ok(text) => {
-                                let _ = copy::WlCopy::copy_to_clipboard(&text);
-                                thread::sleep(Duration::from_millis(50));
-                                if let Err(e) = copy::paste_via_keystroke(&paste_shortcut) {
-                                    eprintln!("Paste fallback failed: {}", e);
-                                }
-                            }
-                            Err(std_mpsc::RecvTimeoutError::Timeout) => {}
-                            Err(std_mpsc::RecvTimeoutError::Disconnected) => break,
-                        }
-                    }
-                    return;
+                    eprintln!(
+                        "Portal integration disabled: {}. Falling back to wtype/dotool.",
+                        e
+                    );
+                    None
                 }
             };
 
-            // Drain the channel and paste using configured shortcut
-            loop {
-                match portal_rx.recv_timeout(Duration::from_millis(500)) {
-                    Ok(text) => {
-                        // Copy to clipboard (using our simplified wayland connection)
-                        let _ = copy::WlCopy::copy_to_clipboard(&text);
-
-                        // Wait a bit for clipboard to be ready
-                        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-
-                        // Use configured paste shortcut
-                        let result = if paste_shortcut == "ctrl_v" {
-                            portal.paste_via_ctrl_v().await
-                        } else {
-                            // Default to ctrl_shift_v (works in terminals, mostly harmless elsewhere)
-                            portal.paste_via_ctrl_shift_v().await
-                        };
-
-                        if let Err(e) = result {
-                            eprintln!("Portal paste failed: {}", e);
-                        }
+            while let Some(text) = paste_rx.recv().await {
+                let text_for_copy = text.clone();
+                match tokio::task::spawn_blocking(move || {
+                    copy::WlCopy::copy_to_clipboard(&text_for_copy)
+                })
+                .await
+                {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => {
+                        eprintln!("Clipboard copy failed: {}", e);
+                        continue;
                     }
-                    Err(std_mpsc::RecvTimeoutError::Timeout) => {}
-                    Err(std_mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(e) => {
+                        eprintln!("Clipboard worker failed: {}", e);
+                        continue;
+                    }
+                }
+
+                // Give clipboard managers a short moment before paste injection.
+                tokio::time::sleep(Duration::from_millis(50)).await;
+
+                if let Some(portal) = portal.as_ref() {
+                    let result = if paste_shortcut == "ctrl_v" {
+                        portal.paste_via_ctrl_v().await
+                    } else {
+                        portal.paste_via_ctrl_shift_v().await
+                    };
+
+                    if let Err(e) = result {
+                        eprintln!("Portal paste failed: {}", e);
+                    }
+                } else {
+                    let paste_shortcut = paste_shortcut.clone();
+                    match tokio::task::spawn_blocking(move || {
+                        copy::paste_via_keystroke(&paste_shortcut)
+                    })
+                    .await
+                    {
+                        Ok(Ok(())) => {}
+                        Ok(Err(e)) => eprintln!("Paste fallback failed: {}", e),
+                        Err(e) => eprintln!("Paste fallback worker failed: {}", e),
+                    }
                 }
             }
         });
     } else {
-        thread::spawn(move || loop {
-            match clipboard_rx.recv_timeout(Duration::from_millis(500)) {
-                Ok(text) => {
-                    let _ = copy::WlCopy::copy_to_clipboard(&text);
-                    thread::sleep(Duration::from_millis(50));
-                    if let Err(e) = copy::paste_via_keystroke(&paste_shortcut) {
-                        eprintln!("Paste failed: {}", e);
+        tokio::spawn(async move {
+            while let Some(text) = paste_rx.recv().await {
+                let text_for_copy = text.clone();
+                match tokio::task::spawn_blocking(move || {
+                    copy::WlCopy::copy_to_clipboard(&text_for_copy)
+                })
+                .await
+                {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => {
+                        eprintln!("Clipboard copy failed: {}", e);
+                        continue;
+                    }
+                    Err(e) => {
+                        eprintln!("Clipboard worker failed: {}", e);
+                        continue;
                     }
                 }
-                Err(std_mpsc::RecvTimeoutError::Timeout) => {}
-                Err(std_mpsc::RecvTimeoutError::Disconnected) => break,
+
+                tokio::time::sleep(Duration::from_millis(50)).await;
+
+                let paste_shortcut = paste_shortcut.clone();
+                match tokio::task::spawn_blocking(move || {
+                    copy::paste_via_keystroke(&paste_shortcut)
+                })
+                .await
+                {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => eprintln!("Paste failed: {}", e),
+                    Err(e) => eprintln!("Paste worker failed: {}", e),
+                }
             }
         });
     }
