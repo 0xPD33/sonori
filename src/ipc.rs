@@ -81,19 +81,21 @@ impl IpcResponse {
 
 /// Get the default socket path
 pub fn get_socket_path() -> PathBuf {
-    let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
-        .unwrap_or_else(|_| {
-            // Fallback: try to determine UID from /proc/self
-            let uid = std::fs::read_to_string("/proc/self/loginuid")
-                .ok()
-                .and_then(|s| s.trim().parse::<u32>().ok())
-                .unwrap_or(1000);
-            format!("/run/user/{}", uid)
-        });
-    PathBuf::from(runtime_dir).join("sonori").join("control.sock")
+    let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| {
+        // Fallback: try to determine UID from /proc/self
+        let uid = std::fs::read_to_string("/proc/self/loginuid")
+            .ok()
+            .and_then(|s| s.trim().parse::<u32>().ok())
+            .unwrap_or(1000);
+        format!("/run/user/{}", uid)
+    });
+    PathBuf::from(runtime_dir)
+        .join("sonori")
+        .join("control.sock")
 }
 
 /// IPC server that listens for commands from CLI clients
+#[derive(Clone)]
 pub struct IpcServer {
     socket_path: PathBuf,
     manual_session_tx: mpsc::Sender<ManualSessionCommand>,
@@ -122,16 +124,15 @@ impl IpcServer {
     pub async fn run(&self) -> Result<()> {
         // Create socket directory
         if let Some(socket_dir) = self.socket_path.parent() {
-            std::fs::create_dir_all(socket_dir)
-                .context("Failed to create socket directory")?;
+            std::fs::create_dir_all(socket_dir).context("Failed to create socket directory")?;
         }
 
         // Remove stale socket if exists
         let _ = std::fs::remove_file(&self.socket_path);
 
         // Bind to socket
-        let listener = UnixListener::bind(&self.socket_path)
-            .context("Failed to bind IPC socket")?;
+        let listener =
+            UnixListener::bind(&self.socket_path).context("Failed to bind IPC socket")?;
 
         // Set permissions (user-only: 0600)
         std::fs::set_permissions(&self.socket_path, std::fs::Permissions::from_mode(0o600))
@@ -145,10 +146,13 @@ impl IpcServer {
                 accept_result = listener.accept() => {
                     match accept_result {
                         Ok((stream, _)) => {
-                            let response = self.handle_connection(stream).await;
-                            if let Err(e) = response {
-                                eprintln!("IPC connection error: {}", e);
-                            }
+                            let server = self.clone();
+                            tokio::spawn(async move {
+                                let response = server.handle_connection(stream).await;
+                                if let Err(e) = response {
+                                    eprintln!("IPC connection error: {}", e);
+                                }
+                            });
                         }
                         Err(e) => {
                             eprintln!("IPC accept error: {}", e);
@@ -174,8 +178,19 @@ impl IpcServer {
         let mut reader = BufReader::new(reader);
         let mut line = String::new();
 
-        // Read command (single line JSON)
-        reader.read_line(&mut line).await?;
+        // Read command (single line JSON) with timeout so one idle client
+        // cannot block this connection task forever.
+        match tokio::time::timeout(
+            tokio::time::Duration::from_secs(5),
+            reader.read_line(&mut line),
+        )
+        .await
+        {
+            Ok(Ok(0)) => return Ok(()), // Peer closed connection
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => return Err(e.into()),
+            Err(_) => return Err(anyhow!("Timed out waiting for IPC command")),
+        }
         let line = line.trim();
 
         if line.is_empty() {
@@ -231,7 +246,9 @@ impl IpcServer {
             }
         } else {
             // In realtime mode, just report status
-            IpcResponse::error("Toggle only works in manual mode. Use 'sonori switch-mode manual' first.")
+            IpcResponse::error(
+                "Toggle only works in manual mode. Use 'sonori switch-mode manual' first.",
+            )
         }
     }
 
@@ -300,7 +317,12 @@ impl IpcServer {
         let new_mode = match mode_str.to_lowercase().as_str() {
             "manual" => TranscriptionMode::Manual,
             "realtime" => TranscriptionMode::RealTime,
-            _ => return IpcResponse::error(format!("Unknown mode: {}. Use 'manual' or 'realtime'.", mode_str)),
+            _ => {
+                return IpcResponse::error(format!(
+                    "Unknown mode: {}. Use 'manual' or 'realtime'.",
+                    mode_str
+                ))
+            }
         };
 
         let command = ManualSessionCommand::SwitchMode(new_mode);
@@ -347,8 +369,8 @@ pub async fn send_command(cmd: IpcCommand) -> Result<IpcResponse> {
     let mut response_line = String::new();
     reader.read_line(&mut response_line).await?;
 
-    let response: IpcResponse = serde_json::from_str(response_line.trim())
-        .context("Invalid response from Sonori")?;
+    let response: IpcResponse =
+        serde_json::from_str(response_line.trim()).context("Invalid response from Sonori")?;
 
     Ok(response)
 }
