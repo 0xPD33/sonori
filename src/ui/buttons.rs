@@ -84,15 +84,15 @@ pub struct ButtonManager {
     active_button: Option<ButtonType>,
     recording: Option<Arc<AtomicBool>>,
     transcription_mode: crate::real_time_transcriber::TranscriptionMode,
-    enhancement_enabled: bool,  // Config: whether MagicMode feature is available (shows button)
-    magic_mode_active: bool,    // Runtime: whether MagicMode is currently toggled on (affects opacity)
+    enhancement_enabled: bool, // Config: whether MagicMode feature is available (shows button)
+    magic_mode_active: bool, // Runtime: whether MagicMode is currently toggled on (affects opacity)
     // Texture cache
     copy_texture: Option<ButtonTexture>,
     reset_texture: Option<ButtonTexture>,
     pause_texture: Option<ButtonTexture>,
     play_texture: Option<ButtonTexture>,
     accept_texture: Option<ButtonTexture>,
-    magic_wand_texture: Option<ButtonTexture>,  // Single texture with opacity control
+    magic_wand_texture: Option<ButtonTexture>, // Single texture with opacity control
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::TextureFormat,
@@ -324,7 +324,7 @@ impl Button {
                     ButtonType::RecordToggle => Some("vs_copy"),
                     ButtonType::Accept => Some("vs_copy"), // Use texture-based rendering
                     ButtonType::ModeToggle => Some("vs_close"), // Use close vertex shader
-                    ButtonType::MagicMode => Some("vs_copy"),  // Use texture-based rendering
+                    ButtonType::MagicMode => Some("vs_copy"), // Use texture-based rendering
                 },
                 buffers: &[wgpu::VertexBufferLayout {
                     array_stride: 8,
@@ -520,9 +520,7 @@ impl Button {
         transcription_mode: Option<crate::real_time_transcriber::TranscriptionMode>,
     ) {
         // Update rotation buffer if needed
-        if self.button_type == ButtonType::Close
-            || self.button_type == ButtonType::ModeToggle
-        {
+        if self.button_type == ButtonType::Close || self.button_type == ButtonType::ModeToggle {
             let mode_value = if self.button_type == ButtonType::ModeToggle {
                 transcription_mode.map(|mode| match mode {
                     crate::real_time_transcriber::TranscriptionMode::RealTime => 0.0,
@@ -575,9 +573,7 @@ impl Button {
         render_pass.set_pipeline(&self.pipeline);
 
         // Set the appropriate bind group
-        if self.button_type == ButtonType::Close
-            || self.button_type == ButtonType::ModeToggle
-        {
+        if self.button_type == ButtonType::Close || self.button_type == ButtonType::ModeToggle {
             // Set rotation uniform bind group for shader-based buttons
             if let Some(bind_group) = &self.rotation_bind_group {
                 render_pass.set_bind_group(0, bind_group, &[]);
@@ -608,13 +604,20 @@ impl ButtonManager {
         ButtonLayoutParams {
             regular_button_size: (COPY_BUTTON_BASE_SIZE * scale_factor) as u32,
             close_button_size: (CLOSE_BUTTON_BASE_SIZE * scale_factor) as u32,
-            margin: ((window_width as f32) * BUTTON_MARGIN_RATIO).max(6.0).min(16.0) as u32,
-            spacing: ((window_width as f32) * BUTTON_SPACING_RATIO).max(4.0).min(12.0) as u32,
+            margin: ((window_width as f32) * BUTTON_MARGIN_RATIO)
+                .max(6.0)
+                .min(16.0) as u32,
+            spacing: ((window_width as f32) * BUTTON_SPACING_RATIO)
+                .max(4.0)
+                .min(12.0) as u32,
         }
     }
 
     #[allow(dead_code)]
-    fn calculate_button_layout(&self, button_types: &[ButtonType]) -> Vec<(ButtonType, (u32, u32))> {
+    fn calculate_button_layout(
+        &self,
+        button_types: &[ButtonType],
+    ) -> Vec<(ButtonType, (u32, u32))> {
         let params = Self::calculate_layout_params(self.window_width);
         let bottom_buttons: Vec<_> = button_types
             .iter()
@@ -636,7 +639,9 @@ impl ButtonManager {
         // Calculate positions for bottom buttons
         for (i, &button_type) in bottom_buttons.iter().enumerate() {
             let button_x = start_x + (i as u32) * (params.regular_button_size + params.spacing);
-            let button_y = (self.text_area_height as f32 * 0.95) as u32 - params.regular_button_size - params.margin;
+            let button_y = (self.text_area_height as f32 * 0.95) as u32
+                - params.regular_button_size
+                - params.margin;
             layout.push((button_type, (button_x, button_y)));
         }
 
@@ -652,7 +657,8 @@ impl ButtonManager {
 
     #[allow(dead_code)]
     fn update_all_button_positions(&mut self) {
-        let button_types = Self::get_button_types(self.transcription_mode, self.enhancement_enabled);
+        let button_types =
+            Self::get_button_types(self.transcription_mode, self.enhancement_enabled);
 
         let layout = self.calculate_button_layout(&button_types);
         let params = Self::calculate_layout_params(self.window_width);
@@ -819,13 +825,9 @@ impl ButtonManager {
         button_type: ButtonType,
         format: wgpu::TextureFormat,
     ) {
-        if let Ok(texture) = ButtonTexture::from_bytes(
-            device,
-            queue,
-            image_bytes,
-            Some(texture_name),
-            format,
-        ) {
+        if let Ok(texture) =
+            ButtonTexture::from_bytes(device, queue, image_bytes, Some(texture_name), format)
+        {
             // Store the texture in the appropriate cache field
             match button_type {
                 ButtonType::Copy => self.copy_texture = Some(texture.clone()),
@@ -857,28 +859,69 @@ impl ButtonManager {
     ) {
         // Load all button textures using the helper function
         if let Some(image_bytes) = copy_image_bytes {
-            self.load_single_texture(device, queue, image_bytes, "Copy Button Texture", ButtonType::Copy, format);
+            self.load_single_texture(
+                device,
+                queue,
+                image_bytes,
+                "Copy Button Texture",
+                ButtonType::Copy,
+                format,
+            );
         }
 
         if let Some(image_bytes) = reset_image_bytes {
-            self.load_single_texture(device, queue, image_bytes, "Reset Button Texture", ButtonType::Reset, format);
+            self.load_single_texture(
+                device,
+                queue,
+                image_bytes,
+                "Reset Button Texture",
+                ButtonType::Reset,
+                format,
+            );
         }
 
         if let Some(image_bytes) = pause_image_bytes {
-            self.load_single_texture(device, queue, image_bytes, "Pause Button Texture", ButtonType::Pause, format);
+            self.load_single_texture(
+                device,
+                queue,
+                image_bytes,
+                "Pause Button Texture",
+                ButtonType::Pause,
+                format,
+            );
         }
 
         if let Some(image_bytes) = play_image_bytes {
-            self.load_single_texture(device, queue, image_bytes, "Play Button Texture", ButtonType::Play, format);
+            self.load_single_texture(
+                device,
+                queue,
+                image_bytes,
+                "Play Button Texture",
+                ButtonType::Play,
+                format,
+            );
         }
 
         if let Some(image_bytes) = accept_image_bytes {
-            self.load_single_texture(device, queue, image_bytes, "Accept Button Texture", ButtonType::Accept, format);
+            self.load_single_texture(
+                device,
+                queue,
+                image_bytes,
+                "Accept Button Texture",
+                ButtonType::Accept,
+                format,
+            );
         }
 
         // Load magic wand texture (single texture with opacity control)
         if let Some(image_bytes) = magic_wand_image_bytes {
-            if let Ok(texture) = ButtonTexture::from_bytes(device, queue, image_bytes, Some("Magic Wand Texture"), format) {
+            if let Ok(texture) = ButtonTexture::from_bytes(
+                device,
+                queue,
+                image_bytes,
+                Some("Magic Wand Texture"),
+                format,
+            ) {
                 self.magic_wand_texture = Some(texture.clone());
 
                 // Create the opacity bind group for the MagicMode button
@@ -894,14 +937,18 @@ impl ButtonManager {
                                         ty: wgpu::BindingType::Texture {
                                             multisampled: false,
                                             view_dimension: wgpu::TextureViewDimension::D2,
-                                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                                            sample_type: wgpu::TextureSampleType::Float {
+                                                filterable: true,
+                                            },
                                         },
                                         count: None,
                                     },
                                     wgpu::BindGroupLayoutEntry {
                                         binding: 1,
                                         visibility: wgpu::ShaderStages::FRAGMENT,
-                                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                                        ty: wgpu::BindingType::Sampler(
+                                            wgpu::SamplerBindingType::Filtering,
+                                        ),
                                         count: None,
                                     },
                                     wgpu::BindGroupLayoutEntry {
@@ -919,24 +966,25 @@ impl ButtonManager {
                             });
 
                         // Create the bind group with texture, sampler, and opacity
-                        let opacity_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                            layout: &bind_group_layout,
-                            entries: &[
-                                wgpu::BindGroupEntry {
-                                    binding: 0,
-                                    resource: wgpu::BindingResource::TextureView(&texture.view),
-                                },
-                                wgpu::BindGroupEntry {
-                                    binding: 1,
-                                    resource: wgpu::BindingResource::Sampler(&texture.sampler),
-                                },
-                                wgpu::BindGroupEntry {
-                                    binding: 2,
-                                    resource: opacity_buffer.as_entire_binding(),
-                                },
-                            ],
-                            label: Some("MagicMode Opacity Bind Group"),
-                        });
+                        let opacity_bind_group =
+                            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                                layout: &bind_group_layout,
+                                entries: &[
+                                    wgpu::BindGroupEntry {
+                                        binding: 0,
+                                        resource: wgpu::BindingResource::TextureView(&texture.view),
+                                    },
+                                    wgpu::BindGroupEntry {
+                                        binding: 1,
+                                        resource: wgpu::BindingResource::Sampler(&texture.sampler),
+                                    },
+                                    wgpu::BindGroupEntry {
+                                        binding: 2,
+                                        resource: opacity_buffer.as_entire_binding(),
+                                    },
+                                ],
+                                label: Some("MagicMode Opacity Bind Group"),
+                            });
 
                         button.opacity_bind_group = Some(opacity_bind_group);
                         button.texture = Some(texture);
@@ -958,10 +1006,11 @@ impl ButtonManager {
         self.window_height = window_size.height;
 
         // Define the correct button order based on current mode
-        let button_order: Vec<_> = Self::get_button_types(self.transcription_mode, self.enhancement_enabled)
-            .into_iter()
-            .filter(|&bt| bt != ButtonType::Close)
-            .collect();
+        let button_order: Vec<_> =
+            Self::get_button_types(self.transcription_mode, self.enhancement_enabled)
+                .into_iter()
+                .filter(|&bt| bt != ButtonType::Close)
+                .collect();
 
         // Filter to only buttons that actually exist
         let bottom_buttons: Vec<_> = button_order
@@ -982,9 +1031,10 @@ impl ButtonManager {
                 let button_x = start_x + (i as u32) * (button_size + button_spacing);
                 // Position buttons much closer to the bottom of the text area (95% of text area height)
                 let button_size = Self::calculate_button_size(self.window_width, false);
-            let _button_spacing = Self::calculate_button_spacing(self.window_width);
-            let button_margin = Self::calculate_button_margin(self.window_width);
-            let button_y = (self.text_area_height as f32 * 0.95) as u32 - button_size - button_margin;
+                let _button_spacing = Self::calculate_button_spacing(self.window_width);
+                let button_margin = Self::calculate_button_margin(self.window_width);
+                let button_y =
+                    (self.text_area_height as f32 * 0.95) as u32 - button_size - button_margin;
                 button.position = (button_x, button_y);
                 button.size = (button_size, button_size);
             }
@@ -1233,7 +1283,8 @@ impl ButtonManager {
 
     fn update_button_layout_for_mode(&mut self) {
         // Define button sets based on transcription mode
-        let new_button_types = Self::get_button_types(self.transcription_mode, self.enhancement_enabled);
+        let new_button_types =
+            Self::get_button_types(self.transcription_mode, self.enhancement_enabled);
 
         // Remove buttons that are no longer needed
         let current_types: Vec<ButtonType> = self.buttons.keys().cloned().collect();
@@ -1258,7 +1309,8 @@ impl ButtonManager {
 
     fn add_button(&mut self, button_type: ButtonType) {
         let position = (0, 0); // Temporary position, will be recalculated
-        let button_size = Self::calculate_button_size(self.window_width, button_type == ButtonType::Close);
+        let button_size =
+            Self::calculate_button_size(self.window_width, button_type == ButtonType::Close);
         let size = (button_size, button_size);
 
         let button = Button::new(
@@ -1309,8 +1361,8 @@ impl ButtonManager {
                     if let Some(button) = self.buttons.get_mut(&ButtonType::MagicMode) {
                         if let Some(opacity_buffer) = &button.opacity_buffer {
                             // Create bind group layout for texture + sampler + opacity
-                            let bind_group_layout =
-                                self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                            let bind_group_layout = self.device.create_bind_group_layout(
+                                &wgpu::BindGroupLayoutDescriptor {
                                     entries: &[
                                         wgpu::BindGroupLayoutEntry {
                                             binding: 0,
@@ -1318,14 +1370,18 @@ impl ButtonManager {
                                             ty: wgpu::BindingType::Texture {
                                                 multisampled: false,
                                                 view_dimension: wgpu::TextureViewDimension::D2,
-                                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                                                sample_type: wgpu::TextureSampleType::Float {
+                                                    filterable: true,
+                                                },
                                             },
                                             count: None,
                                         },
                                         wgpu::BindGroupLayoutEntry {
                                             binding: 1,
                                             visibility: wgpu::ShaderStages::FRAGMENT,
-                                            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                                            ty: wgpu::BindingType::Sampler(
+                                                wgpu::SamplerBindingType::Filtering,
+                                            ),
                                             count: None,
                                         },
                                         wgpu::BindGroupLayoutEntry {
@@ -1340,27 +1396,33 @@ impl ButtonManager {
                                         },
                                     ],
                                     label: Some("MagicMode Opacity Bind Group Layout"),
-                                });
+                                },
+                            );
 
                             // Create the bind group with texture, sampler, and opacity
-                            let opacity_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                                layout: &bind_group_layout,
-                                entries: &[
-                                    wgpu::BindGroupEntry {
-                                        binding: 0,
-                                        resource: wgpu::BindingResource::TextureView(&texture.view),
-                                    },
-                                    wgpu::BindGroupEntry {
-                                        binding: 1,
-                                        resource: wgpu::BindingResource::Sampler(&texture.sampler),
-                                    },
-                                    wgpu::BindGroupEntry {
-                                        binding: 2,
-                                        resource: opacity_buffer.as_entire_binding(),
-                                    },
-                                ],
-                                label: Some("MagicMode Opacity Bind Group"),
-                            });
+                            let opacity_bind_group =
+                                self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                                    layout: &bind_group_layout,
+                                    entries: &[
+                                        wgpu::BindGroupEntry {
+                                            binding: 0,
+                                            resource: wgpu::BindingResource::TextureView(
+                                                &texture.view,
+                                            ),
+                                        },
+                                        wgpu::BindGroupEntry {
+                                            binding: 1,
+                                            resource: wgpu::BindingResource::Sampler(
+                                                &texture.sampler,
+                                            ),
+                                        },
+                                        wgpu::BindGroupEntry {
+                                            binding: 2,
+                                            resource: opacity_buffer.as_entire_binding(),
+                                        },
+                                    ],
+                                    label: Some("MagicMode Opacity Bind Group"),
+                                });
 
                             button.opacity_bind_group = Some(opacity_bind_group);
                             button.texture = Some(texture.clone());
@@ -1378,10 +1440,11 @@ impl ButtonManager {
 
     fn recalculate_button_positions(&mut self) {
         // Define the correct button order based on current mode
-        let button_order: Vec<_> = Self::get_button_types(self.transcription_mode, self.enhancement_enabled)
-            .into_iter()
-            .filter(|&bt| bt != ButtonType::Close)
-            .collect();
+        let button_order: Vec<_> =
+            Self::get_button_types(self.transcription_mode, self.enhancement_enabled)
+                .into_iter()
+                .filter(|&bt| bt != ButtonType::Close)
+                .collect();
 
         // Filter to only buttons that actually exist
         let bottom_buttons: Vec<_> = button_order
@@ -1402,9 +1465,10 @@ impl ButtonManager {
                 let button_x = start_x + (i as u32) * (button_size + button_spacing);
                 // Position buttons much closer to the bottom of the text area (95% of text area height)
                 let button_size = Self::calculate_button_size(self.window_width, false);
-            let _button_spacing = Self::calculate_button_spacing(self.window_width);
-            let button_margin = Self::calculate_button_margin(self.window_width);
-            let button_y = (self.text_area_height as f32 * 0.95) as u32 - button_size - button_margin;
+                let _button_spacing = Self::calculate_button_spacing(self.window_width);
+                let button_margin = Self::calculate_button_margin(self.window_width);
+                let button_y =
+                    (self.text_area_height as f32 * 0.95) as u32 - button_size - button_margin;
                 button.position = (button_x, button_y);
                 button.size = (button_size, button_size);
             }
@@ -1486,10 +1550,11 @@ impl ButtonManager {
     /// Returns (x, y, width, height) in pixels
     pub fn get_button_panel_bounds(&self) -> Option<(f32, f32, f32, f32)> {
         // Get the button order based on current mode (excluding Close)
-        let button_order: Vec<_> = Self::get_button_types(self.transcription_mode, self.enhancement_enabled)
-            .into_iter()
-            .filter(|&bt| bt != ButtonType::Close)
-            .collect();
+        let button_order: Vec<_> =
+            Self::get_button_types(self.transcription_mode, self.enhancement_enabled)
+                .into_iter()
+                .filter(|&bt| bt != ButtonType::Close)
+                .collect();
 
         // Filter to only buttons that exist
         let bottom_buttons: Vec<_> = button_order

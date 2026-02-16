@@ -45,21 +45,19 @@ impl MoonshineTokenizer {
             ))
         })?;
 
-        let bos_token_id = resolve_special_token(&tokenizer, &BOS_TOKEN_CANDIDATES).ok_or_else(
-            || {
+        let bos_token_id =
+            resolve_special_token(&tokenizer, &BOS_TOKEN_CANDIDATES).ok_or_else(|| {
                 TranscriptionError::ModelNotAvailable(
                     "Moonshine tokenizer missing BOS token".to_string(),
                 )
-            },
-        )?;
+            })?;
 
-        let eos_token_id = resolve_special_token(&tokenizer, &EOS_TOKEN_CANDIDATES).ok_or_else(
-            || {
+        let eos_token_id =
+            resolve_special_token(&tokenizer, &EOS_TOKEN_CANDIDATES).ok_or_else(|| {
                 TranscriptionError::ModelNotAvailable(
                     "Moonshine tokenizer missing EOS token".to_string(),
                 )
-            },
-        )?;
+            })?;
 
         Ok(Self {
             tokenizer,

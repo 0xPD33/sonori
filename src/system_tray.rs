@@ -90,7 +90,8 @@ impl StatusNotifierItem {
             "Idle"
         };
 
-        let mode = match TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed)) {
+        let mode = match TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed))
+        {
             TranscriptionMode::RealTime => "Real-time",
             TranscriptionMode::Manual => "Manual",
         };
@@ -206,7 +207,8 @@ impl DbusMenu {
         let command = match id {
             MENU_TOGGLE_RECORDING => {
                 // Send the appropriate command based on current mode
-                let mode = TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed));
+                let mode =
+                    TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed));
                 match mode {
                     TranscriptionMode::Manual => Some(TrayCommand::ToggleManualSession),
                     TranscriptionMode::RealTime => Some(TrayCommand::ToggleRecording),

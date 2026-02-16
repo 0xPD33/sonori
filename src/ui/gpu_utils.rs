@@ -128,10 +128,18 @@ impl GpuQuadRenderer {
         bind_groups: &[Option<&wgpu::BindGroup>],
         label: &str,
     ) {
-        let mut render_pass = Self::create_render_pass(encoder, view, &format!("{} Render Pass", label));
+        let mut render_pass =
+            Self::create_render_pass(encoder, view, &format!("{} Render Pass", label));
 
         // Set viewport
-        render_pass.set_viewport(viewport_x, viewport_y, viewport_width, viewport_height, 0.0, 1.0);
+        render_pass.set_viewport(
+            viewport_x,
+            viewport_y,
+            viewport_width,
+            viewport_height,
+            0.0,
+            1.0,
+        );
 
         // Set pipeline and bind groups
         render_pass.set_pipeline(&self.pipeline);

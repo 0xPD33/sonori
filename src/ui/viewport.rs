@@ -57,11 +57,7 @@ impl Viewport {
     }
 
     /// Create a viewport for a scrollbar track
-    pub fn for_scrollbar_track(
-        window_width: u32,
-        text_area_height: u32,
-        gap: u32,
-    ) -> Self {
+    pub fn for_scrollbar_track(window_width: u32, text_area_height: u32, gap: u32) -> Self {
         Self::new(
             (window_width as f32) - 8.0, // Right edge, 8px wide
             0.0,
@@ -113,13 +109,24 @@ impl Viewport {
 
     /// Get viewport as tuple for wgpu set_viewport() call
     pub fn as_tuple(&self) -> (f32, f32, f32, f32, f32, f32) {
-        (self.x, self.y, self.width, self.height, self.min_depth, self.max_depth)
+        (
+            self.x,
+            self.y,
+            self.width,
+            self.height,
+            self.min_depth,
+            self.max_depth,
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_close(actual: f32, expected: f32) {
+        assert!((actual - expected).abs() < 1e-4);
+    }
 
     #[test]
     fn test_full_screen_viewport() {
@@ -134,10 +141,10 @@ mod tests {
     fn test_animation_scale() {
         let vp = Viewport::new(0.0, 0.0, 100.0, 100.0);
         let scaled = vp.with_animation_scale(1.2);
-        assert_eq!(scaled.width, 120.0);
-        assert_eq!(scaled.height, 120.0);
+        assert_close(scaled.width, 120.0);
+        assert_close(scaled.height, 120.0);
         // Should be centered
-        assert_eq!(scaled.x, -10.0);
-        assert_eq!(scaled.y, -10.0);
+        assert_close(scaled.x, -10.0);
+        assert_close(scaled.y, -10.0);
     }
 }

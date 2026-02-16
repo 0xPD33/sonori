@@ -106,7 +106,8 @@ impl TypewriterEffect {
         if self.visible_chars >= char_indices.len() {
             &self.target_text
         } else {
-            let end_byte = char_indices.get(self.visible_chars)
+            let end_byte = char_indices
+                .get(self.visible_chars)
                 .map(|(i, _)| *i)
                 .unwrap_or(self.target_text.len());
             &self.target_text[..end_byte]

@@ -85,9 +85,7 @@ impl GlobalShortcutsManager {
         // Check what was actually bound
         let shortcuts = response.shortcuts();
 
-        let bound_exists = shortcuts
-            .iter()
-            .any(|s| s.id() == "toggle_manual");
+        let bound_exists = shortcuts.iter().any(|s| s.id() == "toggle_manual");
 
         if !bound_exists {
             // User likely declined the portal dialog or binding was rejected
@@ -183,10 +181,7 @@ impl GlobalShortcutsManager {
     }
 
     /// Handle shortcut deactivation (key released)
-    async fn handle_deactivated(
-        &self,
-        deactivated: ashpd::desktop::global_shortcuts::Deactivated,
-    ) {
+    async fn handle_deactivated(&self, deactivated: ashpd::desktop::global_shortcuts::Deactivated) {
         if deactivated.shortcut_id() != "toggle_manual" {
             return;
         }

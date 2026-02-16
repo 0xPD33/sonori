@@ -154,12 +154,14 @@ impl ButtonPanel {
 
                 if self.target_progress > self.animation_progress {
                     // Fading in
-                    self.animation_progress = self.animation_progress
+                    self.animation_progress = self
+                        .animation_progress
                         .max(self.animation_progress + eased_progress * 0.01)
                         .min(self.target_progress);
                 } else {
                     // Fading out
-                    self.animation_progress = self.animation_progress
+                    self.animation_progress = self
+                        .animation_progress
                         .min(self.animation_progress - eased_progress * 0.01)
                         .max(self.target_progress);
                 }
@@ -218,7 +220,6 @@ impl ButtonPanel {
         render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         render_pass.draw(0..4, 0..1);
     }
-
 
     /// Resize the panel
     pub fn resize(&mut self, new_size: PhysicalSize<u32>) {

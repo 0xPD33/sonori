@@ -4,7 +4,6 @@ use std::time::Instant;
 use wgpu::{util::DeviceExt, Buffer, Device, Queue, RenderPipeline, TextureView};
 use winit::dpi::PhysicalSize;
 
-
 /// Configuration for spectrogram visualization parameters
 #[derive(Debug, Clone)]
 pub struct SpectrogramConfig {
@@ -85,9 +84,9 @@ pub struct Spectrogram {
 #[derive(Clone, Debug)]
 struct BarInstanceTemplate {
     _position_factor: f32, // Position factor for edge tapering
-    edge_factor: f32,     // Pre-computed edge tapering factor
-    norm_x: f32,          // Normalized x position
-    norm_width: f32,      // Normalized width
+    edge_factor: f32,      // Pre-computed edge tapering factor
+    norm_x: f32,           // Normalized x position
+    norm_width: f32,       // Normalized width
 }
 
 #[repr(C)]
@@ -241,7 +240,13 @@ impl Spectrogram {
         let bar_instance_template = create_bar_instance_template(num_bins, size.width, &config);
 
         let mut cached_instances = Vec::with_capacity(num_bins);
-        fill_bar_instances(&bar_data, &bar_instance_template, size.height, &config, &mut cached_instances);
+        fill_bar_instances(
+            &bar_data,
+            &bar_instance_template,
+            size.height,
+            &config,
+            &mut cached_instances,
+        );
 
         let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Instance Buffer"),
@@ -372,7 +377,8 @@ impl Spectrogram {
                 };
 
                 // Apply a non-linear scaling (capped at MAX_BAR_HEIGHT)
-                smoothed_data[i] = (sample * self.config.sample_amplification).min(self.config.max_bar_height);
+                smoothed_data[i] =
+                    (sample * self.config.sample_amplification).min(self.config.max_bar_height);
             }
         } else {
             // Optimize for more samples than bars
@@ -393,7 +399,8 @@ impl Spectrogram {
                     let avg = sum / segment_len as f32;
 
                     // Apply non-linear scaling
-                    smoothed_data[i] = (avg.sqrt() * self.config.scaled_amplification).min(self.config.max_bar_height);
+                    smoothed_data[i] = (avg.sqrt() * self.config.scaled_amplification)
+                        .min(self.config.max_bar_height);
                 } else {
                     smoothed_data[i] = self.config.min_amplitude;
                 }
@@ -404,7 +411,8 @@ impl Spectrogram {
         // Handle edge cases separately
         if num_bars > 2 {
             // Apply filter to first element
-            let first = smoothed_data[0] * self.config.current_bar_weight + smoothed_data[1] * self.config.next_bar_weight;
+            let first = smoothed_data[0] * self.config.current_bar_weight
+                + smoothed_data[1] * self.config.next_bar_weight;
 
             // Apply filter to last element
             let last = smoothed_data[num_bars - 2] * self.config.prev_bar_weight
@@ -455,7 +463,11 @@ impl Spectrogram {
         // to create a more natural-looking visualization
         let (rise_speed, fall_speed, idle_decay) = if self.is_speaking {
             // When speaking: fast rise, moderate fall
-            (self.config.animation_speed * 4.0, self.config.animation_speed * 2.0, 0.0)
+            (
+                self.config.animation_speed * 4.0,
+                self.config.animation_speed * 2.0,
+                0.0,
+            )
         } else {
             // When silent: gentle decay toward minimum
             (
@@ -505,8 +517,11 @@ impl Spectrogram {
             &self.config,
             &mut self.cached_instances,
         );
-        self.queue
-            .write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&self.cached_instances));
+        self.queue.write_buffer(
+            &self.instance_buffer,
+            0,
+            bytemuck::cast_slice(&self.cached_instances),
+        );
     }
 
     pub fn render(&self, view: &TextureView, encoder: &mut wgpu::CommandEncoder) {
@@ -551,7 +566,11 @@ impl Spectrogram {
 ///
 /// This function calculates position-dependent values that don't change
 /// with bar height, significantly reducing per-frame calculations.
-fn create_bar_instance_template(num_bars: usize, width: u32, config: &SpectrogramConfig) -> Vec<BarInstanceTemplate> {
+fn create_bar_instance_template(
+    num_bars: usize,
+    width: u32,
+    config: &SpectrogramConfig,
+) -> Vec<BarInstanceTemplate> {
     let total_width = width as f32;
     let bar_width = total_width / num_bars as f32;
 

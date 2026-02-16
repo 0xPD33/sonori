@@ -12,7 +12,6 @@ use winit::{
 use super::button_panel::ButtonPanel;
 use super::buttons::ButtonManager;
 use super::common::AudioVisualizationData;
-use super::tooltip::Tooltip;
 use super::event_handler::EventHandler;
 use super::layout_manager::LayoutManager;
 use super::loading_animation::LoadingAnimation;
@@ -23,6 +22,7 @@ use super::spectogram::Spectrogram;
 use super::text_processor::TextProcessor;
 use super::text_window::TextWindow;
 use super::timer_badge::TimerBadge;
+use super::tooltip::Tooltip;
 use parking_lot::RwLock;
 
 pub const SPECTROGRAM_WIDTH: u32 = 240; // Width of the spectrogram
@@ -109,8 +109,9 @@ impl WindowState {
             ..Default::default()
         });
 
-        let surface = instance.create_surface(window.clone())
-            .expect("Failed to create GPU surface. Ensure your display server and GPU drivers are working.");
+        let surface = instance.create_surface(window.clone()).expect(
+            "Failed to create GPU surface. Ensure your display server and GPU drivers are working.",
+        );
 
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::default(),
@@ -247,11 +248,7 @@ impl WindowState {
         );
 
         // Create the tooltip
-        let tooltip = Tooltip::new(
-            device.clone(),
-            queue.clone(),
-            config.format,
-        );
+        let tooltip = Tooltip::new(device.clone(), queue.clone(), config.format);
 
         // Create the scrollbar
         let scrollbar = Scrollbar::new(&device, &config, &render_pipelines.hover_bind_group_layout);
@@ -288,7 +285,12 @@ impl WindowState {
         let ui_config = app_config.ui_config;
 
         // Create timer badge
-        let timer_badge = TimerBadge::new(&Arc::new(device.clone()), &Arc::new(queue.clone()), config.format, &ui_config);
+        let timer_badge = TimerBadge::new(
+            &Arc::new(device.clone()),
+            &Arc::new(queue.clone()),
+            config.format,
+            &ui_config,
+        );
 
         // Calculate target frame duration from display config
         let target_frame_duration =
@@ -359,7 +361,6 @@ impl WindowState {
         }
     }
 
-    
     pub fn resize(&mut self, width: u32, height: u32) {
         if width > 0 && height > 0 {
             self.config.width = width;
@@ -411,7 +412,10 @@ impl WindowState {
         }
 
         // Check if transcription mode has changed
-        let current_mode = crate::real_time_transcriber::TranscriptionMode::from_u8(self.transcription_mode_ref.load(std::sync::atomic::Ordering::Relaxed));
+        let current_mode = crate::real_time_transcriber::TranscriptionMode::from_u8(
+            self.transcription_mode_ref
+                .load(std::sync::atomic::Ordering::Relaxed),
+        );
         if current_mode != self.last_known_mode {
             self.button_manager.set_transcription_mode(current_mode);
             self.last_known_mode = current_mode;
@@ -426,10 +430,12 @@ impl WindowState {
         let animation_speed = 3.5; // Units per second
         if self.event_handler.hovering_transcript {
             // Fade in when hovering
-            self.hover_animation_progress = (self.hover_animation_progress + delta_time * animation_speed).min(1.0);
+            self.hover_animation_progress =
+                (self.hover_animation_progress + delta_time * animation_speed).min(1.0);
         } else {
             // Fade out when not hovering
-            self.hover_animation_progress = (self.hover_animation_progress - delta_time * animation_speed).max(0.0);
+            self.hover_animation_progress =
+                (self.hover_animation_progress - delta_time * animation_speed).max(0.0);
         }
         let output = match self.surface.get_current_texture() {
             Ok(output) => output,
@@ -449,7 +455,11 @@ impl WindowState {
                 return;
             }
             Err(wgpu::SurfaceError::OutOfMemory) => {
-                panic!("GPU out of memory");
+                eprintln!("GPU out of memory; shutting down gracefully");
+                if let Some(running) = &self.running {
+                    running.store(false, Ordering::Relaxed);
+                }
+                return;
             }
             Err(e) => {
                 eprintln!("Surface error: {:?}", e);
@@ -533,7 +543,8 @@ impl WindowState {
 
                 // Reuse frame_samples buffer to avoid per-frame allocation
                 self.frame_samples.clear();
-                self.frame_samples.extend_from_slice(&audio_data_lock.samples);
+                self.frame_samples
+                    .extend_from_slice(&audio_data_lock.samples);
                 drop(audio_data_lock);
             } else {
                 if is_recording {
@@ -579,7 +590,9 @@ impl WindowState {
         }
 
         // Check if transcript has changed - only when recording
-        let _transcript_changed = self.scroll_state.transcript_changed(display_text.len(), is_recording);
+        let _transcript_changed = self
+            .scroll_state
+            .transcript_changed(display_text.len(), is_recording);
         if is_recording {
             self.scroll_state.update_transcript_len(display_text.len());
         }
@@ -608,7 +621,8 @@ impl WindowState {
             .calculate_text_area_width(need_scrollbar);
 
         // Update scroll state
-        self.scroll_state.set_max_scroll_offset(layout_info.max_scroll_offset);
+        self.scroll_state
+            .set_max_scroll_offset(layout_info.max_scroll_offset);
         self.scroll_state.auto_scroll = self.event_handler.auto_scroll;
 
         // Update with auto-scroll animation
@@ -620,10 +634,15 @@ impl WindowState {
         self.scrollbar.auto_scroll = self.scroll_state.auto_scroll;
 
         // Get text position from the layout manager
-        let (text_x, text_y) = self.layout_manager.get_text_position(self.scroll_state.scroll_offset);
+        let (text_x, text_y) = self
+            .layout_manager
+            .get_text_position(self.scroll_state.scroll_offset);
 
         // Get current transcription mode
-        let transcription_mode = crate::real_time_transcriber::TranscriptionMode::from_u8(self.transcription_mode_ref.load(std::sync::atomic::Ordering::Relaxed));
+        let transcription_mode = crate::real_time_transcriber::TranscriptionMode::from_u8(
+            self.transcription_mode_ref
+                .load(std::sync::atomic::Ordering::Relaxed),
+        );
 
         // Check if we should show processing animation instead of text
         let is_empty = display_text.is_empty();
@@ -637,9 +656,12 @@ impl WindowState {
         };
 
         // Trigger typewriter effect when transcription completes (manual mode)
-        if self.typewriter_enabled && transcription_mode == crate::real_time_transcriber::TranscriptionMode::Manual {
+        if self.typewriter_enabled
+            && transcription_mode == crate::real_time_transcriber::TranscriptionMode::Manual
+        {
             // Detect transition from Transcribing to Idle with text
-            let state_transition = self.last_processing_state == crate::ui::common::ProcessingState::Transcribing
+            let state_transition = self.last_processing_state
+                == crate::ui::common::ProcessingState::Transcribing
                 && processing_state == crate::ui::common::ProcessingState::Idle
                 && !display_text.is_empty();
 
@@ -665,7 +687,8 @@ impl WindowState {
 
         // Choose text color based on speaking state
         let text_color = if should_show_animation {
-            self.loading_animation.get_processing_color(processing_state)
+            self.loading_animation
+                .get_processing_color(processing_state)
         } else if is_speaking {
             [0.1, 0.9, 0.5, 1.0] // Brighter teal-green for better visibility
         } else {
@@ -675,7 +698,8 @@ impl WindowState {
         // Render loading animation if processing, otherwise render text
         if should_show_animation {
             // Update loading animation state
-            self.loading_animation.set_processing_state(processing_state);
+            self.loading_animation
+                .set_processing_state(processing_state);
 
             // Render text window background first
             self.text_window.render_background(
@@ -704,7 +728,9 @@ impl WindowState {
             );
 
             // Render processing text below animation
-            let processing_text = self.loading_animation.get_processing_text(processing_state, transcription_mode);
+            let processing_text = self
+                .loading_animation
+                .get_processing_text(processing_state, transcription_mode);
             let text_y_for_status = center_y + animation_size * 0.8; // Position below animation
 
             self.text_window.render_text_only(
@@ -749,7 +775,8 @@ impl WindowState {
         }
 
         // Update button panel animation based on hover state
-        self.button_panel.set_visible(self.event_handler.hovering_transcript);
+        self.button_panel
+            .set_visible(self.event_handler.hovering_transcript);
         self.button_panel.update();
 
         // Render the buttons after the text - only when hovering over transcript
@@ -768,14 +795,25 @@ impl WindowState {
 
             // Render button panel backgrounds before buttons
             // Two separate panels: one for bottom buttons, one for close button
-            self.button_panel.render_with_bounds(&view, &mut encoder, bottom_button_bounds, &self.render_pipelines.hover_bind_group);
-            self.button_panel.render_with_bounds(&view, &mut encoder, close_button_bounds, &self.render_pipelines.hover_bind_group);
+            self.button_panel.render_with_bounds(
+                &view,
+                &mut encoder,
+                bottom_button_bounds,
+                &self.render_pipelines.hover_bind_group,
+            );
+            self.button_panel.render_with_bounds(
+                &view,
+                &mut encoder,
+                close_button_bounds,
+                &self.render_pipelines.hover_bind_group,
+            );
 
             // Only render buttons when hovering over transcript area
             (&mut self.button_manager).render(&view, &mut encoder, true, &self.queue);
 
             // Render tooltip (after buttons, so it appears on top)
-            self.tooltip.render(&view, &mut encoder, self.window_width, self.window_height);
+            self.tooltip
+                .render(&view, &mut encoder, self.window_width, self.window_height);
         } else {
             // Not hovering, hide tooltip
             self.tooltip.update(None);
@@ -809,8 +847,12 @@ impl WindowState {
     }
 
     pub fn handle_scroll(&mut self, delta: MouseScrollDelta) {
-        self.event_handler
-            .handle_scroll(&mut self.scroll_state.target_scroll_offset, self.scroll_state.max_scroll_offset, delta, self.text_processor.line_height);
+        self.event_handler.handle_scroll(
+            &mut self.scroll_state.target_scroll_offset,
+            self.scroll_state.max_scroll_offset,
+            delta,
+            self.text_processor.line_height,
+        );
         self.scroll_state.auto_scroll = self.event_handler.auto_scroll;
         self.scrollbar.auto_scroll = self.scroll_state.auto_scroll;
         self.scrollbar.scroll_offset = self.scroll_state.scroll_offset;
@@ -934,7 +976,10 @@ impl WindowState {
 
     pub fn toggle_mode(&mut self) {
         // Switch between manual and real-time modes
-        let current_mode = crate::real_time_transcriber::TranscriptionMode::from_u8(self.transcription_mode_ref.load(std::sync::atomic::Ordering::Relaxed));
+        let current_mode = crate::real_time_transcriber::TranscriptionMode::from_u8(
+            self.transcription_mode_ref
+                .load(std::sync::atomic::Ordering::Relaxed),
+        );
         let new_mode = match current_mode {
             crate::real_time_transcriber::TranscriptionMode::RealTime => {
                 crate::real_time_transcriber::TranscriptionMode::Manual

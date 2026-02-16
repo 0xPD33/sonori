@@ -102,10 +102,7 @@ fn is_moonshine_model_complete(model_dir: &Path) -> Result<bool> {
 }
 
 fn moonshine_model_id(model_name: &str) -> String {
-    let simple = model_name
-        .split('/')
-        .last()
-        .unwrap_or(model_name);
+    let simple = model_name.split('/').last().unwrap_or(model_name);
     simple
         .strip_prefix("moonshine-")
         .unwrap_or(simple)
@@ -170,8 +167,12 @@ fn convert_model(model_name: &str, output_dir: &Path) -> Result<()> {
         if model_conversion_shell_nix.exists() {
             println!("Found shell.nix at {:?}", model_conversion_shell_nix);
             Command::new("nix-shell")
-                .arg(model_conversion_shell_nix.to_str()
-                    .ok_or_else(|| anyhow::anyhow!("shell.nix path contains invalid UTF-8: {:?}", model_conversion_shell_nix))?)
+                .arg(model_conversion_shell_nix.to_str().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "shell.nix path contains invalid UTF-8: {:?}",
+                        model_conversion_shell_nix
+                    )
+                })?)
                 .arg("--command")
                 .arg(&conversion_script)
                 .status()
@@ -477,9 +478,7 @@ fn normalize_model_name(model_name: &str, backend_type: crate::backend::BackendT
             // Parakeet will use standard model names
             model_name.to_string()
         }
-        crate::backend::BackendType::Moonshine => {
-            model_name.to_string()
-        }
+        crate::backend::BackendType::Moonshine => model_name.to_string(),
     }
 }
 
@@ -585,7 +584,6 @@ async fn init_moonshine_model(model_id: &str) -> Result<PathBuf> {
 
     Ok(model_dir)
 }
-
 
 /// Download a whisper.cpp GGML model file
 ///
@@ -699,15 +697,15 @@ pub async fn download_enhancement_gguf(model: &str) -> Result<PathBuf> {
     let output_path = model_dir.join(filename);
 
     if output_path.exists() {
-        println!("Enhancement GGUF model already exists at: {:?}", output_path);
+        println!(
+            "Enhancement GGUF model already exists at: {:?}",
+            output_path
+        );
         return Ok(output_path);
     }
 
     // Build HuggingFace URL
-    let url = format!(
-        "https://huggingface.co/{}/resolve/main/{}",
-        repo, filename
-    );
+    let url = format!("https://huggingface.co/{}/resolve/main/{}", repo, filename);
 
     println!("Downloading enhancement model: {}", filename);
     println!("  From: {}", url);

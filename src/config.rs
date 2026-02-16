@@ -19,9 +19,7 @@ pub struct AudioProcessorConfig {
 
 impl Default for AudioProcessorConfig {
     fn default() -> Self {
-        Self {
-            buffer_size: 1024,
-        }
+        Self { buffer_size: 1024 }
     }
 }
 
@@ -429,8 +427,8 @@ impl Default for UiConfig {
     fn default() -> Self {
         Self {
             font_size: 10.0,
-            speaking_color: [0.1, 0.9, 0.5, 1.0],            // Teal-green
-            idle_color: [1.0, 0.85, 0.15, 1.0],              // Gold
+            speaking_color: [0.1, 0.9, 0.5, 1.0], // Teal-green
+            idle_color: [1.0, 0.85, 0.15, 1.0],   // Gold
             recording_indicator_color: [0.9, 0.2, 0.2, 1.0], // Red
             show_recording_indicator: true,
             typewriter_effect: false,
@@ -757,7 +755,9 @@ impl AppConfig {
 
         // Ensure whisper.cpp does not reuse context across sessions (prevents duplicate transcriptions)
         if !self.whisper_cpp_options.no_context {
-            println!("Enabling whisper_cpp_options.no_context to prevent cross-session duplication");
+            println!(
+                "Enabling whisper_cpp_options.no_context to prevent cross-session duplication"
+            );
             self.whisper_cpp_options.no_context = true;
         }
 
@@ -791,7 +791,10 @@ fn find_config_path() -> Option<std::path::PathBuf> {
     if let Ok(custom_path) = std::env::var("SONORI_CONFIG_PATH") {
         let path = PathBuf::from(custom_path);
         if path.exists() {
-            println!("Loading configuration from SONORI_CONFIG_PATH: {}", path.display());
+            println!(
+                "Loading configuration from SONORI_CONFIG_PATH: {}",
+                path.display()
+            );
             return Some(path);
         } else {
             eprintln!(
@@ -804,12 +807,17 @@ fn find_config_path() -> Option<std::path::PathBuf> {
 
     // 1. Check ~/.config/sonori/config.toml (user config)
     if let Some(config_home) = std::env::var_os("XDG_CONFIG_HOME") {
-        let path = PathBuf::from(config_home).join("sonori").join("config.toml");
+        let path = PathBuf::from(config_home)
+            .join("sonori")
+            .join("config.toml");
         if path.exists() {
             return Some(path);
         }
     } else if let Some(home) = std::env::var_os("HOME") {
-        let path = PathBuf::from(home).join(".config").join("sonori").join("config.toml");
+        let path = PathBuf::from(home)
+            .join(".config")
+            .join("sonori")
+            .join("config.toml");
         if path.exists() {
             return Some(path);
         }
@@ -823,9 +831,18 @@ fn user_config_path() -> Option<std::path::PathBuf> {
     use std::path::PathBuf;
 
     if let Some(config_home) = std::env::var_os("XDG_CONFIG_HOME") {
-        Some(PathBuf::from(config_home).join("sonori").join("config.toml"))
+        Some(
+            PathBuf::from(config_home)
+                .join("sonori")
+                .join("config.toml"),
+        )
     } else if let Some(home) = std::env::var_os("HOME") {
-        Some(PathBuf::from(home).join(".config").join("sonori").join("config.toml"))
+        Some(
+            PathBuf::from(home)
+                .join(".config")
+                .join("sonori")
+                .join("config.toml"),
+        )
     } else {
         None
     }
@@ -857,12 +874,10 @@ fn ensure_user_config() {
     // Write default config as TOML
     let default_config = AppConfig::default();
     match toml::to_string_pretty(&default_config) {
-        Ok(toml_string) => {
-            match std::fs::write(&user_config_path, toml_string) {
-                Ok(_) => println!("Created default config at: {}", user_config_path.display()),
-                Err(e) => eprintln!("Failed to write default config: {}", e),
-            }
-        }
+        Ok(toml_string) => match std::fs::write(&user_config_path, toml_string) {
+            Ok(_) => println!("Created default config at: {}", user_config_path.display()),
+            Err(e) => eprintln!("Failed to write default config: {}", e),
+        },
         Err(e) => eprintln!("Failed to serialize default config: {}", e),
     }
 }
@@ -886,7 +901,11 @@ pub fn read_app_config_with_path() -> (AppConfig, Option<std::path::PathBuf>) {
             match std::fs::read_to_string(path) {
                 Ok(content) => content,
                 Err(e) => {
-                    println!("Failed to read config from {}: {}. Using default configuration.", path.display(), e);
+                    println!(
+                        "Failed to read config from {}: {}. Using default configuration.",
+                        path.display(),
+                        e
+                    );
                     return (AppConfig::default(), None);
                 }
             }
@@ -910,7 +929,10 @@ pub fn read_app_config_with_path() -> (AppConfig, Option<std::path::PathBuf>) {
             config
         }
         Err(e) => {
-            println!("Failed to parse config.toml: {}. Using default configuration.", e);
+            println!(
+                "Failed to parse config.toml: {}. Using default configuration.",
+                e
+            );
             AppConfig::default()
         }
     };
@@ -919,9 +941,11 @@ pub fn read_app_config_with_path() -> (AppConfig, Option<std::path::PathBuf>) {
 }
 
 pub fn write_app_config(config: &AppConfig) -> Result<(), String> {
-    let config_path = find_config_path().or_else(user_config_path).ok_or_else(|| {
-        "Unable to determine config path. Set SONORI_CONFIG_PATH or HOME.".to_string()
-    })?;
+    let config_path = find_config_path()
+        .or_else(user_config_path)
+        .ok_or_else(|| {
+            "Unable to determine config path. Set SONORI_CONFIG_PATH or HOME.".to_string()
+        })?;
 
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent)

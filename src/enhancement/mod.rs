@@ -52,7 +52,9 @@ pub fn is_model_available(model_path: impl AsRef<Path>) -> bool {
 }
 
 /// Load a model from the given path
-pub fn load_model(model_path: impl AsRef<Path>) -> Result<Box<dyn EnhancementModel>, EnhancementError> {
+pub fn load_model(
+    model_path: impl AsRef<Path>,
+) -> Result<Box<dyn EnhancementModel>, EnhancementError> {
     Ok(Box::new(LlamaCppModel::from_file(model_path)?))
 }
 

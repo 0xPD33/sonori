@@ -282,7 +282,8 @@ impl RealTimeTranscriber {
         let backend = Arc::new(Mutex::new(None));
         let transcription_stats = Arc::new(Mutex::new(TranscriptionStats::new()));
 
-        let audio_visualization_data = Arc::new(RwLock::new(AudioVisualizationData::with_capacity(1024)));
+        let audio_visualization_data =
+            Arc::new(RwLock::new(AudioVisualizationData::with_capacity(1024)));
 
         let audio_processor = match SileroVad::new(
             (
@@ -1239,13 +1240,16 @@ impl RealTimeTranscriber {
 
     /// Set the transcription mode
     pub fn set_transcription_mode(&mut self, mode: TranscriptionMode) {
-        self.transcription_mode.store(mode.as_u8(), Ordering::Relaxed);
+        self.transcription_mode
+            .store(mode.as_u8(), Ordering::Relaxed);
         println!("Transcription mode changed to: {:?}", mode);
     }
 
     /// Start a new manual transcription session
     pub async fn start_manual_session(&self) -> Result<String, anyhow::Error> {
-        if TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed)) != TranscriptionMode::Manual {
+        if TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed))
+            != TranscriptionMode::Manual
+        {
             return Err(anyhow::anyhow!(
                 "Cannot start manual session when not in manual mode"
             ));
@@ -1265,7 +1269,9 @@ impl RealTimeTranscriber {
 
     /// Stop the current manual transcription session and trigger processing
     pub async fn stop_manual_session(&self) -> Result<(), anyhow::Error> {
-        if TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed)) != TranscriptionMode::Manual {
+        if TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed))
+            != TranscriptionMode::Manual
+        {
             return Err(anyhow::anyhow!(
                 "Cannot stop manual session when not in manual mode"
             ));
@@ -1285,7 +1291,9 @@ impl RealTimeTranscriber {
 
     /// Cancel the current manual transcription session
     pub async fn cancel_manual_session(&self) -> Result<(), anyhow::Error> {
-        if TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed)) != TranscriptionMode::Manual {
+        if TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed))
+            != TranscriptionMode::Manual
+        {
             return Err(anyhow::anyhow!(
                 "Cannot cancel manual session when not in manual mode"
             ));
@@ -1305,7 +1313,9 @@ impl RealTimeTranscriber {
 
     /// Get the status of the current manual session
     pub fn get_manual_session_status(&self) -> Option<ManualSessionStatus> {
-        if TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed)) != TranscriptionMode::Manual {
+        if TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed))
+            != TranscriptionMode::Manual
+        {
             return None;
         }
 
@@ -1324,7 +1334,9 @@ impl RealTimeTranscriber {
 
     /// Check if there's an active manual session
     pub fn has_active_manual_session(&self) -> bool {
-        if TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed)) != TranscriptionMode::Manual {
+        if TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed))
+            != TranscriptionMode::Manual
+        {
             return false;
         }
 
@@ -1342,7 +1354,9 @@ impl RealTimeTranscriber {
 
     /// Get the current manual session accumulated audio for processing
     pub fn get_manual_session_audio(&self) -> Option<Vec<f32>> {
-        if TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed)) != TranscriptionMode::Manual {
+        if TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed))
+            != TranscriptionMode::Manual
+        {
             return None;
         }
 
@@ -1354,7 +1368,9 @@ impl RealTimeTranscriber {
 
     /// Add audio data to the current manual session
     pub fn add_audio_to_manual_session(&self, audio_data: &[f32]) -> Result<(), anyhow::Error> {
-        if TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed)) != TranscriptionMode::Manual {
+        if TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed))
+            != TranscriptionMode::Manual
+        {
             return Ok(()); // Silently ignore if not in manual mode
         }
 

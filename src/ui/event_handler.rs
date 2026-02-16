@@ -62,7 +62,8 @@ impl EventHandler {
                     .min(max_scroll_offset);
             }
             MouseScrollDelta::PixelDelta(PhysicalPosition { y, .. }) => {
-                *target_scroll_offset = (*target_scroll_offset - y as f32 * pixel_scroll_multiplier)
+                *target_scroll_offset = (*target_scroll_offset
+                    - y as f32 * pixel_scroll_multiplier)
                     .max(0.0)
                     .min(max_scroll_offset);
             }
@@ -254,7 +255,9 @@ impl EventHandler {
                     }
                     ButtonType::ModeToggle => {
                         // IMMEDIATE UI response: Calculate new mode and send command asynchronously
-                        let current_mode = crate::real_time_transcriber::TranscriptionMode::from_u8(self.transcription_mode_ref.load(Ordering::Relaxed));
+                        let current_mode = crate::real_time_transcriber::TranscriptionMode::from_u8(
+                            self.transcription_mode_ref.load(Ordering::Relaxed),
+                        );
                         let new_mode = match current_mode {
                             crate::real_time_transcriber::TranscriptionMode::RealTime => {
                                 crate::real_time_transcriber::TranscriptionMode::Manual

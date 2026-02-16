@@ -66,8 +66,9 @@ pub async fn create_backend(
         )),
 
         BackendType::Moonshine => {
-             let moonshine_backend = super::moonshine::MoonshineBackend::new(model_path, backend_config)?;
-             Ok(TranscriptionBackend::Moonshine(moonshine_backend))
+            let moonshine_backend =
+                super::moonshine::MoonshineBackend::new(model_path, backend_config)?;
+            Ok(TranscriptionBackend::Moonshine(moonshine_backend))
         }
     }
 }

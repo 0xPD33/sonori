@@ -81,11 +81,7 @@ pub struct Tooltip {
 }
 
 impl Tooltip {
-    pub fn new(
-        device: Device,
-        queue: Queue,
-        surface_format: wgpu::TextureFormat,
-    ) -> Self {
+    pub fn new(device: Device, queue: Queue, surface_format: wgpu::TextureFormat) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Tooltip Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("tooltip.wgsl").into()),
@@ -172,10 +168,18 @@ impl Tooltip {
 
         // Create vertex buffer (will be updated when showing tooltip)
         let vertices = [
-            Vertex { position: [-1.0, -1.0] },
-            Vertex { position: [1.0, -1.0] },
-            Vertex { position: [-1.0, 1.0] },
-            Vertex { position: [1.0, 1.0] },
+            Vertex {
+                position: [-1.0, -1.0],
+            },
+            Vertex {
+                position: [1.0, -1.0],
+            },
+            Vertex {
+                position: [-1.0, 1.0],
+            },
+            Vertex {
+                position: [1.0, 1.0],
+            },
         ];
 
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -223,7 +227,12 @@ impl Tooltip {
             let tooltip_width = width + TOOLTIP_PADDING_X * 2.0;
             let tooltip_height = height + TOOLTIP_PADDING_Y * 2.0;
             buffer.set_size(&mut font_system, Some(tooltip_width), Some(tooltip_height));
-            buffer.set_text(&mut font_system, text, &Attrs::new().family(Family::SansSerif), Shaping::Advanced);
+            buffer.set_text(
+                &mut font_system,
+                text,
+                &Attrs::new().family(Family::SansSerif),
+                Shaping::Advanced,
+            );
             cached_buffers.insert(button_type, buffer);
         }
 
@@ -273,7 +282,12 @@ impl Tooltip {
         let metrics = Metrics::new(font_size, line_height);
         let mut buffer = Buffer::new(font_system, metrics);
         buffer.set_size(font_system, Some(1000.0), Some(100.0));
-        buffer.set_text(font_system, text, &Attrs::new().family(Family::SansSerif), Shaping::Advanced);
+        buffer.set_text(
+            font_system,
+            text,
+            &Attrs::new().family(Family::SansSerif),
+            Shaping::Advanced,
+        );
 
         // Get the width and height
         let layout = buffer.layout_runs().collect::<Vec<_>>();
@@ -333,18 +347,17 @@ impl Tooltip {
             }
 
             // Showing: Stay showing if still hovering same button
-            (
-                TooltipState::Showing {
-                    button_type,
-                    ..
-                },
-                Some((hovered_type, _, _, _, _)),
-            ) if *button_type == hovered_type => {
+            (TooltipState::Showing { button_type, .. }, Some((hovered_type, _, _, _, _)))
+                if *button_type == hovered_type =>
+            {
                 // Stay in showing state
             }
 
             // WaitingToShow but moved to different button -> Reset timer
-            (TooltipState::WaitingToShow { .. }, Some((button_type, center_x, top_y, bottom_y, left_x))) => {
+            (
+                TooltipState::WaitingToShow { .. },
+                Some((button_type, center_x, top_y, bottom_y, left_x)),
+            ) => {
                 self.state = TooltipState::WaitingToShow {
                     button_type,
                     button_center_x: center_x,
@@ -356,7 +369,10 @@ impl Tooltip {
             }
 
             // Showing but moved to different button -> Hide and restart
-            (TooltipState::Showing { .. }, Some((button_type, center_x, top_y, bottom_y, left_x))) => {
+            (
+                TooltipState::Showing { .. },
+                Some((button_type, center_x, top_y, bottom_y, left_x)),
+            ) => {
                 self.state = TooltipState::WaitingToShow {
                     button_type,
                     button_center_x: center_x,
@@ -378,25 +394,33 @@ impl Tooltip {
         window_height: u32,
     ) {
         // Early return if hidden or waiting
-        let (button_type, button_center_x, button_top_y, button_bottom_y, button_left_x, opacity) = match &self.state {
-            TooltipState::Hidden | TooltipState::WaitingToShow { .. } => return,
-            TooltipState::Showing {
-                button_type,
-                button_center_x,
-                button_top_y,
-                button_bottom_y,
-                button_left_x,
-                show_start_time,
-            } => {
-                let elapsed = show_start_time.elapsed().as_secs_f32();
-                let opacity = if elapsed < FADE_DURATION {
-                    elapsed / FADE_DURATION
-                } else {
-                    1.0
-                };
-                (*button_type, *button_center_x, *button_top_y, *button_bottom_y, *button_left_x, opacity)
-            }
-        };
+        let (button_type, button_center_x, button_top_y, button_bottom_y, button_left_x, opacity) =
+            match &self.state {
+                TooltipState::Hidden | TooltipState::WaitingToShow { .. } => return,
+                TooltipState::Showing {
+                    button_type,
+                    button_center_x,
+                    button_top_y,
+                    button_bottom_y,
+                    button_left_x,
+                    show_start_time,
+                } => {
+                    let elapsed = show_start_time.elapsed().as_secs_f32();
+                    let opacity = if elapsed < FADE_DURATION {
+                        elapsed / FADE_DURATION
+                    } else {
+                        1.0
+                    };
+                    (
+                        *button_type,
+                        *button_center_x,
+                        *button_top_y,
+                        *button_bottom_y,
+                        *button_left_x,
+                        opacity,
+                    )
+                }
+            };
 
         // Update opacity uniform
         self.queue.write_buffer(
@@ -409,7 +433,11 @@ impl Tooltip {
         );
 
         // Get text dimensions
-        let (text_width, text_height) = self.text_dimensions.get(&button_type).copied().unwrap_or((50.0, 14.0));
+        let (text_width, text_height) = self
+            .text_dimensions
+            .get(&button_type)
+            .copied()
+            .unwrap_or((50.0, 14.0));
 
         // Calculate tooltip dimensions
         let tooltip_width = text_width + TOOLTIP_PADDING_X * 2.0;
@@ -430,9 +458,17 @@ impl Tooltip {
         };
 
         // Clamp to window bounds with extra margin for close button at edges
-        let edge_margin = if button_type == ButtonType::Close { 6.0 } else { 4.0 };
-        let tooltip_x = tooltip_x.max(edge_margin).min(window_width as f32 - tooltip_width - edge_margin);
-        let tooltip_y = tooltip_y.max(edge_margin).min(window_height as f32 - tooltip_height - edge_margin);
+        let edge_margin = if button_type == ButtonType::Close {
+            6.0
+        } else {
+            4.0
+        };
+        let tooltip_x = tooltip_x
+            .max(edge_margin)
+            .min(window_width as f32 - tooltip_width - edge_margin);
+        let tooltip_y = tooltip_y
+            .max(edge_margin)
+            .min(window_height as f32 - tooltip_height - edge_margin);
 
         // Convert to clip space coordinates
         let x_min = (tooltip_x / window_width as f32) * 2.0 - 1.0;
@@ -442,12 +478,21 @@ impl Tooltip {
 
         // Update vertex buffer with new position
         let vertices = [
-            Vertex { position: [x_min, y_min] },
-            Vertex { position: [x_max, y_min] },
-            Vertex { position: [x_min, y_max] },
-            Vertex { position: [x_max, y_max] },
+            Vertex {
+                position: [x_min, y_min],
+            },
+            Vertex {
+                position: [x_max, y_min],
+            },
+            Vertex {
+                position: [x_min, y_max],
+            },
+            Vertex {
+                position: [x_max, y_max],
+            },
         ];
-        self.queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
+        self.queue
+            .write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
 
         // Render background
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -477,7 +522,10 @@ impl Tooltip {
 
         use glyphon::{Color, TextArea, TextBounds};
 
-        let buffer = self.cached_buffers.get(&button_type).expect("Cached buffer not found");
+        let buffer = self
+            .cached_buffers
+            .get(&button_type)
+            .expect("Cached buffer not found");
 
         let text_area = TextArea {
             buffer,

@@ -24,7 +24,8 @@ use super::window::MARGIN;
 use crate::config::AppConfig;
 
 pub fn run() {
-    let event_loop = EventLoop::new().expect("Failed to create event loop. Ensure a display server (Wayland/X11) is available.");
+    let event_loop = EventLoop::new()
+        .expect("Failed to create event loop. Ensure a display server (Wayland/X11) is available.");
     let app_config = crate::config::AppConfig::default();
     let mut app = WindowApp {
         windows: HashMap::new(),
@@ -41,7 +42,9 @@ pub fn run() {
         tray_update_tx: None,
         tray_command_rx: None,
     };
-    event_loop.run_app(&mut app).expect("Event loop exited with error");
+    event_loop
+        .run_app(&mut app)
+        .expect("Event loop exited with error");
 }
 
 pub fn run_with_audio_data(
@@ -57,7 +60,8 @@ pub fn run_with_audio_data(
     tray_update_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::system_tray::TrayUpdate>>,
     tray_command_rx: Option<tokio::sync::mpsc::UnboundedReceiver<crate::system_tray::TrayCommand>>,
 ) {
-    let event_loop = EventLoop::new().expect("Failed to create event loop. Ensure a display server (Wayland/X11) is available.");
+    let event_loop = EventLoop::new()
+        .expect("Failed to create event loop. Ensure a display server (Wayland/X11) is available.");
     let mut app = WindowApp {
         windows: HashMap::new(),
         audio_data: Some(audio_data),
@@ -72,7 +76,9 @@ pub fn run_with_audio_data(
         tray_command_rx,
     };
 
-    event_loop.run_app(&mut app).expect("Event loop exited with error");
+    event_loop
+        .run_app(&mut app)
+        .expect("Event loop exited with error");
 }
 
 pub struct WindowApp {
@@ -192,7 +198,9 @@ impl ApplicationHandler for WindowApp {
                 self.running.clone(),
                 self.recording.clone(),
                 self.magic_mode_enabled.clone(),
-                crate::real_time_transcriber::TranscriptionMode::from_u8(self.transcription_mode_ref.load(Ordering::Relaxed)),
+                crate::real_time_transcriber::TranscriptionMode::from_u8(
+                    self.transcription_mode_ref.load(Ordering::Relaxed),
+                ),
                 self.manual_session_sender.clone(),
                 self.transcription_mode_ref.clone(),
                 &self.config.display_config,
@@ -241,7 +249,9 @@ impl ApplicationHandler for WindowApp {
                     // Tab - Toggle manual session (temporary, works when window focused)
                     // TODO: Once global shortcut (Super+Tab) works unfocused, remove this
                     if key_code == KeyCode::Tab {
-                        let current_mode = crate::real_time_transcriber::TranscriptionMode::from_u8(self.transcription_mode_ref.load(Ordering::Relaxed));
+                        let current_mode = crate::real_time_transcriber::TranscriptionMode::from_u8(
+                            self.transcription_mode_ref.load(Ordering::Relaxed),
+                        );
                         if current_mode == crate::real_time_transcriber::TranscriptionMode::Manual {
                             window.toggle_manual_session();
                         }
@@ -366,10 +376,12 @@ fn create_window(
             // .with_output(monitor.native_id())
             .with_keyboard_interactivity(keyboard_mode);
 
-        w = w.with_platform_attributes(Box::new(wayland_attrs))
+        w = w
+            .with_platform_attributes(Box::new(wayland_attrs))
             .with_resizable(false);
     } else {
-        w = w.with_position(LogicalPosition::new(0, 0))
+        w = w
+            .with_position(LogicalPosition::new(0, 0))
             .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
             // Don't use fullscreen as it would override our fixed size
             // .with_fullscreen(Some(winit::window::Fullscreen::Borderless(None)))

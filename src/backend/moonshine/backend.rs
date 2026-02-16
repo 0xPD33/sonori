@@ -1,14 +1,16 @@
-use crate::backend::moonshine::model::{cached_input_shape, MoonshineFlavor, MoonshineLayout, MoonshineModel};
+use crate::backend::moonshine::model::{
+    cached_input_shape, MoonshineFlavor, MoonshineLayout, MoonshineModel,
+};
 use crate::backend::moonshine::tokenizer::MoonshineTokenizer;
 use crate::backend::onnx_utils::OnnxSessionOptions;
 use crate::backend::{traits::TranscriptionError, BackendCapabilities, BackendConfig};
 use crate::config::{CommonTranscriptionOptions, MoonshineOptions};
 use ndarray::{Array1, Array2, ArrayD, Axis, IxDyn};
-use ort::session::{SessionInputs, SessionInputValue};
+use ort::session::{SessionInputValue, SessionInputs};
 use ort::tensor::TensorElementType;
 use ort::value::{DynValue, Tensor, ValueType};
-use std::path::Path;
 use std::cmp::Ordering;
+use std::path::Path;
 
 pub struct MoonshineBackend {
     model: MoonshineModel,
@@ -107,9 +109,7 @@ impl MoonshineBackend {
         let mut session = preprocess.lock();
         let outputs = session
             .run(ort::inputs! { self.model.preprocess_input.as_str() => input_tensor })
-            .map_err(|e| {
-                TranscriptionError::InferenceError(format!("Preprocess failed: {}", e))
-            })?;
+            .map_err(|e| TranscriptionError::InferenceError(format!("Preprocess failed: {}", e)))?;
 
         outputs
             .get(self.model.preprocess_output.as_str())
@@ -147,21 +147,23 @@ impl MoonshineBackend {
             }
         }
 
-        let input_values =
-            Array2::from_shape_vec((1, input.len()), input).map_err(|e| {
-                TranscriptionError::InvalidAudio(format!("Invalid audio buffer shape: {}", e))
-            })?;
+        let input_values = Array2::from_shape_vec((1, input.len()), input).map_err(|e| {
+            TranscriptionError::InvalidAudio(format!("Invalid audio buffer shape: {}", e))
+        })?;
 
         let attention_mask = if config.map(|c| c.return_attention_mask).unwrap_or(false) {
             Some(
-                Array2::from_shape_vec((1, input_values.shape()[1]), vec![1i64; input_values.shape()[1]])
-                    .map_err(|e| {
-                        TranscriptionError::InferenceError(format!(
-                            "Failed to build attention mask: {}",
-                            e
-                        ))
-                    })?
-                    .into_dyn(),
+                Array2::from_shape_vec(
+                    (1, input_values.shape()[1]),
+                    vec![1i64; input_values.shape()[1]],
+                )
+                .map_err(|e| {
+                    TranscriptionError::InferenceError(format!(
+                        "Failed to build attention mask: {}",
+                        e
+                    ))
+                })?
+                .into_dyn(),
             )
         } else {
             None
@@ -183,7 +185,9 @@ impl MoonshineBackend {
         let mut inputs: Vec<(String, SessionInputValue)> =
             vec![(self.model.encoder_input.clone(), features_tensor.into())];
 
-        if let (Some(mask), Some(mask_name)) = (attention_mask, self.model.encoder_attention_mask.as_ref()) {
+        if let (Some(mask), Some(mask_name)) =
+            (attention_mask, self.model.encoder_attention_mask.as_ref())
+        {
             let mask_tensor = Tensor::from_array(mask).map_err(|e| {
                 TranscriptionError::InferenceError(format!(
                     "Failed to build attention mask tensor: {}",
@@ -199,7 +203,9 @@ impl MoonshineBackend {
 
         outputs
             .get(self.model.encoder_output.as_str())
-            .ok_or_else(|| TranscriptionError::InferenceError("Missing encoder output".to_string()))?
+            .ok_or_else(|| {
+                TranscriptionError::InferenceError("Missing encoder output".to_string())
+            })?
             .try_extract_array::<f32>()
             .map(|arr| arr.to_owned())
             .map_err(|e| TranscriptionError::InferenceError(format!("Encoder output error: {}", e)))
@@ -216,29 +222,34 @@ impl MoonshineBackend {
         })?;
 
         let encoder_attention_mask = match attention_mask {
-            Some(mask) => Some(
-                Tensor::from_array(mask).map_err(|e| {
-                    TranscriptionError::InferenceError(format!(
-                        "Failed to build attention mask tensor: {}",
-                        e
-                    ))
-                })?,
-            ),
+            Some(mask) => Some(Tensor::from_array(mask).map_err(|e| {
+                TranscriptionError::InferenceError(format!(
+                    "Failed to build attention mask tensor: {}",
+                    e
+                ))
+            })?),
             None => None,
         };
 
         let mut tokens: Vec<u32> = vec![self.tokenizer.bos_token_id()];
         for _ in 0..max_tokens {
             let input_ids = tokens.iter().map(|id| i64::from(*id)).collect::<Vec<_>>();
-            let input_ids = Array2::from_shape_vec((1, input_ids.len()), input_ids).map_err(|e| {
-                TranscriptionError::InferenceError(format!("Failed to build input IDs: {}", e))
-            })?;
+            let input_ids =
+                Array2::from_shape_vec((1, input_ids.len()), input_ids).map_err(|e| {
+                    TranscriptionError::InferenceError(format!("Failed to build input IDs: {}", e))
+                })?;
             let input_ids_tensor = Tensor::from_array(input_ids).map_err(|e| {
-                TranscriptionError::InferenceError(format!("Failed to build input IDs tensor: {}", e))
+                TranscriptionError::InferenceError(format!(
+                    "Failed to build input IDs tensor: {}",
+                    e
+                ))
             })?;
 
             let mut inputs: Vec<(String, SessionInputValue)> = vec![
-                (self.model.decoder_input_ids.clone(), input_ids_tensor.into()),
+                (
+                    self.model.decoder_input_ids.clone(),
+                    input_ids_tensor.into(),
+                ),
                 (
                     self.model.decoder_encoder_states.clone(),
                     (&encoder_tensor).into(),
@@ -256,13 +267,15 @@ impl MoonshineBackend {
             }
 
             let mut session = self.model.decoder.lock();
-            let outputs = session
-                .run(SessionInputs::from(inputs))
-                .map_err(|e| TranscriptionError::InferenceError(format!("Decoder failed: {}", e)))?;
+            let outputs = session.run(SessionInputs::from(inputs)).map_err(|e| {
+                TranscriptionError::InferenceError(format!("Decoder failed: {}", e))
+            })?;
 
             let logits = outputs
                 .get(self.model.decoder_logits.as_str())
-                .ok_or_else(|| TranscriptionError::InferenceError("Missing decoder logits".to_string()))?
+                .ok_or_else(|| {
+                    TranscriptionError::InferenceError("Missing decoder logits".to_string())
+                })?
                 .try_extract_array::<f32>()
                 .map_err(|e| {
                     TranscriptionError::InferenceError(format!("Decoder logits error: {}", e))
@@ -308,15 +321,11 @@ impl MoonshineBackend {
                     "Moonshine cached decoder missing encoder_hidden_states".to_string(),
                 )
             })?;
-        let logits_name = self
-            .model
-            .decoder_cached_logits
-            .as_ref()
-            .ok_or_else(|| {
-                TranscriptionError::InferenceError(
-                    "Moonshine cached decoder missing logits output".to_string(),
-                )
-            })?;
+        let logits_name = self.model.decoder_cached_logits.as_ref().ok_or_else(|| {
+            TranscriptionError::InferenceError(
+                "Moonshine cached decoder missing logits output".to_string(),
+            )
+        })?;
 
         let past_names = &self.model.decoder_cached_past_inputs;
         let present_names = &self.model.decoder_cached_present_outputs;
@@ -333,14 +342,12 @@ impl MoonshineBackend {
             TranscriptionError::InferenceError(format!("Failed to build encoder tensor: {}", e))
         })?;
         let encoder_attention_mask = match attention_mask {
-            Some(mask) => Some(
-                Tensor::from_array(mask).map_err(|e| {
-                    TranscriptionError::InferenceError(format!(
-                        "Failed to build attention mask tensor: {}",
-                        e
-                    ))
-                })?,
-            ),
+            Some(mask) => Some(Tensor::from_array(mask).map_err(|e| {
+                TranscriptionError::InferenceError(format!(
+                    "Failed to build attention mask tensor: {}",
+                    e
+                ))
+            })?),
             None => None,
         };
 
@@ -349,9 +356,10 @@ impl MoonshineBackend {
 
         for _ in 0..max_tokens {
             let last_token = *tokens.last().unwrap_or(&self.tokenizer.bos_token_id());
-            let input_ids = Array2::from_shape_vec((1, 1), vec![i64::from(last_token)]).map_err(|e| {
-                TranscriptionError::InferenceError(format!("Failed to build input IDs: {}", e))
-            })?;
+            let input_ids =
+                Array2::from_shape_vec((1, 1), vec![i64::from(last_token)]).map_err(|e| {
+                    TranscriptionError::InferenceError(format!("Failed to build input IDs: {}", e))
+                })?;
             let input_ids_tensor = Tensor::from_array(input_ids).map_err(|e| {
                 TranscriptionError::InferenceError(format!(
                     "Failed to build input IDs tensor: {}",
@@ -377,7 +385,11 @@ impl MoonshineBackend {
 
             if !past_names.is_empty() {
                 if past_cache.is_none() {
-                    past_cache = Some(self.init_past_cache(decoder_cached, past_names, self.model.flavor)?);
+                    past_cache = Some(self.init_past_cache(
+                        decoder_cached,
+                        past_names,
+                        self.model.flavor,
+                    )?);
                 }
 
                 if let Some(ref cache_values) = past_cache {
@@ -388,13 +400,15 @@ impl MoonshineBackend {
             }
 
             let mut session = decoder_cached.lock();
-            let mut outputs = session
-                .run(SessionInputs::from(inputs))
-                .map_err(|e| TranscriptionError::InferenceError(format!("Decoder failed: {}", e)))?;
+            let mut outputs = session.run(SessionInputs::from(inputs)).map_err(|e| {
+                TranscriptionError::InferenceError(format!("Decoder failed: {}", e))
+            })?;
 
             let logits = outputs
                 .get(logits_name.as_str())
-                .ok_or_else(|| TranscriptionError::InferenceError("Missing decoder logits".to_string()))?
+                .ok_or_else(|| {
+                    TranscriptionError::InferenceError("Missing decoder logits".to_string())
+                })?
                 .try_extract_array::<f32>()
                 .map_err(|e| {
                     TranscriptionError::InferenceError(format!("Decoder logits error: {}", e))
@@ -523,10 +537,7 @@ impl MoonshineBackend {
             .as_ref()
             .map(|config| config.sampling_rate)
             .unwrap_or(16_000) as f32;
-        let token_rate = self
-            .model
-            .flavor
-            .map(|flavor| flavor.token_rate as f32);
+        let token_rate = self.model.flavor.map(|flavor| flavor.token_rate as f32);
 
         if let Some(token_rate) = token_rate {
             let seconds = (audio_len as f32) / rate;

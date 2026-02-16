@@ -53,7 +53,10 @@ impl SoundGenerator {
     }
 
     pub fn generate(&self, sound_type: SoundType) -> &[f32] {
-        self.cache.get(&sound_type).map(|v| v.as_slice()).unwrap_or(&[])
+        self.cache
+            .get(&sound_type)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
     }
 
     /// Generate a two-note melodic sequence with crossfade
@@ -93,7 +96,12 @@ impl SoundGenerator {
     }
 
     /// Crossfade two audio segments smoothly
-    fn crossfade_notes(&self, mut note1: Vec<f32>, note2: Vec<f32>, crossfade_dur: f32) -> Vec<f32> {
+    fn crossfade_notes(
+        &self,
+        mut note1: Vec<f32>,
+        note2: Vec<f32>,
+        crossfade_dur: f32,
+    ) -> Vec<f32> {
         let crossfade_samples = (self.sample_rate as f32 * crossfade_dur) as usize;
         let crossfade_samples = crossfade_samples.min(note1.len()).min(note2.len());
 
@@ -110,7 +118,7 @@ impl SoundGenerator {
         for i in 0..crossfade_samples {
             let fade_progress = i as f32 / crossfade_samples as f32;
             let fade_out = 1.0 - fade_progress; // Linear fade out
-            let fade_in = fade_progress;        // Linear fade in
+            let fade_in = fade_progress; // Linear fade in
 
             let note1_idx = note1_crossfade_start + i;
             if note1_idx < note1.len() && i < note2.len() {
@@ -127,7 +135,13 @@ impl SoundGenerator {
     }
 
     /// Generate a quick double-tap sound (for cancel)
-    fn generate_double_tap(&self, freq: f32, tap_dur: f32, gap_dur: f32, amplitude: f32) -> Vec<f32> {
+    fn generate_double_tap(
+        &self,
+        freq: f32,
+        tap_dur: f32,
+        gap_dur: f32,
+        amplitude: f32,
+    ) -> Vec<f32> {
         let mut samples = self.generate_rich_tone(freq, tap_dur, amplitude);
         // Add silence gap
         let gap_samples = (self.sample_rate as f32 * gap_dur) as usize;

@@ -87,8 +87,8 @@ impl LayoutManager {
         // Buttons are positioned within the text area
         // Return a rect that encompasses the text area with some padding
         (
-            -button_padding,                                    // x position (left edge with padding)
-            -button_padding,                                    // y position (top edge with padding)
+            -button_padding, // x position (left edge with padding)
+            -button_padding, // y position (top edge with padding)
             (self.window_width as f32) + (button_padding * 2.0), // width (full width with padding)
             (self.text_area_height as f32) + (button_padding * 2.0), // height (text area with padding)
         )

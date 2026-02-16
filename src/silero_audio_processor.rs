@@ -492,8 +492,7 @@ impl SileroVad {
         // Cache the sample rate conversion to avoid repeated multiplication
         let sample_idx_converter = |time: f64| -> usize { (time * self.sample_rate_f64) as usize };
 
-        let start_idx = sample_idx_converter(adjusted_start)
-            .min(self.sample_buffer.len());
+        let start_idx = sample_idx_converter(adjusted_start).min(self.sample_buffer.len());
 
         let end_idx = sample_idx_converter(adjusted_end).min(self.sample_buffer.len());
 

@@ -22,10 +22,7 @@ pub fn append_to_transcript_history(
     }
 
     // Append to file (create if doesn't exist)
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?;
+    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
 
     file.write_all(entry.as_bytes())?;
     Ok(())

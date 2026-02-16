@@ -35,8 +35,8 @@ impl Default for OnnxSessionOptions {
 }
 
 pub fn init_ort_environment() -> Result<()> {
-    let init_result = ORT_ENV_INITIALIZED
-        .get_or_init(|| ort::init().commit().map(|_| ()).map_err(|e| e.into()));
+    let init_result =
+        ORT_ENV_INITIALIZED.get_or_init(|| ort::init().commit().map(|_| ()).map_err(|e| e.into()));
     init_result
         .as_ref()
         .map(|_| ())
@@ -52,15 +52,22 @@ pub fn load_session(path: impl AsRef<Path>, options: &OnnxSessionOptions) -> Res
         .with_inter_threads(options.inter_threads)?;
 
     // Configure execution providers based on preference
+    #[cfg(not(feature = "ort-cuda"))]
+    let builder = builder;
+
     #[cfg(feature = "ort-cuda")]
-    if matches!(
-        options.execution_provider,
-        ExecutionProviderPreference::PreferGpu
-    ) {
-        use ort::execution_providers::cuda::CUDAExecutionProvider;
-        builder = builder.with_execution_providers([CUDAExecutionProvider::default().build()])?;
-        println!("ONNX session configured with CUDA execution provider");
-    }
+    let builder = {
+        if matches!(
+            options.execution_provider,
+            ExecutionProviderPreference::PreferGpu
+        ) {
+            use ort::execution_providers::cuda::CUDAExecutionProvider;
+            println!("ONNX session configured with CUDA execution provider");
+            builder.with_execution_providers([CUDAExecutionProvider::default().build()])?
+        } else {
+            builder
+        }
+    };
 
     let session = builder.commit_from_file(path)?;
     Ok(session)

@@ -2,7 +2,6 @@
 ///
 /// Encapsulates all WGPU rendering resources (device, queue, surface, config)
 /// into a single, reusable context for easier resource management.
-
 use std::sync::Arc;
 
 /// Wraps WGPU rendering resources
@@ -55,7 +54,8 @@ impl RenderContext {
 
     /// Create a command encoder for recording render commands
     pub fn create_encoder(&self, label: Option<&str>) -> wgpu::CommandEncoder {
-        self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label })
+        self.device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label })
     }
 
     /// Submit a command buffer for execution

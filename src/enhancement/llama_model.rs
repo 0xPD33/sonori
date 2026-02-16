@@ -57,10 +57,7 @@ impl LlamaCppModel {
             EnhancementError::InferenceError(format!("Failed to load GGUF model: {:?}", e))
         })?;
 
-        println!(
-            "Loaded GGUF model from {} (CPU mode)",
-            path.display()
-        );
+        println!("Loaded GGUF model from {} (CPU mode)", path.display());
 
         Ok(Self {
             backend,
@@ -93,26 +90,37 @@ impl LlamaCppModel {
         );
 
         // Create context for this generation
-        let ctx_params = LlamaContextParams::default()
-            .with_n_ctx(NonZeroU32::new(self.context_size));
+        let ctx_params =
+            LlamaContextParams::default().with_n_ctx(NonZeroU32::new(self.context_size));
 
-        let mut ctx = self.model.new_context(&self.backend, ctx_params).map_err(|e| {
-            EnhancementError::InferenceError(format!("Failed to create context: {:?}", e))
-        })?;
+        let mut ctx = self
+            .model
+            .new_context(&self.backend, ctx_params)
+            .map_err(|e| {
+                EnhancementError::InferenceError(format!("Failed to create context: {:?}", e))
+            })?;
 
         // Tokenize the prompt
         let start = Instant::now();
-        let tokens = self.model.str_to_token(&prompt, AddBos::Always).map_err(|e| {
-            EnhancementError::InferenceError(format!("Failed to tokenize: {:?}", e))
-        })?;
+        let tokens = self
+            .model
+            .str_to_token(&prompt, AddBos::Always)
+            .map_err(|e| {
+                EnhancementError::InferenceError(format!("Failed to tokenize: {:?}", e))
+            })?;
 
         // Create batch and add tokens
         let mut batch = LlamaBatch::new(self.context_size as usize, 1);
         let last_index = tokens.len() - 1;
         for (i, token) in tokens.iter().enumerate() {
-            batch.add(*token, i as i32, &[0], i == last_index).map_err(|e| {
-                EnhancementError::InferenceError(format!("Failed to add token to batch: {:?}", e))
-            })?;
+            batch
+                .add(*token, i as i32, &[0], i == last_index)
+                .map_err(|e| {
+                    EnhancementError::InferenceError(format!(
+                        "Failed to add token to batch: {:?}",
+                        e
+                    ))
+                })?;
         }
 
         // Process the prompt (prefill)
@@ -120,7 +128,11 @@ impl LlamaCppModel {
             EnhancementError::InferenceError(format!("Failed to decode prompt: {:?}", e))
         })?;
 
-        println!("[LlamaCpp] Prefill ({} tokens): {:?}", tokens.len(), start.elapsed());
+        println!(
+            "[LlamaCpp] Prefill ({} tokens): {:?}",
+            tokens.len(),
+            start.elapsed()
+        );
 
         // Set up sampler for generation
         let mut sampler = LlamaSampler::chain_simple([
@@ -145,7 +157,8 @@ impl LlamaCppModel {
             }
 
             // Decode token to string to check for stop sequences
-            let token_str = self.model
+            let token_str = self
+                .model
                 .token_to_str(token, Special::Tokenize)
                 .unwrap_or_default();
 

@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use wgpu;
 
-use super::gpu_utils::GpuQuadRenderer;
 use super::common::ProcessingState;
+use super::gpu_utils::GpuQuadRenderer;
 use crate::real_time_transcriber::TranscriptionMode;
 
 /// Loading animation component for transcription processing
@@ -78,12 +78,23 @@ impl LoadingAnimation {
         let progress = (elapsed.as_secs_f32() / self.animation_duration.as_secs_f32()) % 1.0;
 
         match self.state {
-            AnimationState::Dots => self.render_dots_animation(encoder, view, center_x, center_y, size, color, progress),
-            AnimationState::Spinner => self.render_spinner_animation(encoder, view, center_x, center_y, size, color, progress),
-            AnimationState::Success => self.render_success_animation(encoder, view, center_x, center_y, size, color),
-            AnimationState::Error => self.render_error_animation(encoder, view, center_x, center_y, size, color),
-            AnimationState::Idle => self.render_idle_animation(encoder, view, center_x, center_y, size, color, progress),
-            AnimationState::Paused => self.render_paused_animation(encoder, view, center_x, center_y, size, color),
+            AnimationState::Dots => {
+                self.render_dots_animation(encoder, view, center_x, center_y, size, color, progress)
+            }
+            AnimationState::Spinner => self
+                .render_spinner_animation(encoder, view, center_x, center_y, size, color, progress),
+            AnimationState::Success => {
+                self.render_success_animation(encoder, view, center_x, center_y, size, color)
+            }
+            AnimationState::Error => {
+                self.render_error_animation(encoder, view, center_x, center_y, size, color)
+            }
+            AnimationState::Idle => {
+                self.render_idle_animation(encoder, view, center_x, center_y, size, color, progress)
+            }
+            AnimationState::Paused => {
+                self.render_paused_animation(encoder, view, center_x, center_y, size, color)
+            }
         }
     }
 
@@ -146,7 +157,8 @@ impl LoadingAnimation {
         let segment_size = size * 0.1;
 
         for i in 0..segments {
-            let angle = (i as f32 / segments as f32) * 2.0 * std::f32::consts::PI + progress * 2.0 * std::f32::consts::PI;
+            let angle = (i as f32 / segments as f32) * 2.0 * std::f32::consts::PI
+                + progress * 2.0 * std::f32::consts::PI;
             let radius = size * 0.3;
             let x = center_x + angle.cos() * radius;
             let y = center_y + angle.sin() * radius;
@@ -323,22 +335,36 @@ impl LoadingAnimation {
     }
 
     /// Get appropriate text for the current processing state
-    pub fn get_processing_text(&self, processing_state: ProcessingState, transcription_mode: TranscriptionMode) -> &'static str {
+    pub fn get_processing_text(
+        &self,
+        processing_state: ProcessingState,
+        transcription_mode: TranscriptionMode,
+    ) -> &'static str {
         match (transcription_mode, processing_state) {
             // Loading is same for both modes
             (_, ProcessingState::Loading) => "Loading model...",
 
             // Real-time mode messages
-            (TranscriptionMode::RealTime, ProcessingState::Idle) => "Press Space to start • Ready to transcribe",
-            (TranscriptionMode::RealTime, ProcessingState::Paused) => "Paused • Press Space to resume",
+            (TranscriptionMode::RealTime, ProcessingState::Idle) => {
+                "Press Space to start • Ready to transcribe"
+            }
+            (TranscriptionMode::RealTime, ProcessingState::Paused) => {
+                "Paused • Press Space to resume"
+            }
             (TranscriptionMode::RealTime, ProcessingState::Transcribing) => "Transcribing...",
 
             // Manual mode messages
             (TranscriptionMode::Manual, ProcessingState::Idle) => "Press Space to record • Ready",
             (TranscriptionMode::Manual, ProcessingState::Transcribing) => "Transcribing...",
-            (TranscriptionMode::Manual, ProcessingState::Completed) => "Complete • Press Space for new recording",
-            (TranscriptionMode::Manual, ProcessingState::Error) => "Transcription failed • Try again",
-            (TranscriptionMode::Manual, ProcessingState::Paused) => "Paused • Press Space to resume",
+            (TranscriptionMode::Manual, ProcessingState::Completed) => {
+                "Complete • Press Space for new recording"
+            }
+            (TranscriptionMode::Manual, ProcessingState::Error) => {
+                "Transcription failed • Try again"
+            }
+            (TranscriptionMode::Manual, ProcessingState::Paused) => {
+                "Paused • Press Space to resume"
+            }
 
             // Fallback
             _ => "Ready",
@@ -348,12 +374,12 @@ impl LoadingAnimation {
     /// Get appropriate color for the current processing state
     pub fn get_processing_color(&self, processing_state: ProcessingState) -> [f32; 4] {
         match processing_state {
-            ProcessingState::Loading => [0.7, 0.7, 0.7, 0.6],      // More translucent gray
+            ProcessingState::Loading => [0.7, 0.7, 0.7, 0.6], // More translucent gray
             ProcessingState::Transcribing => [0.1, 0.9, 0.5, 0.6], // More translucent teal
-            ProcessingState::Completed => [0.2, 0.8, 0.2, 0.7],   // More translucent green
-            ProcessingState::Error => [0.9, 0.2, 0.2, 0.7],     // More translucent red
-            ProcessingState::Idle => [1.0, 0.85, 0.15, 0.6],    // More translucent gold
-            ProcessingState::Paused => [0.9, 0.6, 0.1, 0.6],    // More translucent orange
+            ProcessingState::Completed => [0.2, 0.8, 0.2, 0.7], // More translucent green
+            ProcessingState::Error => [0.9, 0.2, 0.2, 0.7],   // More translucent red
+            ProcessingState::Idle => [1.0, 0.85, 0.15, 0.6],  // More translucent gold
+            ProcessingState::Paused => [0.9, 0.6, 0.1, 0.6],  // More translucent orange
         }
     }
 }

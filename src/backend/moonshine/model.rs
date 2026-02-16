@@ -178,10 +178,8 @@ impl MoonshineModel {
             &["input_features", "input_values", "features", "input"],
             "encoder input",
         )?;
-        let encoder_attention_mask = resolve_optional_input_name(
-            &encoder.inputs,
-            &["attention_mask"],
-        );
+        let encoder_attention_mask =
+            resolve_optional_input_name(&encoder.inputs, &["attention_mask"]);
         let encoder_output = resolve_output_name(
             &encoder.outputs,
             &["encoder_hidden_states", "last_hidden_state", "output"],
@@ -195,7 +193,11 @@ impl MoonshineModel {
         )?;
         let decoder_encoder_states = resolve_input_name(
             &decoder.inputs,
-            &["encoder_hidden_states", "encoder_outputs", "encoder_hidden_state"],
+            &[
+                "encoder_hidden_states",
+                "encoder_outputs",
+                "encoder_hidden_state",
+            ],
             "decoder encoder_hidden_states",
         )?;
         let decoder_encoder_attention_mask =
@@ -220,7 +222,11 @@ impl MoonshineModel {
             )?;
             let cached_encoder_states = resolve_input_name(
                 &cached_session.inputs,
-                &["encoder_hidden_states", "encoder_outputs", "encoder_hidden_state"],
+                &[
+                    "encoder_hidden_states",
+                    "encoder_outputs",
+                    "encoder_hidden_state",
+                ],
                 "cached decoder encoder_hidden_states",
             )?;
 
@@ -330,7 +336,10 @@ impl MoonshineModel {
 
 fn resolve_input_name(inputs: &[Input], candidates: &[&str], label: &str) -> Result<String> {
     resolve_name(
-        inputs.iter().map(|input| input.name.as_str()).collect::<Vec<_>>(),
+        inputs
+            .iter()
+            .map(|input| input.name.as_str())
+            .collect::<Vec<_>>(),
         candidates,
         label,
     )
@@ -338,7 +347,10 @@ fn resolve_input_name(inputs: &[Input], candidates: &[&str], label: &str) -> Res
 
 fn resolve_output_name(outputs: &[Output], candidates: &[&str], label: &str) -> Result<String> {
     resolve_name(
-        outputs.iter().map(|output| output.name.as_str()).collect::<Vec<_>>(),
+        outputs
+            .iter()
+            .map(|output| output.name.as_str())
+            .collect::<Vec<_>>(),
         candidates,
         label,
     )
@@ -429,10 +441,7 @@ fn is_present_tensor(name: &str) -> bool {
     name.contains("present") || name.contains("key_values")
 }
 
-pub fn cached_input_shape(
-    inputs: &[Input],
-    name: &str,
-) -> Result<Vec<i64>> {
+pub fn cached_input_shape(inputs: &[Input], name: &str) -> Result<Vec<i64>> {
     let input = inputs
         .iter()
         .find(|input| input.name == name)
@@ -440,7 +449,10 @@ pub fn cached_input_shape(
 
     match &input.input_type {
         ValueType::Tensor { shape, .. } => Ok(shape.to_vec()),
-        _ => Err(anyhow::anyhow!("Cached decoder input is not a tensor: {}", name)),
+        _ => Err(anyhow::anyhow!(
+            "Cached decoder input is not a tensor: {}",
+            name
+        )),
     }
 }
 
@@ -456,10 +468,19 @@ pub struct MoonshinePreprocessorConfig {
 }
 
 fn load_preprocessor_config(path: &Path) -> Result<MoonshinePreprocessorConfig> {
-    let contents = std::fs::read_to_string(path)
-        .with_context(|| format!("Failed to read Moonshine preprocessor config: {}", path.display()))?;
-    let config: MoonshinePreprocessorConfig = serde_json::from_str(&contents)
-        .with_context(|| format!("Failed to parse Moonshine preprocessor config: {}", path.display()))?;
+    let contents = std::fs::read_to_string(path).with_context(|| {
+        format!(
+            "Failed to read Moonshine preprocessor config: {}",
+            path.display()
+        )
+    })?;
+    let config: MoonshinePreprocessorConfig =
+        serde_json::from_str(&contents).with_context(|| {
+            format!(
+                "Failed to parse Moonshine preprocessor config: {}",
+                path.display()
+            )
+        })?;
     Ok(config)
 }
 

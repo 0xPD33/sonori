@@ -58,16 +58,17 @@ impl AudioProcessor {
         app_config: AppConfig,
     ) -> Self {
         // Calculate manual buffer size from max_recording_duration_secs and sample_rate
-        let manual_buffer_max_size =
-            (app_config.manual_mode_config.max_recording_duration_secs as usize)
-                * crate::config::SAMPLE_RATE;
+        let manual_buffer_max_size = (app_config.manual_mode_config.max_recording_duration_secs
+            as usize)
+            * crate::config::SAMPLE_RATE;
         let manual_audio_buffer = Arc::new(Mutex::new(Vec::with_capacity(manual_buffer_max_size)));
 
         // Initialize session ID based on transcription mode
-        let initial_session_id = match TranscriptionMode::from_u8(transcription_mode.load(Ordering::Relaxed)) {
-            TranscriptionMode::RealTime => Some("realtime".to_string()),
-            TranscriptionMode::Manual => None, // Will be set when session starts
-        };
+        let initial_session_id =
+            match TranscriptionMode::from_u8(transcription_mode.load(Ordering::Relaxed)) {
+                TranscriptionMode::RealTime => Some("realtime".to_string()),
+                TranscriptionMode::Manual => None, // Will be set when session starts
+            };
 
         Self {
             running,
@@ -189,7 +190,8 @@ impl AudioProcessor {
                         }
 
                         // Route to appropriate processing based on current mode
-                        let current_mode = TranscriptionMode::from_u8(transcription_mode.load(Ordering::Relaxed));
+                        let current_mode =
+                            TranscriptionMode::from_u8(transcription_mode.load(Ordering::Relaxed));
                         match current_mode {
                             TranscriptionMode::RealTime => {
                                 Self::process_realtime_audio(
@@ -278,7 +280,8 @@ impl AudioProcessor {
             let mut audio_data = audio_visualization_data.write();
 
             visualization_buffer.clear();
-            visualization_buffer.extend_from_slice(&audio_buffer[..buffer_size.min(audio_buffer.len())]);
+            visualization_buffer
+                .extend_from_slice(&audio_buffer[..buffer_size.min(audio_buffer.len())]);
             if audio_data.samples != *visualization_buffer {
                 audio_data.samples.clear();
                 audio_data.samples.extend_from_slice(visualization_buffer);
@@ -377,7 +380,8 @@ impl AudioProcessor {
         // Update visualization data
         if let Some(mut audio_data) = audio_visualization_data.try_write() {
             visualization_buffer.clear();
-            visualization_buffer.extend_from_slice(&audio_buffer[..buffer_size.min(audio_buffer.len())]);
+            visualization_buffer
+                .extend_from_slice(&audio_buffer[..buffer_size.min(audio_buffer.len())]);
             if audio_data.samples != *visualization_buffer {
                 audio_data.samples.clear();
                 audio_data.samples.extend_from_slice(visualization_buffer);
@@ -556,7 +560,10 @@ impl AudioProcessor {
 
         // Create directory if it doesn't exist
         if let Err(e) = fs::create_dir_all(recording_dir) {
-            eprintln!("Failed to create recording directory '{}': {}", recording_dir, e);
+            eprintln!(
+                "Failed to create recording directory '{}': {}",
+                recording_dir, e
+            );
             return;
         }
 

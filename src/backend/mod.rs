@@ -11,10 +11,10 @@
 
 pub mod ctranslate2;
 pub mod factory;
-pub mod traits;
-pub mod whisper_cpp;
 pub mod moonshine;
 pub mod onnx_utils;
+pub mod traits;
+pub mod whisper_cpp;
 
 use serde::{Deserialize, Serialize};
 use std::fmt;

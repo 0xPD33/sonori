@@ -13,7 +13,11 @@ pub struct Scrollbar {
 }
 
 impl Scrollbar {
-    pub fn new(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration, _hover_bind_group_layout: &wgpu::BindGroupLayout) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        config: &wgpu::SurfaceConfiguration,
+        _hover_bind_group_layout: &wgpu::BindGroupLayout,
+    ) -> Self {
         // Create vertices for the scrollbar
         let scrollbar_vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Scrollbar Vertices"),
@@ -33,19 +37,20 @@ impl Scrollbar {
         });
 
         // Create bind group layout for color uniforms
-        let color_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Scrollbar Color Bind Group Layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
+        let color_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Scrollbar Color Bind Group Layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
 
         // Create color buffers
         // Track: dark semi-transparent

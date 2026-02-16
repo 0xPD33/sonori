@@ -57,7 +57,9 @@ fn paste_ctrl_v() -> Result<(), String> {
 
 fn paste_ctrl_shift_v() -> Result<(), String> {
     if let Ok(status) = Command::new("wtype")
-        .args(["-M", "ctrl", "-M", "shift", "-k", "v", "-m", "shift", "-m", "ctrl"])
+        .args([
+            "-M", "ctrl", "-M", "shift", "-k", "v", "-m", "shift", "-m", "ctrl",
+        ])
         .status()
     {
         if status.success() {

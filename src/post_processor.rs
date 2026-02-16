@@ -68,7 +68,10 @@ fn normalize_whitespace(text: String) -> String {
     while let Some(c) = chars.next() {
         match c {
             // Preserve single spaces between words
-            ' ' if !result.is_empty() && !result.ends_with(' ') && !chars.peek().map_or(true, |&next| next.is_whitespace()) => {
+            ' ' if !result.is_empty()
+                && !result.ends_with(' ')
+                && !chars.peek().map_or(true, |&next| next.is_whitespace()) =>
+            {
                 // This is a single space between non-whitespace, keep it
                 result.push(' ');
             }
@@ -79,7 +82,9 @@ fn normalize_whitespace(text: String) -> String {
                     chars.next();
                 }
                 // Add single space if not at beginning or end
-                if !result.is_empty() && !matches!(chars.peek(), None | Some(' ' | '\t' | '\n' | '\r')) {
+                if !result.is_empty()
+                    && !matches!(chars.peek(), None | Some(' ' | '\t' | '\n' | '\r'))
+                {
                     result.push(' ');
                 }
             }
@@ -92,4 +97,3 @@ fn normalize_whitespace(text: String) -> String {
     // Clean up any trailing space that might have been added
     result.trim().to_string()
 }
-
