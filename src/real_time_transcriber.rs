@@ -708,6 +708,10 @@ impl RealTimeTranscriber {
                                                     // NOW set recording=false after channel has drained
                                                     recording_for_task.store(false, Ordering::Relaxed);
 
+                                                    // Drop the guard immediately after drain completes so new
+                                                    // sessions can start while transcription is still running
+                                                    drop(_guard);
+
                                                     // Set processing state to transcribing for manual session
                                                     {
                                                         let mut audio_data = audio_viz_data.write();
@@ -717,10 +721,6 @@ impl RealTimeTranscriber {
                                                     let transcription_result = audio_processor
                                                         .trigger_manual_transcription(sample_rate, Some(captured_session_id.clone()))
                                                         .await;
-
-                                                    // Drop the guard after transcription completes so new sessions can start
-                                                    // during the cooldown period
-                                                    drop(_guard);
 
                                                     if let Err(e) = transcription_result {
                                                         eprintln!(

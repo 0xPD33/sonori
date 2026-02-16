@@ -95,7 +95,6 @@ pub fn get_socket_path() -> PathBuf {
 }
 
 /// IPC server that listens for commands from CLI clients
-#[derive(Clone)]
 pub struct IpcServer {
     socket_path: PathBuf,
     manual_session_tx: mpsc::Sender<ManualSessionCommand>,
@@ -140,19 +139,19 @@ impl IpcServer {
 
         println!("IPC server listening on {:?}", self.socket_path);
 
-        // Accept connections until shutdown
+        // Accept connections until shutdown.
+        // Handle each connection inline so the response is sent before accepting
+        // the next one. This avoids a race where a spawned task's response never
+        // reaches the client (causing the CLI process to hang and preventing
+        // subsequent hotkey invocations).
         loop {
             tokio::select! {
                 accept_result = listener.accept() => {
                     match accept_result {
                         Ok((stream, _)) => {
-                            let server = self.clone();
-                            tokio::spawn(async move {
-                                let response = server.handle_connection(stream).await;
-                                if let Err(e) = response {
-                                    eprintln!("IPC connection error: {}", e);
-                                }
-                            });
+                            if let Err(e) = self.handle_connection(stream).await {
+                                eprintln!("IPC connection error: {}", e);
+                            }
                         }
                         Err(e) => {
                             eprintln!("IPC accept error: {}", e);

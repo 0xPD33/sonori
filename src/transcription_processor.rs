@@ -476,7 +476,7 @@ impl TranscriptionProcessor {
                 // Block on receiving segments without timeout - this is much more efficient
                 match segment_rx.recv().await {
                     Some(segment) => {
-                        Self::process_segment(
+                        tokio::spawn(Self::process_segment(
                             segment,
                             backend.clone(),
                             language.clone(),
@@ -486,8 +486,7 @@ impl TranscriptionProcessor {
                             magic_mode_enabled.clone(),
                             enhancement_model.clone(),
                             log_stats_enabled,
-                        )
-                        .await;
+                        ));
                     }
                     None => {
                         // Channel closed
