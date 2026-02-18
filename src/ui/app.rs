@@ -16,7 +16,8 @@ use winit::{
 
 use winit::platform::wayland::{KeyboardInteractivity, Layer, WindowAttributesWayland};
 
-use super::common::AudioVisualizationData;
+use super::common::{AudioVisualizationData, BackendStatus};
+use super::settings_window::SettingsWindow;
 use super::window::WindowState;
 
 // Constants from window.rs
@@ -41,6 +42,10 @@ pub fn run() {
         )),
         tray_update_tx: None,
         tray_command_rx: None,
+        backend_status: None,
+        backend_command_tx: None,
+        settings_window: None,
+        settings_window_id: None,
     };
     event_loop
         .run_app(&mut app)
@@ -59,6 +64,10 @@ pub fn run_with_audio_data(
     transcription_mode_ref: Arc<AtomicU8>,
     tray_update_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::system_tray::TrayUpdate>>,
     tray_command_rx: Option<tokio::sync::mpsc::UnboundedReceiver<crate::system_tray::TrayCommand>>,
+    backend_status: Option<Arc<RwLock<BackendStatus>>>,
+    backend_command_tx: Option<
+        tokio::sync::mpsc::UnboundedSender<crate::backend_manager::BackendCommand>,
+    >,
 ) {
     let event_loop = EventLoop::new()
         .expect("Failed to create event loop. Ensure a display server (Wayland/X11) is available.");
@@ -74,6 +83,10 @@ pub fn run_with_audio_data(
         transcription_mode_ref,
         tray_update_tx,
         tray_command_rx,
+        backend_status,
+        backend_command_tx,
+        settings_window: None,
+        settings_window_id: None,
     };
 
     event_loop
@@ -95,9 +108,69 @@ pub struct WindowApp {
     pub tray_update_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::system_tray::TrayUpdate>>,
     pub tray_command_rx:
         Option<tokio::sync::mpsc::UnboundedReceiver<crate::system_tray::TrayCommand>>,
+    pub backend_status: Option<Arc<RwLock<BackendStatus>>>,
+    pub backend_command_tx:
+        Option<tokio::sync::mpsc::UnboundedSender<crate::backend_manager::BackendCommand>>,
+    pub settings_window: Option<SettingsWindow>,
+    pub settings_window_id: Option<WindowId>,
 }
 
 impl WindowApp {
+    fn open_settings_window(&mut self, event_loop: &dyn ActiveEventLoop) {
+        if self.settings_window.is_some() {
+            return;
+        }
+
+        let mut attrs = WindowAttributes::default()
+            .with_title("Sonori Settings")
+            .with_surface_size(winit::dpi::LogicalSize::new(400, 500))
+            .with_decorations(false)
+            .with_transparent(false)
+            .with_resizable(false);
+
+        if event_loop.is_wayland() {
+            // Must use layer-shell for the settings window too, because this winit
+            // fork doesn't deliver pointer events to non-layer-shell windows.
+            // No anchor = compositor centers the surface.
+            let wayland_attrs = WindowAttributesWayland::default()
+                .with_layer_shell()
+                .with_layer(Layer::Overlay)
+                .with_exclusive_zone(-1)
+                .with_keyboard_interactivity(KeyboardInteractivity::OnDemand);
+            attrs = attrs.with_platform_attributes(Box::new(wayland_attrs));
+        }
+
+        // Get instance/device/queue/format from the main window to share GPU context
+        let (instance, device, queue, format) = match self.windows.values().next() {
+            Some(main_win) => (
+                &main_win.instance,
+                main_win.device.clone(),
+                main_win.queue.clone(),
+                main_win.config.format,
+            ),
+            None => return,
+        };
+
+        match event_loop.create_window(attrs) {
+            Ok(window) => {
+                let settings_win = SettingsWindow::new(
+                    window,
+                    instance,
+                    device,
+                    queue,
+                    format,
+                    self.backend_command_tx.clone(),
+                );
+                let id = settings_win.window.id();
+                self.settings_window_id = Some(id);
+                self.settings_window = Some(settings_win);
+            }
+            Err(e) => {
+                eprintln!("Failed to create settings window: {}", e);
+            }
+        }
+    }
+
     fn notify_tray_about_recording(&self) {
         if let (Some(recording_flag), Some(tray_tx)) = (&self.recording, &self.tray_update_tx) {
             let is_recording = recording_flag.load(Ordering::Relaxed);
@@ -189,6 +262,14 @@ impl ApplicationHandler for WindowApp {
                 return;
             };
             let window_attributes = window_attributes.clone();
+            let backend_name = match self.config.backend_config.backend {
+                crate::backend::BackendType::CTranslate2 => "CTranslate2",
+                crate::backend::BackendType::WhisperCpp => "WhisperCpp",
+                crate::backend::BackendType::Moonshine => "Moonshine",
+                crate::backend::BackendType::Parakeet => "Parakeet",
+            }
+            .to_string();
+            let model_name = self.config.general_config.model.clone();
             let mut window_state = create_window(
                 event_loop,
                 window_attributes.with_title("Sonori"),
@@ -205,6 +286,10 @@ impl ApplicationHandler for WindowApp {
                 self.transcription_mode_ref.clone(),
                 &self.config.display_config,
                 self.config.enhancement_config.enabled,
+                &backend_name,
+                &model_name,
+                self.backend_status.clone(),
+                self.backend_command_tx.clone(),
             );
 
             if let Some(audio_data) = &self.audio_data {
@@ -230,6 +315,73 @@ impl ApplicationHandler for WindowApp {
                 return;
             }
         }
+        // Route events to settings window if it's the target
+        if Some(window_id) == self.settings_window_id {
+            if let Some(sw) = &mut self.settings_window {
+                match event {
+                    WindowEvent::CloseRequested => {
+                        self.settings_window = None;
+                        self.settings_window_id = None;
+                        return;
+                    }
+                    WindowEvent::SurfaceResized(size) => {
+                        sw.resize(size.width, size.height);
+                        return;
+                    }
+                    WindowEvent::RedrawRequested => {
+                        sw.draw();
+                        return;
+                    }
+                    WindowEvent::KeyboardInput {
+                        event:
+                            KeyEvent {
+                                state: ElementState::Pressed,
+                                ref logical_key,
+                                physical_key: PhysicalKey::Code(key_code),
+                                ..
+                            },
+                        ..
+                    } => {
+                        if key_code == KeyCode::Escape {
+                            self.settings_window = None;
+                            self.settings_window_id = None;
+                        } else {
+                            let shift = self.current_modifiers.state().shift_key();
+                            if sw.handle_key(logical_key, shift) {
+                                sw.window.request_redraw();
+                            }
+                        }
+                        return;
+                    }
+                    WindowEvent::PointerButton {
+                        state,
+                        position,
+                        ..
+                    } => {
+                        if state == ElementState::Pressed {
+                            sw.handle_click(position.x as f32, position.y as f32);
+                            if sw.close_requested() {
+                                self.settings_window = None;
+                                self.settings_window_id = None;
+                                return;
+                            }
+                        } else if state == ElementState::Released {
+                            sw.handle_mouse_release();
+                        }
+                        return;
+                    }
+                    WindowEvent::PointerMoved { position, .. } => {
+                        sw.handle_mouse_move(position.x as f32, position.y as f32);
+                        return;
+                    }
+                    _ => {
+                        return;
+                    }
+                }
+            }
+            return;
+        }
+
         match event {
             WindowEvent::ModifiersChanged(modifiers) => {
                 // Update modifiers without borrowing the window
@@ -309,6 +461,16 @@ impl ApplicationHandler for WindowApp {
                 self.notify_tray_about_recording();
             }
         }
+
+        // Check if settings was requested (outside the window borrow scope)
+        let settings_requested = self
+            .windows
+            .get_mut(&window_id)
+            .map(|w| w.check_settings_requested())
+            .unwrap_or(false);
+        if settings_requested {
+            self.open_settings_window(event_loop);
+        }
     }
 }
 
@@ -328,6 +490,12 @@ fn create_window(
     transcription_mode_ref: Arc<AtomicU8>,
     display_config: &crate::config::DisplayConfig,
     enhancement_enabled: bool,
+    backend_name: &str,
+    model_name: &str,
+    backend_status: Option<Arc<RwLock<BackendStatus>>>,
+    backend_command_tx: Option<
+        tokio::sync::mpsc::UnboundedSender<crate::backend_manager::BackendCommand>,
+    >,
 ) -> WindowState {
     // Get monitor dimensions from video mode
     let monitor_size = monitor_mode.size();
@@ -351,9 +519,10 @@ fn create_window(
 
     // Calculate proportional layout (make spectrogram more rectangular)
     let spectrogram_width = logical_width;
-    let spectrogram_height = (logical_height as f32 * 0.32) as u32; // Increased from 0.28 to 0.32 for a bit more height
-    let text_area_height = (logical_height as f32 * 0.66) as u32; // Decreased from 0.70 to 0.66
-    let gap = (logical_height as f32 * 0.02).max(4.0) as u32;
+    let spectrogram_height = (logical_height as f32 * 0.32) as u32;
+    let status_bar_height = 20u32;
+    let text_area_height = ((logical_height as f32 * 0.66) as u32).saturating_sub(status_bar_height);
+    let gap = 0u32;
 
     // Set the fixed size in the window attributes
     let mut w = w.with_surface_size(logical_size);
@@ -409,5 +578,9 @@ fn create_window(
         text_area_height,
         gap,
         enhancement_enabled,
+        backend_name,
+        model_name,
+        backend_status,
+        backend_command_tx,
     )
 }

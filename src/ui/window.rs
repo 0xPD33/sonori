@@ -11,7 +11,7 @@ use winit::{
 
 use super::button_panel::ButtonPanel;
 use super::buttons::ButtonManager;
-use super::common::AudioVisualizationData;
+use super::common::{AudioVisualizationData, BackendStatus};
 use super::event_handler::EventHandler;
 use super::layout_manager::LayoutManager;
 use super::loading_animation::LoadingAnimation;
@@ -19,6 +19,7 @@ use super::render_pipeline::RenderPipelines;
 use super::scroll_state::ScrollState;
 use super::scrollbar::Scrollbar;
 use super::spectogram::Spectrogram;
+use super::status_bar::StatusBar;
 use super::text_processor::TextProcessor;
 use super::text_window::TextWindow;
 use super::timer_badge::TimerBadge;
@@ -29,12 +30,13 @@ pub const SPECTROGRAM_WIDTH: u32 = 240; // Width of the spectrogram
 pub const SPECTROGRAM_HEIGHT: u32 = 80; // Height of the spectrogram
 pub const TEXT_AREA_HEIGHT: u32 = 90; // Additional height for text above spectrogram
 pub const MARGIN: i32 = 32; // Margin from the bottom of the screen
-pub const GAP: u32 = 4; // Gap between text area and spectrogram
+pub const GAP: u32 = 0; // Gap replaced by status bar top border
 pub const RIGHT_MARGIN: f32 = 4.0; // Right margin for text area
 pub const LEFT_MARGIN: f32 = 4.0; // Left margin for text area
 
 pub struct WindowState {
     pub window: Arc<dyn Window>,
+    pub instance: wgpu::Instance,
     pub surface: wgpu::Surface<'static>,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
@@ -46,6 +48,8 @@ pub struct WindowState {
     pub button_manager: ButtonManager,
     pub button_panel: ButtonPanel,
     pub tooltip: Tooltip,
+    pub status_bar: StatusBar,
+    pub backend_status: Arc<RwLock<BackendStatus>>,
     pub text_processor: TextProcessor,
     pub layout_manager: LayoutManager,
     pub scrollbar: Scrollbar,
@@ -53,6 +57,8 @@ pub struct WindowState {
     pub event_handler: EventHandler,
     pub loading_animation: LoadingAnimation,
     pub timer_badge: TimerBadge,
+    pub backend_command_tx:
+        Option<tokio::sync::mpsc::UnboundedSender<crate::backend_manager::BackendCommand>>,
     pub running: Option<Arc<AtomicBool>>,
     pub recording: Option<Arc<AtomicBool>>,
     pub magic_mode_enabled: Option<Arc<AtomicBool>>,
@@ -101,6 +107,12 @@ impl WindowState {
         text_area_height: u32,
         gap: u32,
         enhancement_enabled: bool,
+        backend_name: &str,
+        model_name: &str,
+        external_backend_status: Option<Arc<RwLock<BackendStatus>>>,
+        backend_command_tx: Option<
+            tokio::sync::mpsc::UnboundedSender<crate::backend_manager::BackendCommand>,
+        >,
     ) -> Self {
         let window: Arc<dyn Window> = Arc::from(window);
 
@@ -123,8 +135,11 @@ impl WindowState {
         let (device, queue) = pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: None,
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
+                required_features: wgpu::Features::PUSH_CONSTANTS,
+                required_limits: wgpu::Limits {
+                    max_push_constant_size: 128,
+                    ..wgpu::Limits::default()
+                },
                 memory_hints: wgpu::MemoryHints::default(),
                 trace: wgpu::Trace::Off,
             },
@@ -250,6 +265,26 @@ impl WindowState {
         // Create the tooltip
         let tooltip = Tooltip::new(device.clone(), queue.clone(), config.format);
 
+        // Use externally-provided backend status (shared with BackendManager) or create local
+        let backend_status = external_backend_status.unwrap_or_else(|| {
+            Arc::new(RwLock::new(BackendStatus::new(
+                backend_name.to_string(),
+                model_name.to_string(),
+            )))
+        });
+
+        // Status bar height: ~18px scaled
+        let status_bar_height = 20u32;
+
+        // Create the status bar
+        let status_bar = StatusBar::new(
+            &device,
+            &queue,
+            &config,
+            PhysicalSize::new(config.width, config.height),
+            backend_status.clone(),
+        );
+
         // Create the scrollbar
         let scrollbar = Scrollbar::new(&device, &config, &render_pipelines.hover_bind_group_layout);
 
@@ -263,6 +298,7 @@ impl WindowState {
             spectrogram_width,
             spectrogram_height,
             text_area_height,
+            status_bar_height,
             RIGHT_MARGIN,
             LEFT_MARGIN,
             gap,
@@ -298,6 +334,7 @@ impl WindowState {
 
         Self {
             window,
+            instance,
             surface,
             device,
             queue,
@@ -309,6 +346,8 @@ impl WindowState {
             button_manager,
             button_panel,
             tooltip,
+            status_bar,
+            backend_status,
             text_processor,
             layout_manager,
 
@@ -324,6 +363,8 @@ impl WindowState {
 
             // Timer badge
             timer_badge,
+
+            backend_command_tx,
 
             // Transcriber state references
             running,
@@ -375,6 +416,7 @@ impl WindowState {
             }
 
             self.text_window.resize(PhysicalSize::new(width, height));
+            self.status_bar.resize(PhysicalSize::new(width, height));
             self.button_manager.resize(PhysicalSize::new(width, height));
             self.button_panel.resize(PhysicalSize::new(width, height));
         }
@@ -487,13 +529,14 @@ impl WindowState {
         );
 
         // Draw the rounded rectangle background for the spectrogram only
+        let (spec_x, spec_y, spec_w, spec_h) = self.layout_manager.get_spectrogram_position();
         self.render_pipelines.draw_spectrogram_background(
             &mut encoder,
             &view,
-            self.text_area_height,
-            self.gap,
-            self.spectrogram_width,
-            self.spectrogram_height,
+            spec_x,
+            spec_y,
+            spec_w,
+            spec_h,
         );
 
         // Get audio data once
@@ -511,8 +554,14 @@ impl WindowState {
         // Update timer badge based on recording state
         if is_recording && !self.timer_badge.is_recording() {
             self.timer_badge.start_recording();
+            let mut status = self.backend_status.write();
+            status.is_recording = true;
+            status.recording_start = Some(std::time::Instant::now());
         } else if !is_recording && self.timer_badge.is_recording() {
             self.timer_badge.stop_recording();
+            let mut status = self.backend_status.write();
+            status.is_recording = false;
+            status.recording_start = None;
         }
 
         // Determine if scrollbar is needed and the actual width to use for text area
@@ -540,6 +589,26 @@ impl WindowState {
                 let transcript_ref = &audio_data_lock.transcript;
                 display_text = self.text_processor.clean_whitespace(transcript_ref);
                 processing_state = audio_data_lock.processing_state;
+
+                // Sync processing state to status bar
+                {
+                    let mut status = self.backend_status.write();
+                    match processing_state {
+                        crate::ui::common::ProcessingState::Transcribing => {
+                            if status.state == crate::ui::common::BackendStatusState::Ready {
+                                status.state = crate::ui::common::BackendStatusState::Loading("Transcribing...".to_string());
+                            }
+                        }
+                        crate::ui::common::ProcessingState::Idle | crate::ui::common::ProcessingState::Completed => {
+                            if let crate::ui::common::BackendStatusState::Loading(msg) = &status.state {
+                                if msg == "Transcribing..." {
+                                    status.state = crate::ui::common::BackendStatusState::Ready;
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
 
                 // Reuse frame_samples buffer to avoid per-frame allocation
                 self.frame_samples.clear();
@@ -645,13 +714,10 @@ impl WindowState {
         );
 
         // Check if we should show processing animation instead of text
-        let is_empty = display_text.is_empty();
-        let should_show_animation = match (processing_state, is_empty) {
-            // Show loading animation when loading
-            (crate::ui::common::ProcessingState::Loading, _) => true,
-            // Show loading animation when transcribing with no text yet
-            (crate::ui::common::ProcessingState::Transcribing, true) => true,
-            // Don't show animations for any other states
+        let should_show_animation = match processing_state {
+            // Show loading animation only when loading model
+            crate::ui::common::ProcessingState::Loading => true,
+            // Transcribing state is shown in the status bar, not as an overlay
             _ => false,
         };
 
@@ -762,6 +828,20 @@ impl WindowState {
             );
         }
 
+        // Render status bar between text area and spectrogram
+        {
+            let (sb_x, sb_y, sb_w, sb_h) = self.layout_manager.get_status_bar_position();
+            self.status_bar.render(
+                &mut encoder,
+                &view,
+                &self.queue,
+                sb_x,
+                sb_y,
+                sb_w,
+                sb_h,
+            );
+        }
+
         // Draw scrollbar only if needed
         if need_scrollbar {
             // Use the scrollbar component to render
@@ -819,18 +899,7 @@ impl WindowState {
             self.tooltip.update(None);
         }
 
-        // Render timer badge overlay (bottom-right of text area)
-        self.timer_badge.render(
-            &mut encoder,
-            &view,
-            &self.queue,
-            text_x,
-            text_y,
-            text_area_width as f32,
-            text_area_height as f32,
-            self.config.width,
-            self.config.height,
-        );
+        // Timer badge rendering moved to status bar (recording indicator on right side)
 
         // Submit all rendering commands
         self.queue.submit(std::iter::once(encoder.finish()));
@@ -911,6 +980,15 @@ impl WindowState {
 
         if redraw_needed {
             self.window.request_redraw();
+        }
+    }
+
+    pub fn check_settings_requested(&mut self) -> bool {
+        if self.event_handler.settings_requested.get() {
+            self.event_handler.settings_requested.set(false);
+            true
+        } else {
+            false
         }
     }
 

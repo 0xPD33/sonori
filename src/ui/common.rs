@@ -84,3 +84,37 @@ impl AudioVisualizationData {
         self.processing_state_changed.elapsed()
     }
 }
+
+/// Status state of the transcription backend
+#[derive(Debug, Clone, PartialEq)]
+pub enum BackendStatusState {
+    Ready,
+    Loading(String),
+    Error(String),
+}
+
+/// Shared backend status for the status bar
+#[derive(Debug, Clone)]
+pub struct BackendStatus {
+    pub backend_name: String,
+    pub model_name: String,
+    pub state: BackendStatusState,
+    pub error_time: Option<std::time::Instant>,
+    pub download_progress: Option<f32>,
+    pub is_recording: bool,
+    pub recording_start: Option<std::time::Instant>,
+}
+
+impl BackendStatus {
+    pub fn new(backend_name: String, model_name: String) -> Self {
+        Self {
+            backend_name,
+            model_name,
+            state: BackendStatusState::Ready,
+            error_time: None,
+            download_progress: None,
+            is_recording: false,
+            recording_start: None,
+        }
+    }
+}

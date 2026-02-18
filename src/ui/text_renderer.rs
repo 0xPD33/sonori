@@ -98,6 +98,30 @@ impl TextRenderer {
         );
     }
 
+    /// Measure the rendered width of text at a given scale (single line, no wrapping)
+    pub fn measure_text(&mut self, text: &str, scale: f32) -> f32 {
+        if text.is_empty() {
+            return 0.0;
+        }
+        self.buffer.lines.clear();
+        let font_size = 10.0 * scale;
+        let metrics = Metrics::new(font_size, font_size * 1.1);
+        self.buffer.set_metrics(&mut self.font_system, metrics);
+        self.buffer.set_size(&mut self.font_system, None, None);
+        self.buffer.set_text(
+            &mut self.font_system,
+            text,
+            &Attrs::new().family(Family::SansSerif),
+            Shaping::Advanced,
+        );
+        self.buffer.shape_until_scroll(&mut self.font_system, true);
+        self.buffer
+            .layout_runs()
+            .map(|run| run.line_w)
+            .next()
+            .unwrap_or(0.0)
+    }
+
     /// Render text at a specific position with proper wrapping and clipping
     pub fn render_text(
         &mut self,
@@ -161,9 +185,9 @@ impl TextRenderer {
             scale: 1.0,
             bounds: TextBounds {
                 left: 0,
-                top: -10000,
-                right: area_width as i32,
-                bottom: 10000,
+                top: 0,
+                right: self.size.width as i32,
+                bottom: self.size.height as i32,
             },
             default_color: text_color,
             custom_glyphs: &[],
@@ -184,7 +208,7 @@ impl TextRenderer {
             occlusion_query_set: None,
         });
 
-        render_pass.set_scissor_rect(0, 0, area_width, area_height);
+        render_pass.set_scissor_rect(0, 0, self.size.width, self.size.height);
 
         if let Ok(_) = self.renderer.prepare(
             &self.device,
@@ -200,7 +224,11 @@ impl TextRenderer {
                 .render(&self.atlas, &self.viewport, &mut render_pass);
         }
 
-        // Trim the atlas to free up memory
+    }
+
+    /// Trim the atlas to free unused entries.
+    /// Call once per frame AFTER queue.submit(), not between render_text calls.
+    pub fn trim_atlas(&mut self) {
         self.atlas.trim();
     }
 }

@@ -1,4 +1,5 @@
 pub mod app;
+pub mod batch_text_renderer;
 pub mod button_panel;
 pub mod button_texture;
 pub mod buttons;
@@ -11,7 +12,10 @@ pub mod render_context;
 pub mod render_pipeline;
 pub mod scroll_state;
 pub mod scrollbar;
+pub mod settings_panel;
+pub mod settings_window;
 pub mod spectogram;
+pub mod status_bar;
 pub mod text_processor;
 pub mod text_renderer;
 pub mod text_window;
@@ -19,6 +23,7 @@ pub mod timer_badge;
 pub mod tooltip;
 pub mod typewriter;
 pub mod viewport;
+pub mod widgets;
 pub mod window;
 
 pub use app::{run, run_with_audio_data};

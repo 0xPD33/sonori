@@ -161,10 +161,10 @@ impl RenderPipelines {
         &self,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
-        text_area_height: u32,
-        gap: u32,
-        spectrogram_width: u32,
-        spectrogram_height: u32,
+        spec_x: f32,
+        spec_y: f32,
+        spectrogram_width: f32,
+        spectrogram_height: f32,
     ) {
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Spectrogram Background Pass"),
@@ -183,12 +183,12 @@ impl RenderPipelines {
 
         // Set viewport to cover just the spectrogram area
         render_pass.set_viewport(
-            0.0,                             // x position
-            (text_area_height + gap) as f32, // y position - start below text area with a gap
-            spectrogram_width as f32,        // width
-            spectrogram_height as f32,       // height
-            0.0,                             // min depth
-            1.0,                             // max depth
+            spec_x,
+            spec_y,
+            spectrogram_width,
+            spectrogram_height,
+            0.0,
+            1.0,
         );
 
         render_pass.set_pipeline(&self.rounded_rect_pipeline);
