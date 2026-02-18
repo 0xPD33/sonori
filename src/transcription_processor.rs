@@ -476,6 +476,13 @@ impl TranscriptionProcessor {
                 // Block on receiving segments without timeout - this is much more efficient
                 match segment_rx.recv().await {
                     Some(segment) => {
+                        // Wait for backend to be ready (e.g. during model reload)
+                        while !backend_ready.load(Ordering::Relaxed) {
+                            if !running.load(Ordering::Relaxed) {
+                                break;
+                            }
+                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        }
                         tokio::spawn(Self::process_segment(
                             segment,
                             backend.clone(),

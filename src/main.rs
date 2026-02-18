@@ -627,6 +627,8 @@ async fn run_gui_mode(
     let magic_mode_enabled = transcriber.get_magic_mode_enabled();
     let manual_session_sender = transcriber.get_manual_session_sender();
     let transcription_mode_ref = transcriber.get_transcription_mode_ref();
+    let backend_status = transcriber.get_backend_status();
+    let backend_command_tx = transcriber.backend_command_sender();
 
     // System tray: start if enabled in configuration
     let (tray_update_tx, tray_command_rx) = if app_config.window_behavior_config.show_in_system_tray
@@ -701,6 +703,8 @@ async fn run_gui_mode(
         transcription_mode_ref,
         tray_update_tx,
         tray_command_rx,
+        Some(backend_status),
+        backend_command_tx,
     );
 
     // UI has exited, perform cleanup

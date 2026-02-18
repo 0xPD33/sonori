@@ -22,13 +22,22 @@ const MOONSHINE_REPO: &str = "UsefulSensors/moonshine";
 const MOONSHINE_ONNX_DIR: &str = "onnx";
 const MOONSHINE_MERGED_DIR: &str = "merged";
 const MOONSHINE_MERGED_VARIANT: &str = "float";
+/// ONNX model files live in the monorepo at onnx/merged/{model_id}/float/
+const MOONSHINE_ONNX_FILES: [&str; 2] = [
+    "encoder_model.onnx",
+    "decoder_model_merged.onnx",
+];
+/// Config files live in standalone repos: UsefulSensors/moonshine-{model_id}
+const MOONSHINE_CONFIG_FILES: [&str; 2] = [
+    "tokenizer.json",
+    "preprocessor_config.json",
+];
 const MOONSHINE_REQUIRED_FILES: [&str; 4] = [
     "encoder_model.onnx",
     "decoder_model_merged.onnx",
     "tokenizer.json",
     "preprocessor_config.json",
 ];
-const MOONSHINE_OPTIONAL_FILES: [&str; 0] = [];
 
 /// Enum to represent different model types
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -209,6 +218,15 @@ fn convert_model(model_name: &str, output_dir: &Path) -> Result<()> {
 
 /// Download a file from a URL and save it to the specified path
 pub async fn download_file(url: &str, output_path: &Path) -> Result<()> {
+    download_file_with_progress(url, output_path, None).await
+}
+
+/// Download a file from a URL with an optional progress callback (0.0 to 1.0)
+pub async fn download_file_with_progress(
+    url: &str,
+    output_path: &Path,
+    on_progress: Option<&(dyn Fn(f64) + Send + Sync)>,
+) -> Result<()> {
     println!("Downloading file from: {}", url);
 
     // Create parent directories if they don't exist
@@ -254,6 +272,10 @@ pub async fn download_file(url: &str, output_path: &Path) -> Result<()> {
                 progress, downloaded, total_size
             );
             io::stdout().flush()?;
+
+            if let Some(cb) = &on_progress {
+                cb(progress / 100.0);
+            }
         }
     }
 
@@ -279,6 +301,14 @@ pub async fn download_file(url: &str, output_path: &Path) -> Result<()> {
 }
 
 pub async fn download_file_optional(url: &str, output_path: &Path) -> Result<bool> {
+    download_file_optional_with_progress(url, output_path, None).await
+}
+
+pub async fn download_file_optional_with_progress(
+    url: &str,
+    output_path: &Path,
+    on_progress: Option<&(dyn Fn(f64) + Send + Sync)>,
+) -> Result<bool> {
     println!("Downloading file from: {}", url);
 
     if let Some(parent) = output_path.parent() {
@@ -325,6 +355,10 @@ pub async fn download_file_optional(url: &str, output_path: &Path) -> Result<boo
                 progress, downloaded, total_size
             );
             io::stdout().flush()?;
+
+            if let Some(cb) = &on_progress {
+                cb(progress / 100.0);
+            }
         }
     }
 
@@ -534,7 +568,53 @@ pub async fn init_all_models(
     Ok((whisper_model_path, silero_model_path))
 }
 
+/// Resolve a model name to a filesystem path for a given backend.
+/// Downloads/converts the model if necessary.
+pub async fn resolve_model_path(
+    model_name: &str,
+    backend_type: crate::backend::BackendType,
+    quantization: &QuantizationLevel,
+) -> Result<PathBuf> {
+    resolve_model_path_with_progress(model_name, backend_type, quantization, None).await
+}
+
+/// Resolve a model name to a filesystem path with an optional download progress callback.
+pub async fn resolve_model_path_with_progress(
+    model_name: &str,
+    backend_type: crate::backend::BackendType,
+    quantization: &QuantizationLevel,
+    on_progress: Option<&(dyn Fn(f64) + Send + Sync)>,
+) -> Result<PathBuf> {
+    let normalized = normalize_model_name(model_name, backend_type);
+
+    match backend_type {
+        crate::backend::BackendType::CTranslate2 => init_model(Some(&normalized)).await,
+        crate::backend::BackendType::WhisperCpp => {
+            let path = get_whisper_cpp_model_path(&normalized, quantization)?;
+            if !path.exists() {
+                download_whisper_cpp_model_with_progress(&normalized, quantization, on_progress)
+                    .await?;
+            }
+            Ok(path)
+        }
+        crate::backend::BackendType::Moonshine => {
+            let model_id = moonshine_model_id(&normalized);
+            init_moonshine_model_with_progress(&model_id, on_progress).await
+        }
+        crate::backend::BackendType::Parakeet => {
+            Err(anyhow::anyhow!("Parakeet backend not yet implemented"))
+        }
+    }
+}
+
 async fn init_moonshine_model(model_id: &str) -> Result<PathBuf> {
+    init_moonshine_model_with_progress(model_id, None).await
+}
+
+async fn init_moonshine_model_with_progress(
+    model_id: &str,
+    on_progress: Option<&(dyn Fn(f64) + Send + Sync)>,
+) -> Result<PathBuf> {
     let models_dir = get_models_dir()?;
     let model_dir = moonshine_model_dir(&models_dir, model_id);
 
@@ -547,7 +627,8 @@ async fn init_moonshine_model(model_id: &str) -> Result<PathBuf> {
         fs::create_dir_all(&model_dir)?;
     }
 
-    for file in MOONSHINE_REQUIRED_FILES.iter() {
+    // ONNX model files from the monorepo: onnx/merged/{model_id}/float/
+    for file in MOONSHINE_ONNX_FILES.iter() {
         let output_path = model_dir.join(file);
         if output_path.exists() {
             continue;
@@ -562,24 +643,21 @@ async fn init_moonshine_model(model_id: &str) -> Result<PathBuf> {
             MOONSHINE_MERGED_VARIANT,
             file
         );
-        download_file(&url, &output_path).await?;
+        download_file_with_progress(&url, &output_path, on_progress).await?;
     }
 
-    for file in MOONSHINE_OPTIONAL_FILES.iter() {
-        let url = format!(
-            "https://huggingface.co/{}/resolve/main/{}/{}/{}/{}/{}",
-            MOONSHINE_REPO,
-            MOONSHINE_ONNX_DIR,
-            MOONSHINE_MERGED_DIR,
-            model_id,
-            MOONSHINE_MERGED_VARIANT,
-            file
-        );
+    // Config files from standalone repos: UsefulSensors/moonshine-{model_id}
+    for file in MOONSHINE_CONFIG_FILES.iter() {
         let output_path = model_dir.join(file);
         if output_path.exists() {
             continue;
         }
-        let _ = download_file_optional(&url, &output_path).await?;
+
+        let url = format!(
+            "https://huggingface.co/UsefulSensors/moonshine-{}/resolve/main/{}",
+            model_id, file
+        );
+        download_file_with_progress(&url, &output_path, on_progress).await?;
     }
 
     Ok(model_dir)
@@ -596,6 +674,14 @@ async fn init_moonshine_model(model_id: &str) -> Result<PathBuf> {
 pub async fn download_whisper_cpp_model(
     model_name: &str,
     quantization: &QuantizationLevel,
+) -> Result<PathBuf> {
+    download_whisper_cpp_model_with_progress(model_name, quantization, None).await
+}
+
+pub async fn download_whisper_cpp_model_with_progress(
+    model_name: &str,
+    quantization: &QuantizationLevel,
+    on_progress: Option<&(dyn Fn(f64) + Send + Sync)>,
 ) -> Result<PathBuf> {
     let models_dir = get_models_dir()?;
 
@@ -627,7 +713,7 @@ pub async fn download_whisper_cpp_model(
     println!("  From: {}", url);
     println!("  To: {:?}", output_path);
 
-    download_file(&url, &output_path).await?;
+    download_file_with_progress(&url, &output_path, on_progress).await?;
 
     println!("whisper.cpp model downloaded successfully!");
     Ok(output_path)

@@ -1,6 +1,7 @@
 pub mod audio_capture;
 pub mod audio_processor;
 pub mod backend;
+pub mod backend_manager;
 pub mod config;
 pub mod copy;
 pub mod download;

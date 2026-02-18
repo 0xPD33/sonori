@@ -10,13 +10,16 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 // Use local modules
 use crate::audio_capture::AudioCapture;
 use crate::audio_processor::AudioProcessor;
-use crate::backend::{create_backend, TranscriptionBackend};
+use crate::backend::{create_backend, BackendType, TranscriptionBackend};
+use crate::backend_manager::{BackendCommand, BackendManager};
 use crate::config::{read_app_config, AppConfig};
 use crate::silero_audio_processor::{AudioSegment, SileroVad};
 use crate::stats_reporter::StatsReporter;
 use crate::transcription_processor::TranscriptionProcessor;
 use crate::transcription_stats::TranscriptionStats;
-use crate::ui::common::{AudioVisualizationData, ProcessingState};
+use crate::ui::common::{
+    AudioVisualizationData, BackendStatus, BackendStatusState, ProcessingState,
+};
 
 /// Transcription mode enumeration
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -237,6 +240,10 @@ pub struct RealTimeTranscriber {
 
     // Enhancement mode
     magic_mode_enabled: Arc<AtomicBool>,
+
+    // Backend management
+    pub backend_status: Arc<RwLock<BackendStatus>>,
+    backend_command_tx: Option<mpsc::UnboundedSender<BackendCommand>>,
 }
 
 impl RealTimeTranscriber {
@@ -309,15 +316,41 @@ impl RealTimeTranscriber {
         let backend_ready = Arc::new(AtomicBool::new(false));
         let backend_ready_for_task = backend_ready.clone();
         let model_path_clone = model_path.clone();
-        let backend_type = app_config.backend_config.backend.clone();
+        let backend_type = app_config.backend_config.backend;
         let backend_config = app_config.backend_config.clone();
+
+        // Create backend status (shared with UI status bar)
+        let backend_name = match backend_type {
+            BackendType::CTranslate2 => "CTranslate2",
+            BackendType::WhisperCpp => "WhisperCpp",
+            BackendType::Moonshine => "Moonshine",
+            BackendType::Parakeet => "Parakeet",
+        };
+        let backend_status = Arc::new(RwLock::new(BackendStatus::new(
+            backend_name.to_string(),
+            app_config.general_config.model.clone(),
+        )));
+
+        // Create backend manager
+        let mut backend_manager = BackendManager::new(
+            backend.clone(),
+            backend_ready.clone(),
+            backend_status.clone(),
+        );
+        backend_manager.start();
+        let backend_command_tx = backend_manager.command_sender();
 
         // Set initial processing state for loading
         {
             let mut audio_data = audio_visualization_data.write();
             audio_data.set_processing_state(ProcessingState::Loading);
         }
+        {
+            let mut s = backend_status.write();
+            s.state = BackendStatusState::Loading("Initializing...".to_string());
+        }
 
+        let backend_status_for_load = backend_status.clone();
         let audio_visualization_data_for_load = audio_visualization_data.clone();
         tokio::spawn(async move {
             println!(
@@ -348,6 +381,10 @@ impl RealTimeTranscriber {
                     // Set processing state to idle after successful load
                     let mut audio_data = audio_visualization_data_for_load.write();
                     audio_data.set_processing_state(ProcessingState::Idle);
+
+                    // Update backend status to ready
+                    let mut s = backend_status_for_load.write();
+                    s.state = BackendStatusState::Ready;
                 }
                 Err(e) => {
                     eprintln!("ERROR: Failed to load backend: {}", e);
@@ -356,6 +393,11 @@ impl RealTimeTranscriber {
                     // Set processing state to error on load failure
                     let mut audio_data = audio_visualization_data_for_load.write();
                     audio_data.set_processing_state(ProcessingState::Error);
+
+                    // Update backend status to error
+                    let mut s = backend_status_for_load.write();
+                    s.state = BackendStatusState::Error(format!("{}", e));
+                    s.error_time = Some(std::time::Instant::now());
                 }
             }
         });
@@ -404,6 +446,10 @@ impl RealTimeTranscriber {
 
             // Enhancement mode (always starts inactive, user toggles via UI button)
             magic_mode_enabled: Arc::new(AtomicBool::new(false)),
+
+            // Backend management
+            backend_status,
+            backend_command_tx: Some(backend_command_tx),
         })
     }
 
@@ -1087,6 +1133,11 @@ impl RealTimeTranscriber {
         self.running.store(false, Ordering::Relaxed);
         self.recording.store(false, Ordering::Relaxed);
 
+        // Shutdown backend manager
+        if let Some(tx) = self.backend_command_tx.take() {
+            let _ = tx.send(BackendCommand::Shutdown);
+        }
+
         // Stop audio capture
         self.audio_capture.lock().stop();
 
@@ -1236,6 +1287,16 @@ impl RealTimeTranscriber {
     /// Get audio processor reference for direct control
     pub fn get_audio_processor(&self) -> Option<Arc<AudioProcessor>> {
         self.audio_processor_ref.clone()
+    }
+
+    /// Get the shared backend status reference
+    pub fn get_backend_status(&self) -> Arc<RwLock<BackendStatus>> {
+        self.backend_status.clone()
+    }
+
+    /// Get a command sender for backend operations (reload, shutdown)
+    pub fn backend_command_sender(&self) -> Option<mpsc::UnboundedSender<BackendCommand>> {
+        self.backend_command_tx.clone()
     }
 
     /// Set the transcription mode
