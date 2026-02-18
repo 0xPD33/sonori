@@ -218,6 +218,33 @@ fn fs_mode_toggle(in: VertexOutput) -> @location(0) vec4<f32> {
     return color;
 }
 
+// Fragment shader for settings button - draws a gear icon
+@fragment
+fn fs_settings(in: VertexOutput) -> @location(0) vec4<f32> {
+    var color = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    let uv = in.tex_coords;
+    let center = vec2<f32>(0.5, 0.5);
+    let offset = uv - center;
+    let dist = length(offset);
+    let angle = atan2(offset.y, offset.x);
+
+    // Ring (outer radius 0.33, inner radius 0.18)
+    let on_ring = dist > 0.18 && dist < 0.33;
+
+    // Center hole
+    let inner_circle = dist < 0.11;
+
+    // 6 teeth around the ring
+    let tooth_count = 6.0;
+    let tooth_angle = fract(angle / (2.0 * 3.14159265) * tooth_count);
+    let on_tooth = dist > 0.28 && dist < 0.43 && tooth_angle > 0.2 && tooth_angle < 0.55;
+
+    if ((on_ring || on_tooth) && !inner_circle) {
+        color = vec4<f32>(1.0, 1.0, 1.0, 0.85);
+    }
+    return color;
+}
+
 // Fragment shader for magic mode button - draws a magic wand
 // mode: 0.0 = off (wand only, dim), 1.0 = on (wand with sparkles, bright gold)
 @fragment

@@ -37,6 +37,7 @@ pub enum ButtonType {
     Accept,       // Accept and finish current manual session (texture only, not in layout)
     ModeToggle,   // Switch between real-time/manual modes
     MagicMode,    // Toggle LFM enhancement mode (manual mode only)
+    Settings,     // Open settings panel
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -110,8 +111,11 @@ impl Button {
         format: wgpu::TextureFormat,
         texture: Option<ButtonTexture>,
     ) -> Self {
-        // Create default texture if none provided and it's not a close button
-        let texture_for_button = if texture.is_none() && button_type != ButtonType::Close {
+        // Create default texture if none provided and it's not a shader-based button
+        let texture_for_button = if texture.is_none()
+            && button_type != ButtonType::Close
+            && button_type != ButtonType::Settings
+        {
             match ButtonTexture::create_default(device, queue, format) {
                 Ok(texture) => Some(texture),
                 Err(e) => {
@@ -147,6 +151,7 @@ impl Button {
         // Create rotation uniform buffer and bind group for shader-based buttons
         let (rotation_buffer, rotation_bind_group) = if button_type == ButtonType::Close
             || button_type == ButtonType::ModeToggle
+            || button_type == ButtonType::Settings
         {
             // Create rotation uniform buffer (includes mode for ModeToggle)
             let initial_data = if button_type == ButtonType::ModeToggle {
@@ -165,7 +170,7 @@ impl Button {
                 // ModeToggle fragment shader needs access to the mode uniform
                 wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT
             } else {
-                // Close only needs vertex access
+                // Close and Settings only need vertex access
                 wgpu::ShaderStages::VERTEX
             };
 
@@ -202,13 +207,14 @@ impl Button {
         // Create appropriate pipeline layout based on button type
         let pipeline_layout = if button_type == ButtonType::Close
             || button_type == ButtonType::ModeToggle
+            || button_type == ButtonType::Settings
         {
             // For shader-based buttons - use the same visibility logic as the bind group
             let pipeline_visibility = if button_type == ButtonType::ModeToggle {
                 // ModeToggle fragment shader needs access to the mode uniform
                 wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT
             } else {
-                // Close only needs vertex access
+                // Close and Settings only need vertex access
                 wgpu::ShaderStages::VERTEX
             };
 
@@ -325,6 +331,7 @@ impl Button {
                     ButtonType::Accept => Some("vs_copy"), // Use texture-based rendering
                     ButtonType::ModeToggle => Some("vs_close"), // Use close vertex shader
                     ButtonType::MagicMode => Some("vs_copy"), // Use texture-based rendering
+                    ButtonType::Settings => Some("vs_close"), // Use close vertex shader (rotation support)
                 },
                 buffers: &[wgpu::VertexBufferLayout {
                     array_stride: 8,
@@ -344,6 +351,7 @@ impl Button {
                     ButtonType::Accept => Some("fs_copy"), // Use texture-based rendering
                     ButtonType::ModeToggle => Some("fs_mode_toggle"), // Custom shader for R/M text
                     ButtonType::MagicMode => Some("fs_texture_opacity"), // Texture with dynamic opacity
+                    ButtonType::Settings => Some("fs_settings"), // Gear icon shader
                 },
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
@@ -445,11 +453,11 @@ impl Button {
     // Set final target values based on current state
     fn set_final_animation_values(&mut self) {
         match (self.button_type, self.state) {
-            (ButtonType::Close, ButtonState::Hover) => {
+            (ButtonType::Close | ButtonType::Settings, ButtonState::Hover) => {
                 self.rotation = HOVER_ROTATION;
                 self.scale = 1.0;
             }
-            (ButtonType::Close, _) => {
+            (ButtonType::Close | ButtonType::Settings, _) => {
                 self.rotation = 0.0;
                 self.scale = 1.0;
             }
@@ -480,8 +488,10 @@ impl Button {
     // Get target values for current state
     fn get_target_values(&self) -> (f32, f32) {
         match (self.button_type, self.state) {
-            (ButtonType::Close, ButtonState::Hover) => (1.0, HOVER_ROTATION),
-            (ButtonType::Close, _) => (1.0, 0.0),
+            (ButtonType::Close | ButtonType::Settings, ButtonState::Hover) => {
+                (1.0, HOVER_ROTATION)
+            }
+            (ButtonType::Close | ButtonType::Settings, _) => (1.0, 0.0),
             (_, ButtonState::Hover) => (HOVER_SCALE, 0.0),
             (_, ButtonState::Pressed) => (PRESS_SCALE, 0.0),
             (_, ButtonState::Normal) => (1.0, 0.0),
@@ -520,7 +530,10 @@ impl Button {
         transcription_mode: Option<crate::real_time_transcriber::TranscriptionMode>,
     ) {
         // Update rotation buffer if needed
-        if self.button_type == ButtonType::Close || self.button_type == ButtonType::ModeToggle {
+        if self.button_type == ButtonType::Close
+            || self.button_type == ButtonType::ModeToggle
+            || self.button_type == ButtonType::Settings
+        {
             let mode_value = if self.button_type == ButtonType::ModeToggle {
                 transcription_mode.map(|mode| match mode {
                     crate::real_time_transcriber::TranscriptionMode::RealTime => 0.0,
@@ -573,7 +586,10 @@ impl Button {
         render_pass.set_pipeline(&self.pipeline);
 
         // Set the appropriate bind group
-        if self.button_type == ButtonType::Close || self.button_type == ButtonType::ModeToggle {
+        if self.button_type == ButtonType::Close
+            || self.button_type == ButtonType::ModeToggle
+            || self.button_type == ButtonType::Settings
+        {
             // Set rotation uniform bind group for shader-based buttons
             if let Some(bind_group) = &self.rotation_bind_group {
                 render_pass.set_bind_group(0, bind_group, &[]);
@@ -797,6 +813,7 @@ impl ButtonManager {
                 ButtonType::Copy,
                 ButtonType::Reset,
                 ButtonType::ModeToggle,
+                ButtonType::Settings,
                 ButtonType::Close,
             ],
             TranscriptionMode::Manual => {
@@ -808,6 +825,7 @@ impl ButtonManager {
                     ButtonType::Copy,
                     ButtonType::Reset,
                     ButtonType::ModeToggle,
+                    ButtonType::Settings,
                     ButtonType::Close,
                 ]);
                 buttons
@@ -1432,6 +1450,9 @@ impl ButtonManager {
                         }
                     }
                 }
+            }
+            ButtonType::Settings => {
+                // Settings button is shader-based (gear icon), no texture needed
             }
             // Other textures are already handled by the existing load_textures method
             _ => {}

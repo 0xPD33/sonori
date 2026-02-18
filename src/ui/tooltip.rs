@@ -214,6 +214,7 @@ impl Tooltip {
             ButtonType::ModeToggle,
             ButtonType::Accept,
             ButtonType::MagicMode,
+            ButtonType::Settings,
         ] {
             let text = Self::get_tooltip_text(button_type);
             let (width, height) =
@@ -267,6 +268,7 @@ impl Tooltip {
             ButtonType::ModeToggle => "Switch Mode",
             ButtonType::Accept => "Accept",
             ButtonType::MagicMode => "Magic Mode",
+            ButtonType::Settings => "Settings",
         }
     }
 

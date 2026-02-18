@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
@@ -21,6 +22,7 @@ pub struct EventHandler {
     pub manual_session_sender:
         Option<tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>>,
     pub transcription_mode_ref: Arc<AtomicU8>,
+    pub settings_requested: Cell<bool>,
 }
 
 impl EventHandler {
@@ -40,6 +42,7 @@ impl EventHandler {
             magic_mode_enabled,
             manual_session_sender,
             transcription_mode_ref,
+            settings_requested: Cell::new(false),
         }
     }
 
@@ -298,6 +301,9 @@ impl EventHandler {
                             "Magic mode toggled: now {}",
                             if new_state { "ON" } else { "OFF" }
                         );
+                    }
+                    ButtonType::Settings => {
+                        self.settings_requested.set(true);
                     }
                 }
                 return true;
