@@ -24,7 +24,7 @@ Real-time or on-demand transcription, entirely on your device.
 
 ### Core
 - **Local AI Processing** - All transcription happens on your device, no cloud services required
-- **Multi-Backend Support** - Choose between CTranslate2, Whisper.cpp, or Moonshine backends
+- **Multi-Backend Support** - Choose between CTranslate2, Whisper.cpp, Moonshine, or Parakeet TDT backends
 - **Dual Transcription Modes** - Real-time continuous transcription or manual on-demand sessions
 - **Voice Activity Detection** - Uses Silero VAD for accurate speech detection
 - **Automatic Model Download** - Models are downloaded automatically on first run
@@ -37,7 +37,7 @@ Real-time or on-demand transcription, entirely on your device.
 - **Typewriter Effect** - Character-by-character text reveal animation when transcription completes
 
 ### Optional Features
-- **GPU Acceleration** - Vulkan-based acceleration (Whisper.cpp backend only)
+- **GPU Acceleration** - Vulkan-based rendering; ONNX Runtime GPU acceleration for Moonshine and Parakeet TDT backends
 - **Global Shortcuts** - System-wide hotkeys via XDG Desktop Portal (e.g., Super+\ to toggle recording)
 - **Auto-Paste** - Automatic text injection via XDG Desktop Portal, with wtype/dotool fallback for compositors without portal support
 - **Sound Feedback** - Audio cues for recording state changes
@@ -283,6 +283,7 @@ Sonori uses `config.toml` for configuration. Defaults work well for most users.
 - **Real-Time** - Live transcription as you speak
 - **Multilingual** - For non-English languages
 - **Moonshine** - ONNX-based backend with fast real-time performance
+- **Parakeet TDT** - NVIDIA NeMo model via sherpa-onnx, multilingual or English-only
 
 ## Troubleshooting
 
@@ -336,6 +337,8 @@ ct2-transformers-converter --model your-model --output_dir ~/.cache/whisper/your
 
 **Moonshine model layout:** Moonshine uses ONNX merged models (auto-downloaded) and expects a model name like `tiny` or `base`. If you see decoder input errors, set `[moonshine_options].enable_cache = false` and retry.
 
+**Parakeet model layout:** Parakeet uses INT8 split ONNX models via sherpa-onnx (auto-downloaded from HuggingFace). Models are stored in `~/.cache/sonori/models/parakeet-tdt-v3-int8/` (v3, multilingual) or `parakeet-tdt-v2-int8/` (v2, English-only).
+
 ## Known Issues
 
 - Not all Wayland compositors supported (tested primarily on KDE Plasma/KWin)
@@ -360,6 +363,8 @@ Contributions welcome! Whether fixing bugs, adding features, improving docs, or 
 - [ONNX Runtime](https://github.com/microsoft/onnxruntime)
 - [OpenAI Whisper](https://github.com/openai/whisper)
 - [Moonshine](https://github.com/moonshine-ai/moonshine)
+- [NVIDIA NeMo / Parakeet TDT](https://github.com/NVIDIA/NeMo)
+- [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)
 - [Silero VAD](https://github.com/snakers4/silero-vad)
 - [CPAL](https://github.com/RustAudio/cpal)
 - [Winit Fork](https://github.com/SergioRibera/winit)

@@ -76,6 +76,21 @@ quantization_level = "high"          # Not used by Moonshine (kept for consisten
 enable_cache = true                  # Enable decoder cache if supported
 ```
 
+### 🦜 Parakeet TDT (NVIDIA NeMo via sherpa-onnx)
+```toml
+[general_config]
+model = "parakeet-tdt-0.6b-v3"      # "parakeet-tdt-0.6b-v3" (multilingual) or "parakeet-tdt-0.6b-v2" (English-only)
+language = "en"                      # Language code; v3 supports 25 European languages
+transcription_mode = "manual"        # Push-to-talk style
+
+[backend_config]
+backend = "parakeet"                 # Parakeet TDT backend
+gpu_enabled = true                   # Optional (CPU works too)
+quantization_level = "high"          # Not used by Parakeet (kept for consistency)
+
+[parakeet_options]
+```
+
 ### 🌍 Multilingual Support (Non-English languages)
 ```toml
 [general_config]
@@ -115,7 +130,7 @@ language = "en"                   # Language code for transcription (use "auto" 
 transcription_mode = "manual"     # "realtime" for live transcription, "manual" for push-to-talk
 
 [backend_config]
-backend = "whisper_cpp"           # Backend: "ctranslate2", "whisper_cpp", "moonshine"
+backend = "whisper_cpp"           # Backend: "ctranslate2", "whisper_cpp", "moonshine", "parakeet"
 threads = 8                       # Number of CPU threads (default: min(num_cpus, 4))
 gpu_enabled = true                # Enable GPU acceleration (CUDA/Metal/Vulkan)
 quantization_level = "medium"     # Precision: "high" (full), "medium" (q8_0), "low" (q5_1)
@@ -166,6 +181,8 @@ max_tokens = 0                    # Maximum tokens per segment (0 = auto)
 
 [moonshine_options]
 enable_cache = false              # Enable decoder cache if supported by the model
+
+[parakeet_options]
 
 [post_process_config]
 enabled = true                    # Enable post-processing of transcriptions
@@ -258,6 +275,19 @@ Recommended models:
 - `base` - Higher accuracy, still fast
 
 Moonshine models are auto-downloaded on first run into `~/.cache/sonori/models/moonshine-<model>-onnx`.
+
+#### Parakeet TDT Backend
+- **Models**: NVIDIA NeMo Parakeet TDT INT8 ONNX models via sherpa-onnx (auto-downloaded, ~640-660MB)
+- **Strengths**: High accuracy, fast inference; v3 supports 25 European languages
+- **Use case**: High-quality transcription with multilingual support
+- **Model format**: Split INT8 ONNX models
+- **GPU Support**: Optional via ONNX Runtime
+
+Recommended models:
+- `parakeet-tdt-0.6b-v3` - Multilingual (25 European languages)
+- `parakeet-tdt-0.6b-v2` - English-only
+
+Parakeet models are auto-downloaded on first run from HuggingFace.
 
 ### Manual Mode Configuration
 
@@ -432,6 +462,8 @@ The tray icon updates to reflect the current recording state and can show a prev
 ### Model Storage
 - `~/.cache/sonori/models/` - Downloaded and converted Whisper models
 - `~/.cache/sonori/models/moonshine-*-onnx` - Downloaded Moonshine ONNX models
+- `~/.cache/sonori/models/parakeet-tdt-v3-int8/` - Parakeet TDT v3 model (multilingual)
+- `~/.cache/sonori/models/parakeet-tdt-v2-int8/` - Parakeet TDT v2 model (English-only)
 - `~/.cache/sonori/models/silero_vad.onnx` - Silero VAD model
 - `~/.cache/sonori/models/enhancement/` - Enhancement models
 
