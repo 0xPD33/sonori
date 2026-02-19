@@ -76,6 +76,13 @@ impl Toggle {
         }
     }
 
+    pub fn set_value(&mut self, value: bool) {
+        self.value = value;
+        self.animation_progress = if value { 1.0 } else { 0.0 };
+        self.animation_from = self.animation_progress;
+        self.animation_active = false;
+    }
+
     pub fn take_changed(&mut self) -> Option<bool> {
         if self.changed {
             self.changed = false;

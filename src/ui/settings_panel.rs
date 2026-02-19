@@ -270,7 +270,7 @@ impl SettingsPanel {
             .iter()
             .position(|o| o.value == config.general_config.model)
             .unwrap_or(0);
-        self.gpu_toggle.value = config.backend_config.gpu_enabled;
+        self.gpu_toggle.set_value(config.backend_config.gpu_enabled);
         self.threads_slider.value = config.backend_config.threads as f32;
 
         // Audio
@@ -279,14 +279,14 @@ impl SettingsPanel {
             VadSensitivity::Medium => 1,
             VadSensitivity::High => 2,
         };
-        self.sound_toggle.value = config.sound_config.enabled;
+        self.sound_toggle.set_value(config.sound_config.enabled);
         self.volume_slider.value = config.sound_config.volume;
 
         // Behavior
-        self.auto_paste_toggle.value = config.portal_config.enable_xdg_portal;
-        self.clear_on_session_toggle.value = config.manual_mode_config.clear_on_new_session;
-        self.post_processing_toggle.value = config.post_process_config.enabled;
-        self.typewriter_toggle.value = config.ui_config.typewriter_effect;
+        self.auto_paste_toggle.set_value(config.portal_config.enable_xdg_portal);
+        self.clear_on_session_toggle.set_value(config.manual_mode_config.clear_on_new_session);
+        self.post_processing_toggle.set_value(config.post_process_config.enabled);
+        self.typewriter_toggle.set_value(config.ui_config.typewriter_effect);
 
         // Display
         self.vsync_select.selected_index = match config.display_config.vsync_mode.as_str() {
@@ -297,7 +297,7 @@ impl SettingsPanel {
             "Auto" | _ => 4,
         };
         self.target_fps_slider.value = config.display_config.target_fps as f32;
-        self.system_tray_toggle.value = config.window_behavior_config.show_in_system_tray;
+        self.system_tray_toggle.set_value(config.window_behavior_config.show_in_system_tray);
     }
 
     pub fn apply_pending_changes(&mut self, config: &mut AppConfig) -> (bool, bool) {
