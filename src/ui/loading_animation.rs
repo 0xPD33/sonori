@@ -19,8 +19,6 @@ pub struct LoadingAnimation {
 enum AnimationState {
     /// Dots animation (for loading/transcribing)
     Dots,
-    /// Spinner animation (for processing)
-    Spinner,
     /// Success animation (for completion)
     Success,
     /// Error animation (for errors)
@@ -81,8 +79,6 @@ impl LoadingAnimation {
             AnimationState::Dots => {
                 self.render_dots_animation(encoder, view, center_x, center_y, size, color, progress)
             }
-            AnimationState::Spinner => self
-                .render_spinner_animation(encoder, view, center_x, center_y, size, color, progress),
             AnimationState::Success => {
                 self.render_success_animation(encoder, view, center_x, center_y, size, color)
             }
@@ -137,45 +133,6 @@ impl LoadingAnimation {
                 actual_size,
                 &[],
                 "Loading Dot",
-            );
-        }
-    }
-
-    /// Render spinning animation (processing state)
-    fn render_spinner_animation(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        view: &wgpu::TextureView,
-        center_x: f32,
-        center_y: f32,
-        size: f32,
-        color: [f32; 4],
-        progress: f32,
-    ) {
-        // Render a spinning circle effect
-        let segments = 8;
-        let segment_size = size * 0.1;
-
-        for i in 0..segments {
-            let angle = (i as f32 / segments as f32) * 2.0 * std::f32::consts::PI
-                + progress * 2.0 * std::f32::consts::PI;
-            let radius = size * 0.3;
-            let x = center_x + angle.cos() * radius;
-            let y = center_y + angle.sin() * radius;
-
-            // Calculate opacity based on position in the cycle
-            let opacity = (angle.sin() + 1.0) / 2.0;
-            let _segment_color = [color[0], color[1], color[2], color[3] * opacity];
-
-            self.renderer.render_quad(
-                encoder,
-                view,
-                x - segment_size / 2.0,
-                y - segment_size / 2.0,
-                segment_size,
-                segment_size,
-                &[],
-                "Spinner Segment",
             );
         }
     }

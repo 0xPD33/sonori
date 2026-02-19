@@ -133,7 +133,7 @@ impl TextRenderer {
         scale: f32,
         color: [f32; 4],
         area_width: u32,
-        area_height: u32,
+        _area_height: u32,
     ) {
         if text.is_empty() {
             return;

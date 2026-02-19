@@ -629,69 +629,6 @@ impl ButtonManager {
         }
     }
 
-    #[allow(dead_code)]
-    fn calculate_button_layout(
-        &self,
-        button_types: &[ButtonType],
-    ) -> Vec<(ButtonType, (u32, u32))> {
-        let params = Self::calculate_layout_params(self.window_width);
-        let bottom_buttons: Vec<_> = button_types
-            .iter()
-            .filter(|&&bt| bt != ButtonType::Close)
-            .cloned()
-            .collect();
-
-        if bottom_buttons.is_empty() {
-            return Vec::new();
-        }
-
-        let button_count = bottom_buttons.len();
-        let total_width = (button_count as u32) * params.regular_button_size
-            + (button_count.saturating_sub(1) as u32) * params.spacing;
-        let start_x = self.window_width / 2 - total_width / 2;
-
-        let mut layout = Vec::new();
-
-        // Calculate positions for bottom buttons
-        for (i, &button_type) in bottom_buttons.iter().enumerate() {
-            let button_x = start_x + (i as u32) * (params.regular_button_size + params.spacing);
-            let button_y = (self.text_area_height as f32 * 0.95) as u32
-                - params.regular_button_size
-                - params.margin;
-            layout.push((button_type, (button_x, button_y)));
-        }
-
-        // Add close button position if it exists
-        if button_types.contains(&ButtonType::Close) {
-            let close_x = self.window_width - 4 - params.margin - params.close_button_size;
-            let close_y = params.margin;
-            layout.push((ButtonType::Close, (close_x, close_y)));
-        }
-
-        layout
-    }
-
-    #[allow(dead_code)]
-    fn update_all_button_positions(&mut self) {
-        let button_types =
-            Self::get_button_types(self.transcription_mode, self.enhancement_enabled);
-
-        let layout = self.calculate_button_layout(&button_types);
-        let params = Self::calculate_layout_params(self.window_width);
-
-        for (button_type, (x, y)) in layout {
-            if let Some(button) = self.buttons.get_mut(&button_type) {
-                button.position = (x, y);
-                let size = if button_type == ButtonType::Close {
-                    params.close_button_size
-                } else {
-                    params.regular_button_size
-                };
-                button.size = (size, size);
-            }
-        }
-    }
-
     /// Calculate dynamic button size based on window dimensions (legacy method for compatibility)
     fn calculate_button_size(window_width: u32, is_close: bool) -> u32 {
         let params = Self::calculate_layout_params(window_width);
