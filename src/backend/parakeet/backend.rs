@@ -45,7 +45,7 @@ impl ParakeetBackend {
     pub fn capabilities(&self) -> BackendCapabilities {
         BackendCapabilities {
             name: "Parakeet TDT",
-            max_audio_duration: None,
+            max_audio_duration: Some(90.0), // TDT decoder limited to ~10K steps ≈ ~100s; 90s safe margin
             supported_languages: Some(vec![
                 "en".into(),
                 "de".into(),

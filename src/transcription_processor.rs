@@ -548,7 +548,17 @@ impl TranscriptionProcessor {
 
         // For very long segments, we might want to split them into smaller chunks
         // to avoid memory issues and improve processing reliability
-        let chunk_threshold = app_config.manual_mode_config.chunk_duration_seconds as f64;
+        let chunk_threshold = {
+            let backend_max = backend
+                .lock()
+                .as_ref()
+                .map(|b| b.capabilities().max_audio_duration)
+                .flatten();
+            match backend_max {
+                Some(max) => max as f64,
+                None => app_config.manual_mode_config.chunk_duration_seconds as f64,
+            }
+        };
         if duration >= chunk_threshold {
             println!("Large manual segment detected, processing in chunks...");
             return Self::process_large_manual_segment(
@@ -591,7 +601,12 @@ impl TranscriptionProcessor {
     ) -> String {
         let app_config = read_app_config();
         let sample_rate = segment.sample_rate;
-        let max_chunk_seconds = app_config.manual_mode_config.chunk_duration_seconds;
+        let max_chunk_seconds = backend
+            .lock()
+            .as_ref()
+            .map(|b| b.capabilities().max_audio_duration)
+            .flatten()
+            .unwrap_or(app_config.manual_mode_config.chunk_duration_seconds);
         let max_chunk_samples = (max_chunk_seconds as f64 * sample_rate as f64).round() as usize;
         let total_len = segment.samples.len();
 
