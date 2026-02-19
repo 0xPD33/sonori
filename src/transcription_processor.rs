@@ -258,10 +258,14 @@ impl TranscriptionProcessor {
                     &app_config.moonshine_options,
                     segment.sample_rate,
                 ),
-            crate::backend::TranscriptionBackend::Parakeet => {
-                Err(crate::backend::TranscriptionError::BackendNotImplemented(
-                    "Parakeet backend not yet implemented".to_string(),
-                ))
+            crate::backend::TranscriptionBackend::Parakeet(parakeet_backend) => {
+                parakeet_backend.transcribe(
+                    &segment.samples,
+                    language,
+                    &app_config.common_transcription_options,
+                    &app_config.parakeet_options,
+                    segment.sample_rate,
+                )
             }
         };
 

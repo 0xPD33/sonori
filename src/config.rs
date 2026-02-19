@@ -511,6 +511,9 @@ pub struct AppConfig {
     /// Moonshine-specific options
     pub moonshine_options: MoonshineOptions,
 
+    /// Parakeet TDT-specific options
+    pub parakeet_options: ParakeetOptions,
+
     /// XDG Desktop Portal configuration
     pub portal_config: PortalConfig,
 
@@ -625,6 +628,17 @@ impl Default for MoonshineOptions {
     }
 }
 
+/// Parakeet TDT-specific options
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ParakeetOptions {}
+
+impl Default for ParakeetOptions {
+    fn default() -> Self {
+        Self {}
+    }
+}
+
 /// Configuration for Voice Activity Detection
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -719,6 +733,7 @@ impl Default for AppConfig {
             ctranslate2_options: CT2Options::default(),
             whisper_cpp_options: WhisperCppOptions::default(),
             moonshine_options: MoonshineOptions::default(),
+            parakeet_options: ParakeetOptions::default(),
             portal_config: PortalConfig::default(),
             display_config: DisplayConfig::default(),
             window_behavior_config: WindowBehaviorConfig::default(),

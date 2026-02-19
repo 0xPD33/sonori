@@ -39,6 +39,27 @@ const MOONSHINE_REQUIRED_FILES: [&str; 4] = [
     "preprocessor_config.json",
 ];
 
+const PARAKEET_MODEL_FILES: [&str; 4] = [
+    "encoder.int8.onnx",
+    "decoder.int8.onnx",
+    "joiner.int8.onnx",
+    "tokens.txt",
+];
+
+fn parakeet_hf_repo(model_name: &str) -> &'static str {
+    match model_name {
+        "parakeet-tdt-0.6b-v2" => "csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8",
+        _ => "csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
+    }
+}
+
+fn parakeet_dir_name(model_name: &str) -> &'static str {
+    match model_name {
+        "parakeet-tdt-0.6b-v2" => "parakeet-tdt-v2-int8",
+        _ => "parakeet-tdt-v3-int8",
+    }
+}
+
 /// Enum to represent different model types
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ModelType {
@@ -557,7 +578,7 @@ pub async fn init_all_models(
             get_whisper_cpp_model_path(&normalized_model, quantization)?
         }
         crate::backend::BackendType::Parakeet => {
-            return Err(anyhow::anyhow!("Parakeet backend not yet implemented"));
+            init_parakeet_model_with_progress(&normalized_model, None).await?
         }
         crate::backend::BackendType::Moonshine => {
             let model_id = moonshine_model_id(&normalized_model);
@@ -602,7 +623,7 @@ pub async fn resolve_model_path_with_progress(
             init_moonshine_model_with_progress(&model_id, on_progress).await
         }
         crate::backend::BackendType::Parakeet => {
-            Err(anyhow::anyhow!("Parakeet backend not yet implemented"))
+            init_parakeet_model_with_progress(&normalized, on_progress).await
         }
     }
 }
@@ -656,6 +677,52 @@ async fn init_moonshine_model_with_progress(
         let url = format!(
             "https://huggingface.co/UsefulSensors/moonshine-{}/resolve/main/{}",
             model_id, file
+        );
+        download_file_with_progress(&url, &output_path, on_progress).await?;
+    }
+
+    Ok(model_dir)
+}
+
+fn is_parakeet_model_complete(model_dir: &Path) -> Result<bool> {
+    for file in PARAKEET_MODEL_FILES.iter() {
+        if !model_dir.join(file).exists() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn parakeet_model_dir(models_dir: &Path, model_name: &str) -> PathBuf {
+    models_dir.join(parakeet_dir_name(model_name))
+}
+
+async fn init_parakeet_model_with_progress(
+    model_name: &str,
+    on_progress: Option<&(dyn Fn(f64) + Send + Sync)>,
+) -> Result<PathBuf> {
+    let models_dir = get_models_dir()?;
+    let model_dir = parakeet_model_dir(&models_dir, model_name);
+
+    if model_dir.exists() && is_parakeet_model_complete(&model_dir)? {
+        println!("Parakeet model already exists at: {:?}", model_dir);
+        return Ok(model_dir);
+    }
+
+    if !model_dir.exists() {
+        fs::create_dir_all(&model_dir)?;
+    }
+
+    let repo = parakeet_hf_repo(model_name);
+    for file in PARAKEET_MODEL_FILES.iter() {
+        let output_path = model_dir.join(file);
+        if output_path.exists() {
+            continue;
+        }
+
+        let url = format!(
+            "https://huggingface.co/{}/resolve/main/{}",
+            repo, file
         );
         download_file_with_progress(&url, &output_path, on_progress).await?;
     }

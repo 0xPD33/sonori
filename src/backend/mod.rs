@@ -13,6 +13,7 @@ pub mod ctranslate2;
 pub mod factory;
 pub mod moonshine;
 pub mod onnx_utils;
+pub mod parakeet;
 pub mod traits;
 pub mod whisper_cpp;
 
@@ -148,9 +149,8 @@ pub enum TranscriptionBackend {
     /// Moonshine backend
     Moonshine(moonshine::MoonshineBackend),
 
-    /// Parakeet backend (future)
-    #[allow(dead_code)]
-    Parakeet, // Placeholder for implementation
+    /// Parakeet TDT backend
+    Parakeet(parakeet::ParakeetBackend),
 }
 
 impl TranscriptionBackend {
@@ -160,7 +160,7 @@ impl TranscriptionBackend {
             TranscriptionBackend::CTranslate2(_) => BackendType::CTranslate2,
             TranscriptionBackend::WhisperCpp(_) => BackendType::WhisperCpp,
             TranscriptionBackend::Moonshine(_) => BackendType::Moonshine,
-            TranscriptionBackend::Parakeet => BackendType::Parakeet,
+            TranscriptionBackend::Parakeet(_) => BackendType::Parakeet,
         }
     }
 
@@ -170,9 +170,7 @@ impl TranscriptionBackend {
             TranscriptionBackend::CTranslate2(backend) => backend.capabilities(),
             TranscriptionBackend::WhisperCpp(backend) => backend.capabilities(),
             TranscriptionBackend::Moonshine(backend) => backend.capabilities(),
-            TranscriptionBackend::Parakeet => {
-                unimplemented!("Parakeet backend not yet implemented")
-            }
+            TranscriptionBackend::Parakeet(backend) => backend.capabilities(),
         }
     }
 }

@@ -61,9 +61,11 @@ pub async fn create_backend(
             Ok(TranscriptionBackend::WhisperCpp(whisper_cpp_backend))
         }
 
-        BackendType::Parakeet => Err(TranscriptionError::BackendNotImplemented(
-            "Parakeet backend not yet implemented. Please use CTranslate2 backend.".to_string(),
-        )),
+        BackendType::Parakeet => {
+            let parakeet_backend =
+                super::parakeet::ParakeetBackend::new(model_path, backend_config)?;
+            Ok(TranscriptionBackend::Parakeet(parakeet_backend))
+        }
 
         BackendType::Moonshine => {
             let moonshine_backend =
@@ -161,9 +163,19 @@ pub fn validate_model_path(
             Ok(())
         }
 
-        BackendType::Parakeet => Err(TranscriptionError::BackendNotImplemented(
-            "Parakeet backend not yet implemented".to_string(),
-        )),
+        BackendType::Parakeet => {
+            if !path.is_dir() {
+                return Err(TranscriptionError::ConfigurationError(
+                    "Parakeet models must be directories".to_string(),
+                ));
+            }
+            super::parakeet::model::ParakeetModel::validate_model_dir(path).map_err(|e| {
+                TranscriptionError::ConfigurationError(format!(
+                    "Parakeet model directory invalid: {}",
+                    e
+                ))
+            })
+        }
 
         BackendType::Moonshine => {
             if !path.is_dir() {
