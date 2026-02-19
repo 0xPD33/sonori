@@ -101,7 +101,7 @@ fn models_for_backend(backend: BackendType) -> Vec<SelectOption> {
         BackendType::Moonshine => &[
             "tiny", "base",
         ],
-        BackendType::Parakeet => &[],
+        BackendType::Parakeet => &["parakeet-tdt-0.6b-v3", "parakeet-tdt-0.6b-v2"],
     };
     names
         .iter()
