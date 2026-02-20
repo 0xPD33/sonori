@@ -51,7 +51,11 @@ pub struct SettingsPanel {
 
     // Backend tab widgets
     backend_select: Select,
+    english_only_toggle: Toggle,
+    show_english_toggle: bool,
     model_select: Select,
+    language_select: Select,
+    show_language_select: bool,
     gpu_toggle: Toggle,
     threads_slider: Slider,
 
@@ -89,12 +93,27 @@ fn default_width(window_width: u32) -> f32 {
     window_width as f32 - 28.0
 }
 
-fn models_for_backend(backend: BackendType) -> Vec<SelectOption> {
+fn backend_has_english_toggle(backend: BackendType) -> bool {
+    matches!(backend, BackendType::WhisperCpp)
+}
+
+fn backend_has_language_select(backend: BackendType, english_only: bool) -> bool {
+    match backend {
+        BackendType::WhisperCpp => !english_only,
+        BackendType::Parakeet => true,
+        _ => false,
+    }
+}
+
+fn models_for_backend(backend: BackendType, english_only: bool) -> Vec<SelectOption> {
     let names: &[&str] = match backend {
-        BackendType::WhisperCpp => &[
-            "tiny", "tiny.en", "base", "base.en", "small", "small.en",
-            "medium", "medium.en", "large-v1", "large-v2", "large-v3", "large-v3-turbo",
-        ],
+        BackendType::WhisperCpp => {
+            if english_only {
+                &["tiny.en", "base.en", "small.en", "medium.en"]
+            } else {
+                &["tiny", "base", "small", "medium", "large-v1", "large-v2", "large-v3", "large-v3-turbo"]
+            }
+        }
         BackendType::CTranslate2 => &[
             "tiny.en", "base.en", "small.en", "medium.en", "large-v3",
         ],
@@ -108,6 +127,31 @@ fn models_for_backend(backend: BackendType) -> Vec<SelectOption> {
         .map(|n| SelectOption {
             label: n.to_string(),
             value: n.to_string(),
+        })
+        .collect()
+}
+
+fn languages_for_backend(backend: BackendType) -> Vec<SelectOption> {
+    let pairs: &[(&str, &str)] = match backend {
+        BackendType::WhisperCpp => &[
+            ("Auto detect", "auto"), ("English", "en"), ("Chinese", "zh"), ("German", "de"),
+            ("Spanish", "es"), ("French", "fr"), ("Hindi", "hi"), ("Italian", "it"),
+            ("Japanese", "ja"), ("Korean", "ko"), ("Dutch", "nl"), ("Polish", "pl"),
+            ("Portuguese", "pt"), ("Russian", "ru"), ("Turkish", "tr"),
+        ],
+        BackendType::Parakeet => &[
+            ("Auto detect", "auto"), ("English", "en"), ("German", "de"), ("Spanish", "es"),
+            ("French", "fr"), ("Italian", "it"), ("Portuguese", "pt"), ("Dutch", "nl"),
+            ("Polish", "pl"), ("Romanian", "ro"), ("Swedish", "sv"), ("Finnish", "fi"),
+            ("Czech", "cs"), ("Ukrainian", "uk"), ("Hungarian", "hu"),
+        ],
+        _ => &[],
+    };
+    pairs
+        .iter()
+        .map(|(label, value)| SelectOption {
+            label: label.to_string(),
+            value: value.to_string(),
         })
         .collect()
 }
@@ -142,14 +186,21 @@ impl SettingsPanel {
             0,
             WIDGET_X, CONTENT_Y, w, ROW_HEIGHT,
         );
+        let english_only_toggle = Toggle::new("English only", true, WIDGET_X, CONTENT_Y + ROW_HEIGHT + SPACING, w, ROW_HEIGHT);
         let model_select = Select::new(
             "Model",
-            models_for_backend(BackendType::WhisperCpp),
+            models_for_backend(BackendType::WhisperCpp, true),
             0,
-            WIDGET_X, CONTENT_Y + ROW_HEIGHT + SPACING, w, ROW_HEIGHT,
+            WIDGET_X, CONTENT_Y + 2.0 * (ROW_HEIGHT + SPACING), w, ROW_HEIGHT,
         );
-        let gpu_toggle = Toggle::new("GPU acceleration", false, WIDGET_X, CONTENT_Y + 2.0 * (ROW_HEIGHT + SPACING), w, ROW_HEIGHT);
-        let threads_slider = Slider::new("Threads", 4.0, 1.0, 8.0, 1.0, WIDGET_X, CONTENT_Y + 3.0 * (ROW_HEIGHT + SPACING), w, ROW_HEIGHT);
+        let language_select = Select::new(
+            "Language",
+            languages_for_backend(BackendType::WhisperCpp),
+            0,
+            WIDGET_X, CONTENT_Y + 3.0 * (ROW_HEIGHT + SPACING), w, ROW_HEIGHT,
+        );
+        let gpu_toggle = Toggle::new("GPU acceleration", false, WIDGET_X, CONTENT_Y + 3.0 * (ROW_HEIGHT + SPACING), w, ROW_HEIGHT);
+        let threads_slider = Slider::new("Threads", 4.0, 1.0, 8.0, 1.0, WIDGET_X, CONTENT_Y + 4.0 * (ROW_HEIGHT + SPACING), w, ROW_HEIGHT);
 
         // Audio tab widgets
         let vad_sensitivity_select = Select::new(
@@ -200,7 +251,11 @@ impl SettingsPanel {
             opening: false,
 
             backend_select,
+            english_only_toggle,
+            show_english_toggle: true,
             model_select,
+            language_select,
+            show_language_select: false,
             gpu_toggle,
             threads_slider,
 
@@ -257,21 +312,36 @@ impl SettingsPanel {
 
     pub fn populate_from_config(&mut self, config: &AppConfig) {
         // Backend
-        self.backend_select.selected_index = match config.backend_config.backend {
+        let backend = config.backend_config.backend;
+        self.backend_select.selected_index = match backend {
             BackendType::CTranslate2 => 0,
             BackendType::WhisperCpp => 1,
             BackendType::Moonshine => 2,
             BackendType::Parakeet => 3,
         };
-        self.model_select.options = models_for_backend(config.backend_config.backend);
+        self.show_english_toggle = backend_has_english_toggle(backend);
+        let english_only = config.general_config.model.ends_with(".en");
+        self.english_only_toggle.set_value(english_only);
+        self.model_select.options = models_for_backend(backend, english_only);
         self.model_select.selected_index = self
             .model_select
             .options
             .iter()
             .position(|o| o.value == config.general_config.model)
             .unwrap_or(0);
+        self.show_language_select = backend_has_language_select(backend, english_only);
+        if self.show_language_select {
+            self.language_select.options = languages_for_backend(backend);
+            self.language_select.selected_index = self
+                .language_select
+                .options
+                .iter()
+                .position(|o| o.value == config.general_config.language)
+                .unwrap_or(0);
+        }
         self.gpu_toggle.set_value(config.backend_config.gpu_enabled);
         self.threads_slider.value = config.backend_config.threads as f32;
+        self.recalculate_positions(self.window_width);
 
         // Audio
         self.vad_sensitivity_select.selected_index = match config.vad_config.sensitivity {
@@ -312,8 +382,8 @@ impl SettingsPanel {
                 3 => BackendType::Parakeet,
                 _ => config.backend_config.backend,
             };
-            // Update model options for the new backend
-            let new_options = models_for_backend(config.backend_config.backend);
+            let english_only = self.english_only_toggle.value;
+            let new_options = models_for_backend(config.backend_config.backend, english_only);
             let new_selected = new_options
                 .iter()
                 .position(|o| o.value == config.general_config.model)
@@ -324,8 +394,19 @@ impl SettingsPanel {
             needs_backend_reload = true;
             any_changed = true;
         }
+        if let Some(val) = self.english_only_toggle.take_changed() {
+            if val {
+                config.general_config.language = "en".to_string();
+            }
+            any_changed = true;
+        }
         if let Some(_idx) = self.model_select.take_changed() {
             config.general_config.model = self.model_select.selected_value().to_string();
+            needs_backend_reload = true;
+            any_changed = true;
+        }
+        if let Some(_idx) = self.language_select.take_changed() {
+            config.general_config.language = self.language_select.selected_value().to_string();
             needs_backend_reload = true;
             any_changed = true;
         }
@@ -402,9 +483,14 @@ impl SettingsPanel {
         v
     }
 
-    fn tab_row_count(tab: SettingsTab) -> usize {
+    fn tab_row_count(&self, tab: SettingsTab) -> usize {
         match tab {
-            SettingsTab::Backend => 4,
+            SettingsTab::Backend => {
+                let mut rows = 4;
+                if self.show_english_toggle { rows += 1; }
+                if self.show_language_select { rows += 1; }
+                rows
+            }
             SettingsTab::Audio => 3,
             SettingsTab::Behavior => 4,
             SettingsTab::Display => 3,
@@ -421,8 +507,16 @@ impl SettingsPanel {
         let mut y = CONTENT_Y;
         self.backend_select.x = x; self.backend_select.y = y; self.backend_select.width = w; self.backend_select.height = ROW_HEIGHT;
         y += step;
+        if self.show_english_toggle {
+            self.english_only_toggle.x = x; self.english_only_toggle.y = y; self.english_only_toggle.width = w; self.english_only_toggle.height = ROW_HEIGHT;
+            y += step;
+        }
         self.model_select.x = x; self.model_select.y = y; self.model_select.width = w; self.model_select.height = ROW_HEIGHT;
         y += step;
+        if self.show_language_select {
+            self.language_select.x = x; self.language_select.y = y; self.language_select.width = w; self.language_select.height = ROW_HEIGHT;
+            y += step;
+        }
         self.gpu_toggle.x = x; self.gpu_toggle.y = y; self.gpu_toggle.width = w; self.gpu_toggle.height = ROW_HEIGHT;
         y += step;
         self.threads_slider.x = x; self.threads_slider.y = y; self.threads_slider.width = w; self.threads_slider.height = ROW_HEIGHT;
@@ -493,7 +587,7 @@ impl SettingsPanel {
         }
 
         // Check Apply button
-        let num_rows = Self::tab_row_count(self.active_tab);
+        let num_rows = self.tab_row_count(self.active_tab);
         let apply_y = CONTENT_Y + (num_rows as f32) * (ROW_HEIGHT + SPACING) + 12.0;
         let w = default_width(window_width);
         let apply_btn_width = 80.0f32;
@@ -522,11 +616,51 @@ impl SettingsPanel {
                             3 => BackendType::Parakeet,
                             _ => BackendType::CTranslate2,
                         };
-                        self.model_select.options = models_for_backend(backend);
+                        let english_only = self.english_only_toggle.value;
+                        self.show_english_toggle = backend_has_english_toggle(backend);
+                        self.model_select.options = models_for_backend(backend, english_only);
                         self.model_select.selected_index = 0;
+                        self.show_language_select = backend_has_language_select(backend, english_only);
+                        if self.show_language_select {
+                            self.language_select.options = languages_for_backend(backend);
+                            self.language_select.selected_index = 0;
+                        }
+                        self.recalculate_positions(window_width);
                     }
                 }
+                if !widget_clicked && self.show_english_toggle && self.english_only_toggle.handle_click(x, y) {
+                    widget_clicked = true;
+                    let english_only = self.english_only_toggle.value;
+                    let backend = match self.backend_select.selected_index {
+                        0 => BackendType::CTranslate2,
+                        1 => BackendType::WhisperCpp,
+                        2 => BackendType::Moonshine,
+                        3 => BackendType::Parakeet,
+                        _ => BackendType::CTranslate2,
+                    };
+                    let old_model = self.model_select.selected_value().to_string();
+                    self.model_select.options = models_for_backend(backend, english_only);
+                    let counterpart = if english_only {
+                        format!("{}.en", old_model)
+                    } else {
+                        old_model.trim_end_matches(".en").to_string()
+                    };
+                    self.model_select.selected_index = self
+                        .model_select
+                        .options
+                        .iter()
+                        .position(|o| o.value == counterpart)
+                        .unwrap_or(0);
+                    self.model_select.mark_changed();
+                    self.show_language_select = backend_has_language_select(backend, english_only);
+                    if self.show_language_select {
+                        self.language_select.options = languages_for_backend(backend);
+                        self.language_select.selected_index = 0;
+                    }
+                    self.recalculate_positions(window_width);
+                }
                 if !widget_clicked && self.model_select.handle_click(x, y) { widget_clicked = true; }
+                if !widget_clicked && self.show_language_select && self.language_select.handle_click(x, y) { widget_clicked = true; }
                 if !widget_clicked && self.gpu_toggle.handle_click(x, y) { widget_clicked = true; }
                 if !widget_clicked && self.threads_slider.handle_click(x, y) { widget_clicked = true; }
             }
@@ -560,6 +694,9 @@ impl SettingsPanel {
             SettingsTab::Backend => {
                 self.backend_select.handle_mouse_move(x, y);
                 self.model_select.handle_mouse_move(x, y);
+                if self.show_language_select {
+                    self.language_select.handle_mouse_move(x, y);
+                }
             }
             SettingsTab::Audio => {
                 self.vad_sensitivity_select.handle_mouse_move(x, y);
@@ -586,6 +723,7 @@ impl SettingsPanel {
     }
 
     pub fn update_animations(&mut self) {
+        self.english_only_toggle.update_animation();
         self.gpu_toggle.update_animation();
         self.sound_toggle.update_animation();
         self.auto_paste_toggle.update_animation();
@@ -770,19 +908,36 @@ impl SettingsPanel {
         match self.active_tab {
             SettingsTab::Backend => {
                 self.backend_select.y += content_y_offset;
+                self.english_only_toggle.y += content_y_offset;
                 self.model_select.y += content_y_offset;
+                self.language_select.y += content_y_offset;
                 self.gpu_toggle.y += content_y_offset;
                 self.threads_slider.y += content_y_offset;
+                let model_covered = self.backend_select.covers_y(self.model_select.y);
+                let language_covered = self.show_language_select && (
+                    self.backend_select.covers_y(self.language_select.y)
+                    || self.model_select.covers_y(self.language_select.y)
+                );
                 self.draw_row_bg(encoder, view, queue, self.backend_select.y, window_width, window_height);
-                self.backend_select.render(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height);
+                self.backend_select.render(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height, false);
+                if self.show_english_toggle {
+                    self.draw_row_bg(encoder, view, queue, self.english_only_toggle.y, window_width, window_height);
+                    self.english_only_toggle.render(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height);
+                }
                 self.draw_row_bg(encoder, view, queue, self.model_select.y, window_width, window_height);
-                self.model_select.render(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height);
+                self.model_select.render(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height, model_covered);
+                if self.show_language_select {
+                    self.draw_row_bg(encoder, view, queue, self.language_select.y, window_width, window_height);
+                    self.language_select.render(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height, language_covered);
+                }
                 self.draw_row_bg(encoder, view, queue, self.gpu_toggle.y, window_width, window_height);
                 self.gpu_toggle.render(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height);
                 self.draw_row_bg(encoder, view, queue, self.threads_slider.y, window_width, window_height);
                 self.threads_slider.render(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height);
                 self.backend_select.y -= content_y_offset;
+                self.english_only_toggle.y -= content_y_offset;
                 self.model_select.y -= content_y_offset;
+                self.language_select.y -= content_y_offset;
                 self.gpu_toggle.y -= content_y_offset;
                 self.threads_slider.y -= content_y_offset;
             }
@@ -791,7 +946,7 @@ impl SettingsPanel {
                 self.sound_toggle.y += content_y_offset;
                 self.volume_slider.y += content_y_offset;
                 self.draw_row_bg(encoder, view, queue, self.vad_sensitivity_select.y, window_width, window_height);
-                self.vad_sensitivity_select.render(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height);
+                self.vad_sensitivity_select.render(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height, false);
                 self.draw_row_bg(encoder, view, queue, self.sound_toggle.y, window_width, window_height);
                 self.sound_toggle.render(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height);
                 self.draw_row_bg(encoder, view, queue, self.volume_slider.y, window_width, window_height);
@@ -823,7 +978,7 @@ impl SettingsPanel {
                 self.target_fps_slider.y += content_y_offset;
                 self.system_tray_toggle.y += content_y_offset;
                 self.draw_row_bg(encoder, view, queue, self.vsync_select.y, window_width, window_height);
-                self.vsync_select.render(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height);
+                self.vsync_select.render(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height, false);
                 self.draw_row_bg(encoder, view, queue, self.target_fps_slider.y, window_width, window_height);
                 self.target_fps_slider.render(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height);
                 self.draw_row_bg(encoder, view, queue, self.system_tray_toggle.y, window_width, window_height);
@@ -836,7 +991,7 @@ impl SettingsPanel {
 
         // Apply button
         {
-            let num_rows = Self::tab_row_count(self.active_tab);
+            let num_rows = self.tab_row_count(self.active_tab);
             let apply_y = CONTENT_Y + (num_rows as f32) * (ROW_HEIGHT + SPACING) + 12.0 + content_y_offset;
             let w = default_width(window_width);
             let apply_btn_width = 80.0f32;
@@ -875,37 +1030,37 @@ impl SettingsPanel {
         // Flush all batched widget rects (row bgs, controls)
         self.widget_renderer.flush(encoder, view, window_width, window_height);
 
-        // Render widget text first (below dropdowns)
-        self.batch_text_renderer.render_batch(encoder, view, &text_items);
-
         // Render any open dropdown ON TOP of all other widgets
-        let mut dropdown_text_items: Vec<TextItem> = Vec::new();
+        // Dropdown text items are appended to text_items so everything is rendered in one batch
         match self.active_tab {
             SettingsTab::Backend => {
                 self.backend_select.y += content_y_offset;
                 self.model_select.y += content_y_offset;
-                self.backend_select.render_dropdown(encoder, view, &self.widget_renderer, &mut dropdown_text_items, queue, window_width, window_height);
-                self.model_select.render_dropdown(encoder, view, &self.widget_renderer, &mut dropdown_text_items, queue, window_width, window_height);
+                self.language_select.y += content_y_offset;
+                self.backend_select.render_dropdown(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height);
+                self.model_select.render_dropdown(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height);
+                if self.show_language_select {
+                    self.language_select.render_dropdown(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height);
+                }
                 self.backend_select.y -= content_y_offset;
                 self.model_select.y -= content_y_offset;
+                self.language_select.y -= content_y_offset;
             }
             SettingsTab::Audio => {
                 self.vad_sensitivity_select.y += content_y_offset;
-                self.vad_sensitivity_select.render_dropdown(encoder, view, &self.widget_renderer, &mut dropdown_text_items, queue, window_width, window_height);
+                self.vad_sensitivity_select.render_dropdown(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height);
                 self.vad_sensitivity_select.y -= content_y_offset;
             }
             SettingsTab::Display => {
                 self.vsync_select.y += content_y_offset;
-                self.vsync_select.render_dropdown(encoder, view, &self.widget_renderer, &mut dropdown_text_items, queue, window_width, window_height);
+                self.vsync_select.render_dropdown(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height);
                 self.vsync_select.y -= content_y_offset;
             }
             _ => {}
         }
 
-        // Flush dropdown rects
+        // Flush dropdown rects, then render all text in one batch
         self.widget_renderer.flush(encoder, view, window_width, window_height);
-
-        // Render dropdown text on top of everything
-        self.batch_text_renderer.render_batch(encoder, view, &dropdown_text_items);
+        self.batch_text_renderer.render_batch(encoder, view, &text_items);
     }
 }

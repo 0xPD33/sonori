@@ -126,6 +126,10 @@ impl Select {
         }
     }
 
+    pub fn mark_changed(&mut self) {
+        self.changed = true;
+    }
+
     pub fn take_changed(&mut self) -> Option<usize> {
         if self.changed {
             self.changed = false;
@@ -142,6 +146,15 @@ impl Select {
             .unwrap_or("")
     }
 
+    /// Returns true if this select's open dropdown covers the given Y coordinate.
+    pub fn covers_y(&self, y: f32) -> bool {
+        if !self.expanded {
+            return false;
+        }
+        let dropdown_y = self.y + self.height;
+        y >= dropdown_y && y < dropdown_y + self.dropdown_height()
+    }
+
     pub fn render(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -151,6 +164,7 @@ impl Select {
         queue: &wgpu::Queue,
         window_width: u32,
         window_height: u32,
+        covered: bool,
     ) {
         let box_x = self.select_box_x();
 
@@ -180,29 +194,30 @@ impl Select {
             window_height,
         );
 
-        // Collect selected option text item
-        if let Some(option) = self.options.get(self.selected_index) {
+        if !covered {
+            // Collect selected option text item
+            if let Some(option) = self.options.get(self.selected_index) {
+                text_items.push(TextItem {
+                    text: option.label.clone(),
+                    x: box_x + 6.0,
+                    y: self.y + 4.0,
+                    scale: 1.0,
+                    color: [0.604, 0.604, 0.670, 1.0],
+                    max_width: SELECT_BOX_WIDTH - CHEVRON_WIDTH - 10.0,
+                });
+            }
+
+            // Collect chevron text item
+            let chevron = if self.expanded { "\u{25B2}" } else { "\u{25BC}" };
             text_items.push(TextItem {
-                text: option.label.clone(),
-                x: box_x + 6.0,
+                text: chevron.to_string(),
+                x: box_x + SELECT_BOX_WIDTH - CHEVRON_WIDTH - 4.0,
                 y: self.y + 4.0,
-                scale: 1.0,
-                color: [0.604, 0.604, 0.670, 1.0],
-                max_width: SELECT_BOX_WIDTH - CHEVRON_WIDTH - 10.0,
+                scale: 0.85,
+                color: [0.171, 0.171, 0.214, 0.7],
+                max_width: CHEVRON_WIDTH,
             });
         }
-
-        // Collect chevron text item
-        let chevron = if self.expanded { "\u{25B2}" } else { "\u{25BC}" };
-        text_items.push(TextItem {
-            text: chevron.to_string(),
-            x: box_x + SELECT_BOX_WIDTH - CHEVRON_WIDTH - 4.0,
-            y: self.y + 4.0,
-            scale: 0.85,
-            color: [0.171, 0.171, 0.214, 0.7],
-            max_width: CHEVRON_WIDTH,
-        });
-
     }
 
     /// Render the dropdown overlay separately, so it draws on top of all other widgets.
@@ -223,7 +238,7 @@ impl Select {
         let box_x = self.select_box_x();
         let dropdown_y = self.y + self.height;
 
-        // Draw dropdown background
+        // Draw dropdown background over the select box area
         widget_renderer.draw_rounded_rect(
             encoder, view, queue,
             box_x, dropdown_y,
