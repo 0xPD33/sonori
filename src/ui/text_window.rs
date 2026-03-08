@@ -142,7 +142,8 @@ impl TextWindow {
 
         drop(render_pass);
 
-        // Render text
+        // Render text clipped to visible area (excluding gap)
+        let clip_h = text_area_height - gap;
         self.text_renderer.render_text(
             view,
             encoder,
@@ -152,7 +153,8 @@ impl TextWindow {
             text_scale,
             text_color,
             text_area_width,
-            text_area_height,
+            clip_h,
+            Some((0, 0, text_area_width, clip_h)),
         );
     }
 
@@ -206,13 +208,14 @@ impl TextWindow {
         text: &str,
         text_area_width: u32,
         text_area_height: u32,
-        _gap: u32,
+        gap: u32,
         text_x: f32,
         text_y: f32,
         text_scale: f32,
         text_color: [f32; 4],
     ) {
-        // Render text
+        // Render text clipped to visible area (excluding gap)
+        let clip_h = text_area_height - gap;
         self.text_renderer.render_text(
             view,
             encoder,
@@ -222,7 +225,8 @@ impl TextWindow {
             text_scale,
             text_color,
             text_area_width,
-            text_area_height,
+            clip_h,
+            Some((0, 0, text_area_width, clip_h)),
         );
     }
 }

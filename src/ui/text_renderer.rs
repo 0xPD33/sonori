@@ -134,6 +134,7 @@ impl TextRenderer {
         color: [f32; 4],
         area_width: u32,
         _area_height: u32,
+        clip_rect: Option<(u32, u32, u32, u32)>,
     ) {
         if text.is_empty() {
             return;
@@ -178,16 +179,19 @@ impl TextRenderer {
             },
         );
 
+        let (clip_x, clip_y, clip_w, clip_h) =
+            clip_rect.unwrap_or((0, 0, self.size.width, self.size.height));
+
         let text_area = TextArea {
             buffer: &self.buffer,
             left: x,
             top: y,
             scale: 1.0,
             bounds: TextBounds {
-                left: 0,
-                top: 0,
-                right: self.size.width as i32,
-                bottom: self.size.height as i32,
+                left: clip_x as i32,
+                top: clip_y as i32,
+                right: (clip_x + clip_w) as i32,
+                bottom: (clip_y + clip_h) as i32,
             },
             default_color: text_color,
             custom_glyphs: &[],
@@ -208,7 +212,7 @@ impl TextRenderer {
             occlusion_query_set: None,
         });
 
-        render_pass.set_scissor_rect(0, 0, self.size.width, self.size.height);
+        render_pass.set_scissor_rect(clip_x, clip_y, clip_w, clip_h);
 
         if let Ok(_) = self.renderer.prepare(
             &self.device,

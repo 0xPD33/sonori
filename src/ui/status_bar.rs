@@ -318,6 +318,7 @@ impl StatusBar {
             left_color,
             bar_width,
             bar_height,
+            None,
         );
 
         // Render status text right after the prefix, with its own color
@@ -333,6 +334,7 @@ impl StatusBar {
             status_color,
             bar_width,
             bar_height,
+            None,
         );
 
         // Render recording indicator on the right side
@@ -366,6 +368,7 @@ impl StatusBar {
                     dot_color,
                     bar_width,
                     bar_height,
+                    None,
                 );
 
                 self.recording_timer_renderer.render_text(
@@ -378,6 +381,7 @@ impl StatusBar {
                     timer_color,
                     bar_width,
                     bar_height,
+                    None,
                 );
             }
         }

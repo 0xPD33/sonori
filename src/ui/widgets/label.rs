@@ -41,6 +41,7 @@ impl SectionLabel {
             [1.0, 1.0, 1.0, 0.95],
             self.width as u32,
             SECTION_LABEL_HEIGHT as u32,
+            None,
         );
     }
 }
