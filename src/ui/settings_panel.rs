@@ -6,7 +6,7 @@ use winit::keyboard::{Key, NamedKey};
 use super::batch_text_renderer::{BatchTextRenderer, TextItem};
 use super::widgets::{Select, SelectOption, Slider, Toggle, WidgetRenderer};
 use crate::backend::BackendType;
-use crate::config::{AppConfig, VadSensitivity};
+use crate::config::{AppConfig, ShortcutMode, VadSensitivity, WindowPosition};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsTab {
@@ -14,6 +14,7 @@ pub enum SettingsTab {
     Audio,
     Behavior,
     Display,
+    Appearance,
 }
 
 impl SettingsTab {
@@ -23,6 +24,7 @@ impl SettingsTab {
             SettingsTab::Audio => "Audio",
             SettingsTab::Behavior => "Behavior",
             SettingsTab::Display => "Display",
+            SettingsTab::Appearance => "Appearance",
         }
     }
 
@@ -32,6 +34,7 @@ impl SettingsTab {
             SettingsTab::Audio,
             SettingsTab::Behavior,
             SettingsTab::Display,
+            SettingsTab::Appearance,
         ]
     }
 }
@@ -70,14 +73,29 @@ pub struct SettingsPanel {
     post_processing_toggle: Toggle,
     typewriter_toggle: Toggle,
 
+    // Behavior tab additions
+    shortcut_mode_select: Select,
+    paste_shortcut_select: Select,
+    enhancement_toggle: Toggle,
+
     // Display tab widgets
     vsync_select: Select,
     target_fps_slider: Slider,
     system_tray_toggle: Toggle,
 
+    // Appearance tab widgets
+    window_position_select: Select,
+    font_size_slider: Slider,
+    recording_indicator_toggle: Toggle,
+
     // Apply button state
     apply_requested: bool,
     has_pending_changes: bool,
+
+    // Tooltip state
+    hovered_tooltip: Option<&'static str>,
+    hover_start: std::time::Instant,
+    tooltip_y: f32,
 
     window_width: u32,
     window_height: u32,
@@ -221,6 +239,25 @@ impl SettingsPanel {
         let clear_on_session_toggle = Toggle::new("Clear on new session", true, WIDGET_X, CONTENT_Y + ROW_HEIGHT + SPACING, w, ROW_HEIGHT);
         let post_processing_toggle = Toggle::new("Post-processing", true, WIDGET_X, CONTENT_Y + 2.0 * (ROW_HEIGHT + SPACING), w, ROW_HEIGHT);
         let typewriter_toggle = Toggle::new("Typewriter effect", false, WIDGET_X, CONTENT_Y + 3.0 * (ROW_HEIGHT + SPACING), w, ROW_HEIGHT);
+        let shortcut_mode_select = Select::new(
+            "Shortcut mode",
+            vec![
+                SelectOption { label: "Toggle".into(), value: "Toggle".into() },
+                SelectOption { label: "Push to Talk".into(), value: "PushToTalk".into() },
+            ],
+            0,
+            WIDGET_X, CONTENT_Y + 4.0 * (ROW_HEIGHT + SPACING), w, ROW_HEIGHT,
+        );
+        let paste_shortcut_select = Select::new(
+            "Paste shortcut",
+            vec![
+                SelectOption { label: "Ctrl+Shift+V".into(), value: "ctrl_shift_v".into() },
+                SelectOption { label: "Ctrl+V".into(), value: "ctrl_v".into() },
+            ],
+            0,
+            WIDGET_X, CONTENT_Y + 5.0 * (ROW_HEIGHT + SPACING), w, ROW_HEIGHT,
+        );
+        let enhancement_toggle = Toggle::new("Magic mode", false, WIDGET_X, CONTENT_Y + 6.0 * (ROW_HEIGHT + SPACING), w, ROW_HEIGHT);
 
         // Display tab widgets
         let vsync_select = Select::new(
@@ -237,6 +274,26 @@ impl SettingsPanel {
         );
         let target_fps_slider = Slider::new("Target FPS", 60.0, 15.0, 240.0, 5.0, WIDGET_X, CONTENT_Y + ROW_HEIGHT + SPACING, w, ROW_HEIGHT);
         let system_tray_toggle = Toggle::new("System tray", true, WIDGET_X, CONTENT_Y + 2.0 * (ROW_HEIGHT + SPACING), w, ROW_HEIGHT);
+
+        // Appearance tab widgets
+        let window_position_select = Select::new(
+            "Window position",
+            vec![
+                SelectOption { label: "Bottom Left".into(), value: "BottomLeft".into() },
+                SelectOption { label: "Bottom Center".into(), value: "BottomCenter".into() },
+                SelectOption { label: "Bottom Right".into(), value: "BottomRight".into() },
+                SelectOption { label: "Top Left".into(), value: "TopLeft".into() },
+                SelectOption { label: "Top Center".into(), value: "TopCenter".into() },
+                SelectOption { label: "Top Right".into(), value: "TopRight".into() },
+                SelectOption { label: "Middle Left".into(), value: "MiddleLeft".into() },
+                SelectOption { label: "Middle Center".into(), value: "MiddleCenter".into() },
+                SelectOption { label: "Middle Right".into(), value: "MiddleRight".into() },
+            ],
+            1,
+            WIDGET_X, CONTENT_Y, w, ROW_HEIGHT,
+        );
+        let font_size_slider = Slider::new("Font size", 10.0, 6.0, 24.0, 0.5, WIDGET_X, CONTENT_Y + ROW_HEIGHT + SPACING, w, ROW_HEIGHT);
+        let recording_indicator_toggle = Toggle::new("Recording indicator", true, WIDGET_X, CONTENT_Y + 2.0 * (ROW_HEIGHT + SPACING), w, ROW_HEIGHT);
 
         Self {
             is_open: false,
@@ -267,13 +324,24 @@ impl SettingsPanel {
             clear_on_session_toggle,
             post_processing_toggle,
             typewriter_toggle,
+            shortcut_mode_select,
+            paste_shortcut_select,
+            enhancement_toggle,
 
             vsync_select,
             target_fps_slider,
             system_tray_toggle,
 
+            window_position_select,
+            font_size_slider,
+            recording_indicator_toggle,
+
             apply_requested: false,
             has_pending_changes: false,
+
+            hovered_tooltip: None,
+            hover_start: std::time::Instant::now(),
+            tooltip_y: 0.0,
 
             window_width: size.width,
             window_height: size.height,
@@ -357,6 +425,15 @@ impl SettingsPanel {
         self.clear_on_session_toggle.set_value(config.manual_mode_config.clear_on_new_session);
         self.post_processing_toggle.set_value(config.post_process_config.enabled);
         self.typewriter_toggle.set_value(config.ui_config.typewriter_effect);
+        self.shortcut_mode_select.selected_index = match config.portal_config.shortcut_mode {
+            ShortcutMode::Toggle => 0,
+            ShortcutMode::PushToTalk => 1,
+        };
+        self.paste_shortcut_select.selected_index = match config.portal_config.paste_shortcut.as_str() {
+            "ctrl_v" => 1,
+            _ => 0,
+        };
+        self.enhancement_toggle.set_value(config.enhancement_config.enabled);
 
         // Display
         self.vsync_select.selected_index = match config.display_config.vsync_mode.as_str() {
@@ -368,6 +445,21 @@ impl SettingsPanel {
         };
         self.target_fps_slider.value = config.display_config.target_fps as f32;
         self.system_tray_toggle.set_value(config.window_behavior_config.show_in_system_tray);
+
+        // Appearance
+        self.window_position_select.selected_index = match config.display_config.window_position {
+            WindowPosition::BottomLeft => 0,
+            WindowPosition::BottomCenter => 1,
+            WindowPosition::BottomRight => 2,
+            WindowPosition::TopLeft => 3,
+            WindowPosition::TopCenter => 4,
+            WindowPosition::TopRight => 5,
+            WindowPosition::MiddleLeft => 6,
+            WindowPosition::MiddleCenter => 7,
+            WindowPosition::MiddleRight => 8,
+        };
+        self.font_size_slider.value = config.ui_config.font_size;
+        self.recording_indicator_toggle.set_value(config.ui_config.show_recording_indicator);
     }
 
     pub fn apply_pending_changes(&mut self, config: &mut AppConfig) -> (bool, bool) {
@@ -454,6 +546,24 @@ impl SettingsPanel {
             config.ui_config.typewriter_effect = val;
             any_changed = true;
         }
+        if let Some(idx) = self.shortcut_mode_select.take_changed() {
+            config.portal_config.shortcut_mode = match idx {
+                1 => ShortcutMode::PushToTalk,
+                _ => ShortcutMode::Toggle,
+            };
+            any_changed = true;
+        }
+        if let Some(idx) = self.paste_shortcut_select.take_changed() {
+            config.portal_config.paste_shortcut = match idx {
+                1 => "ctrl_v".to_string(),
+                _ => "ctrl_shift_v".to_string(),
+            };
+            any_changed = true;
+        }
+        if let Some(val) = self.enhancement_toggle.take_changed() {
+            config.enhancement_config.enabled = val;
+            any_changed = true;
+        }
 
         if let Some(idx) = self.vsync_select.take_changed() {
             config.display_config.vsync_mode = match idx {
@@ -471,6 +581,29 @@ impl SettingsPanel {
         }
         if let Some(val) = self.system_tray_toggle.take_changed() {
             config.window_behavior_config.show_in_system_tray = val;
+            any_changed = true;
+        }
+
+        if let Some(idx) = self.window_position_select.take_changed() {
+            config.display_config.window_position = match idx {
+                0 => WindowPosition::BottomLeft,
+                1 => WindowPosition::BottomCenter,
+                2 => WindowPosition::BottomRight,
+                3 => WindowPosition::TopLeft,
+                4 => WindowPosition::TopCenter,
+                5 => WindowPosition::TopRight,
+                6 => WindowPosition::MiddleLeft,
+                7 => WindowPosition::MiddleCenter,
+                _ => WindowPosition::MiddleRight,
+            };
+            any_changed = true;
+        }
+        if let Some(val) = self.font_size_slider.take_changed() {
+            config.ui_config.font_size = val;
+            any_changed = true;
+        }
+        if let Some(val) = self.recording_indicator_toggle.take_changed() {
+            config.ui_config.show_recording_indicator = val;
             any_changed = true;
         }
 
@@ -492,8 +625,9 @@ impl SettingsPanel {
                 rows
             }
             SettingsTab::Audio => 3,
-            SettingsTab::Behavior => 4,
+            SettingsTab::Behavior => 7,
             SettingsTab::Display => 3,
+            SettingsTab::Appearance => 3,
         }
     }
 
@@ -538,6 +672,12 @@ impl SettingsPanel {
         self.post_processing_toggle.x = x; self.post_processing_toggle.y = y; self.post_processing_toggle.width = w; self.post_processing_toggle.height = ROW_HEIGHT;
         y += step;
         self.typewriter_toggle.x = x; self.typewriter_toggle.y = y; self.typewriter_toggle.width = w; self.typewriter_toggle.height = ROW_HEIGHT;
+        y += step;
+        self.shortcut_mode_select.x = x; self.shortcut_mode_select.y = y; self.shortcut_mode_select.width = w; self.shortcut_mode_select.height = ROW_HEIGHT;
+        y += step;
+        self.paste_shortcut_select.x = x; self.paste_shortcut_select.y = y; self.paste_shortcut_select.width = w; self.paste_shortcut_select.height = ROW_HEIGHT;
+        y += step;
+        self.enhancement_toggle.x = x; self.enhancement_toggle.y = y; self.enhancement_toggle.width = w; self.enhancement_toggle.height = ROW_HEIGHT;
 
         // Display tab
         y = CONTENT_Y;
@@ -546,6 +686,14 @@ impl SettingsPanel {
         self.target_fps_slider.x = x; self.target_fps_slider.y = y; self.target_fps_slider.width = w; self.target_fps_slider.height = ROW_HEIGHT;
         y += step;
         self.system_tray_toggle.x = x; self.system_tray_toggle.y = y; self.system_tray_toggle.width = w; self.system_tray_toggle.height = ROW_HEIGHT;
+
+        // Appearance tab
+        y = CONTENT_Y;
+        self.window_position_select.x = x; self.window_position_select.y = y; self.window_position_select.width = w; self.window_position_select.height = ROW_HEIGHT;
+        y += step;
+        self.font_size_slider.x = x; self.font_size_slider.y = y; self.font_size_slider.width = w; self.font_size_slider.height = ROW_HEIGHT;
+        y += step;
+        self.recording_indicator_toggle.x = x; self.recording_indicator_toggle.y = y; self.recording_indicator_toggle.width = w; self.recording_indicator_toggle.height = ROW_HEIGHT;
     }
 
     pub fn handle_click(
@@ -582,22 +730,32 @@ impl SettingsPanel {
             let tab_index = (x / tab_width) as usize;
             if tab_index < tabs.len() {
                 self.active_tab = tabs[tab_index];
+                self.close_all_dropdowns();
                 return true;
             }
         }
 
-        // Check Apply button
+        // Check Apply and Reset buttons
         let num_rows = self.tab_row_count(self.active_tab);
-        let apply_y = CONTENT_Y + (num_rows as f32) * (ROW_HEIGHT + SPACING) + 12.0;
+        let buttons_y = CONTENT_Y + (num_rows as f32) * (ROW_HEIGHT + SPACING) + 12.0;
         let w = default_width(window_width);
-        let apply_btn_width = 80.0f32;
-        let apply_btn_x = WIDGET_X + (w - apply_btn_width) / 2.0;
-        if x >= apply_btn_x && x <= apply_btn_x + apply_btn_width
-            && y >= apply_y && y <= apply_y + APPLY_BUTTON_HEIGHT
-        {
-            self.apply_requested = true;
-            self.has_pending_changes = false;
-            return true;
+        let btn_width = 80.0f32;
+        let btn_gap = 8.0f32;
+        let total_width = btn_width * 2.0 + btn_gap;
+        let start_x = WIDGET_X + (w - total_width) / 2.0;
+        let reset_btn_x = start_x;
+        let apply_btn_x = start_x + btn_width + btn_gap;
+
+        if y >= buttons_y && y <= buttons_y + APPLY_BUTTON_HEIGHT {
+            if x >= reset_btn_x && x <= reset_btn_x + btn_width {
+                self.reset_tab_to_defaults();
+                return true;
+            }
+            if x >= apply_btn_x && x <= apply_btn_x + btn_width {
+                self.apply_requested = true;
+                self.has_pending_changes = false;
+                return true;
+            }
         }
 
         // Route clicks to the active tab's widgets
@@ -670,10 +828,28 @@ impl SettingsPanel {
                 if !widget_clicked && self.volume_slider.handle_click(x, y) { widget_clicked = true; }
             }
             SettingsTab::Behavior => {
-                if self.auto_paste_toggle.handle_click(x, y) { widget_clicked = true; }
+                if self.shortcut_mode_select.handle_click(x, y) {
+                    widget_clicked = true;
+                    if self.shortcut_mode_select.expanded {
+                        self.paste_shortcut_select.expanded = false;
+                    }
+                }
+                if !widget_clicked && self.paste_shortcut_select.handle_click(x, y) {
+                    widget_clicked = true;
+                    if self.paste_shortcut_select.expanded {
+                        self.shortcut_mode_select.expanded = false;
+                    }
+                }
+                if !widget_clicked && self.auto_paste_toggle.handle_click(x, y) { widget_clicked = true; }
                 if !widget_clicked && self.clear_on_session_toggle.handle_click(x, y) { widget_clicked = true; }
                 if !widget_clicked && self.post_processing_toggle.handle_click(x, y) { widget_clicked = true; }
                 if !widget_clicked && self.typewriter_toggle.handle_click(x, y) { widget_clicked = true; }
+                if !widget_clicked && self.enhancement_toggle.handle_click(x, y) { widget_clicked = true; }
+            }
+            SettingsTab::Appearance => {
+                if self.window_position_select.handle_click(x, y) { widget_clicked = true; }
+                if !widget_clicked && self.font_size_slider.handle_click(x, y) { widget_clicked = true; }
+                if !widget_clicked && self.recording_indicator_toggle.handle_click(x, y) { widget_clicked = true; }
             }
             SettingsTab::Display => {
                 if self.vsync_select.handle_click(x, y) { widget_clicked = true; }
@@ -701,9 +877,15 @@ impl SettingsPanel {
             SettingsTab::Audio => {
                 self.vad_sensitivity_select.handle_mouse_move(x, y);
             }
-            SettingsTab::Behavior => {}
+            SettingsTab::Behavior => {
+                self.shortcut_mode_select.handle_mouse_move(x, y);
+                self.paste_shortcut_select.handle_mouse_move(x, y);
+            }
             SettingsTab::Display => {
                 self.vsync_select.handle_mouse_move(x, y);
+            }
+            SettingsTab::Appearance => {
+                self.window_position_select.handle_mouse_move(x, y);
             }
         }
 
@@ -712,14 +894,72 @@ impl SettingsPanel {
             SettingsTab::Backend => { self.threads_slider.handle_drag(x, y); }
             SettingsTab::Audio => { self.volume_slider.handle_drag(x, y); }
             SettingsTab::Display => { self.target_fps_slider.handle_drag(x, y); }
+            SettingsTab::Appearance => { self.font_size_slider.handle_drag(x, y); }
             _ => {}
         }
+
+        // Tooltip: determine which row the mouse is over
+        let (new_tooltip, row_y) = self.tooltip_for_position(y);
+        if new_tooltip != self.hovered_tooltip {
+            self.hovered_tooltip = new_tooltip;
+            self.hover_start = std::time::Instant::now();
+            self.tooltip_y = row_y;
+        }
+    }
+
+    fn tooltip_for_position(&self, y: f32) -> (Option<&'static str>, f32) {
+        let hit = |widget_y: f32| -> bool {
+            y >= widget_y && y < widget_y + ROW_HEIGHT
+        };
+
+        macro_rules! tip {
+            ($wy:expr, $text:expr) => {
+                if hit($wy) { return (Some($text), $wy); }
+            };
+        }
+
+        match self.active_tab {
+            SettingsTab::Backend => {
+                tip!(self.backend_select.y, "Transcription engine for speech recognition");
+                if self.show_english_toggle { tip!(self.english_only_toggle.y, "Use English-only models for faster transcription"); }
+                tip!(self.model_select.y, "Whisper model size \u{2014} larger is more accurate but slower");
+                if self.show_language_select { tip!(self.language_select.y, "Language for transcription"); }
+                tip!(self.gpu_toggle.y, "Use GPU for faster transcription when available");
+                tip!(self.threads_slider.y, "CPU threads used for transcription");
+            }
+            SettingsTab::Audio => {
+                tip!(self.vad_sensitivity_select.y, "How sensitive voice detection is \u{2014} higher catches quieter speech");
+                tip!(self.sound_toggle.y, "Play sounds when recording starts and stops");
+                tip!(self.volume_slider.y, "Volume level for sound feedback");
+            }
+            SettingsTab::Behavior => {
+                tip!(self.auto_paste_toggle.y, "Automatically paste transcription into focused app");
+                tip!(self.clear_on_session_toggle.y, "Clear previous transcript when starting a new recording");
+                tip!(self.post_processing_toggle.y, "Clean up transcription output (remove artifacts)");
+                tip!(self.typewriter_toggle.y, "Animate text appearing character by character");
+                tip!(self.shortcut_mode_select.y, "Toggle: press to start/stop. Push to Talk: hold to record");
+                tip!(self.paste_shortcut_select.y, "Keyboard shortcut used for pasting transcription");
+                tip!(self.enhancement_toggle.y, "AI enhancement of transcriptions using a local LLM");
+            }
+            SettingsTab::Display => {
+                tip!(self.vsync_select.y, "Vertical sync \u{2014} reduces tearing but may add latency");
+                tip!(self.target_fps_slider.y, "Frame rate limit when VSync is disabled");
+                tip!(self.system_tray_toggle.y, "Show Sonori icon in the system tray");
+            }
+            SettingsTab::Appearance => {
+                tip!(self.window_position_select.y, "Position of the overlay on screen");
+                tip!(self.font_size_slider.y, "Text size for transcription display");
+                tip!(self.recording_indicator_toggle.y, "Show pulsing red dot while recording");
+            }
+        }
+        (None, 0.0)
     }
 
     pub fn handle_mouse_release(&mut self) {
         self.threads_slider.handle_release();
         self.volume_slider.handle_release();
         self.target_fps_slider.handle_release();
+        self.font_size_slider.handle_release();
     }
 
     pub fn update_animations(&mut self) {
@@ -730,7 +970,9 @@ impl SettingsPanel {
         self.clear_on_session_toggle.update_animation();
         self.post_processing_toggle.update_animation();
         self.typewriter_toggle.update_animation();
+        self.enhancement_toggle.update_animation();
         self.system_tray_toggle.update_animation();
+        self.recording_indicator_toggle.update_animation();
     }
 
     pub fn handle_key(&mut self, key: &Key, shift: bool) -> bool {
@@ -743,10 +985,127 @@ impl SettingsPanel {
                 } else {
                     self.active_tab = tabs[(current + 1) % tabs.len()];
                 }
+                self.close_all_dropdowns();
                 true
             }
             _ => false,
         }
+    }
+
+    fn close_all_dropdowns(&mut self) {
+        self.backend_select.expanded = false;
+        self.model_select.expanded = false;
+        self.language_select.expanded = false;
+        self.vad_sensitivity_select.expanded = false;
+        self.shortcut_mode_select.expanded = false;
+        self.paste_shortcut_select.expanded = false;
+        self.vsync_select.expanded = false;
+        self.window_position_select.expanded = false;
+    }
+
+    fn reset_tab_to_defaults(&mut self) {
+        let defaults = AppConfig::default();
+        match self.active_tab {
+            SettingsTab::Backend => {
+                let backend = defaults.backend_config.backend;
+                self.backend_select.selected_index = match backend {
+                    BackendType::CTranslate2 => 0,
+                    BackendType::WhisperCpp => 1,
+                    BackendType::Moonshine => 2,
+                    BackendType::Parakeet => 3,
+                };
+                self.backend_select.mark_changed();
+                self.show_english_toggle = backend_has_english_toggle(backend);
+                let english_only = defaults.general_config.model.ends_with(".en");
+                self.english_only_toggle.set_value(english_only);
+                self.english_only_toggle.mark_changed();
+                self.model_select.options = models_for_backend(backend, english_only);
+                self.model_select.selected_index = self.model_select.options.iter()
+                    .position(|o| o.value == defaults.general_config.model)
+                    .unwrap_or(0);
+                self.model_select.mark_changed();
+                self.show_language_select = backend_has_language_select(backend, english_only);
+                if self.show_language_select {
+                    self.language_select.options = languages_for_backend(backend);
+                    self.language_select.selected_index = self.language_select.options.iter()
+                        .position(|o| o.value == defaults.general_config.language)
+                        .unwrap_or(0);
+                    self.language_select.mark_changed();
+                }
+                self.gpu_toggle.set_value(defaults.backend_config.gpu_enabled);
+                self.gpu_toggle.mark_changed();
+                self.threads_slider.value = defaults.backend_config.threads as f32;
+                self.threads_slider.mark_changed();
+                self.recalculate_positions(self.window_width);
+            }
+            SettingsTab::Audio => {
+                self.vad_sensitivity_select.selected_index = match defaults.vad_config.sensitivity {
+                    VadSensitivity::Low => 0,
+                    VadSensitivity::Medium => 1,
+                    VadSensitivity::High => 2,
+                };
+                self.vad_sensitivity_select.mark_changed();
+                self.sound_toggle.set_value(defaults.sound_config.enabled);
+                self.sound_toggle.mark_changed();
+                self.volume_slider.value = defaults.sound_config.volume;
+                self.volume_slider.mark_changed();
+            }
+            SettingsTab::Behavior => {
+                self.auto_paste_toggle.set_value(defaults.portal_config.enable_xdg_portal);
+                self.auto_paste_toggle.mark_changed();
+                self.clear_on_session_toggle.set_value(defaults.manual_mode_config.clear_on_new_session);
+                self.clear_on_session_toggle.mark_changed();
+                self.post_processing_toggle.set_value(defaults.post_process_config.enabled);
+                self.post_processing_toggle.mark_changed();
+                self.typewriter_toggle.set_value(defaults.ui_config.typewriter_effect);
+                self.typewriter_toggle.mark_changed();
+                self.shortcut_mode_select.selected_index = match defaults.portal_config.shortcut_mode {
+                    ShortcutMode::Toggle => 0,
+                    ShortcutMode::PushToTalk => 1,
+                };
+                self.shortcut_mode_select.mark_changed();
+                self.paste_shortcut_select.selected_index = match defaults.portal_config.paste_shortcut.as_str() {
+                    "ctrl_v" => 1,
+                    _ => 0,
+                };
+                self.paste_shortcut_select.mark_changed();
+                self.enhancement_toggle.set_value(defaults.enhancement_config.enabled);
+                self.enhancement_toggle.mark_changed();
+            }
+            SettingsTab::Display => {
+                self.vsync_select.selected_index = match defaults.display_config.vsync_mode.as_str() {
+                    "Enabled" => 0,
+                    "Disabled" => 1,
+                    "Adaptive" => 2,
+                    "Mailbox" => 3,
+                    "Auto" | _ => 4,
+                };
+                self.vsync_select.mark_changed();
+                self.target_fps_slider.value = defaults.display_config.target_fps as f32;
+                self.target_fps_slider.mark_changed();
+                self.system_tray_toggle.set_value(defaults.window_behavior_config.show_in_system_tray);
+                self.system_tray_toggle.mark_changed();
+            }
+            SettingsTab::Appearance => {
+                self.window_position_select.selected_index = match defaults.display_config.window_position {
+                    WindowPosition::BottomLeft => 0,
+                    WindowPosition::BottomCenter => 1,
+                    WindowPosition::BottomRight => 2,
+                    WindowPosition::TopLeft => 3,
+                    WindowPosition::TopCenter => 4,
+                    WindowPosition::TopRight => 5,
+                    WindowPosition::MiddleLeft => 6,
+                    WindowPosition::MiddleCenter => 7,
+                    WindowPosition::MiddleRight => 8,
+                };
+                self.window_position_select.mark_changed();
+                self.font_size_slider.value = defaults.ui_config.font_size;
+                self.font_size_slider.mark_changed();
+                self.recording_indicator_toggle.set_value(defaults.ui_config.show_recording_indicator);
+                self.recording_indicator_toggle.mark_changed();
+            }
+        }
+        self.has_pending_changes = true;
     }
 
     fn draw_row_bg(&self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, queue: &wgpu::Queue, y: f32, window_width: u32, window_height: u32) {
@@ -913,6 +1272,11 @@ impl SettingsPanel {
                 self.language_select.y += content_y_offset;
                 self.gpu_toggle.y += content_y_offset;
                 self.threads_slider.y += content_y_offset;
+                let any_dropdown_covers = |y: f32| -> bool {
+                    self.backend_select.covers_y(y)
+                    || self.model_select.covers_y(y)
+                    || (self.show_language_select && self.language_select.covers_y(y))
+                };
                 let model_covered = self.backend_select.covers_y(self.model_select.y);
                 let language_covered = self.show_language_select && (
                     self.backend_select.covers_y(self.language_select.y)
@@ -921,8 +1285,9 @@ impl SettingsPanel {
                 self.draw_row_bg(encoder, view, queue, self.backend_select.y, window_width, window_height);
                 self.backend_select.render(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height, false);
                 if self.show_english_toggle {
+                    let covered = any_dropdown_covers(self.english_only_toggle.y);
                     self.draw_row_bg(encoder, view, queue, self.english_only_toggle.y, window_width, window_height);
-                    self.english_only_toggle.render(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height);
+                    self.english_only_toggle.render_ex(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height, covered);
                 }
                 self.draw_row_bg(encoder, view, queue, self.model_select.y, window_width, window_height);
                 self.model_select.render(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height, model_covered);
@@ -930,10 +1295,12 @@ impl SettingsPanel {
                     self.draw_row_bg(encoder, view, queue, self.language_select.y, window_width, window_height);
                     self.language_select.render(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height, language_covered);
                 }
+                let gpu_covered = any_dropdown_covers(self.gpu_toggle.y);
                 self.draw_row_bg(encoder, view, queue, self.gpu_toggle.y, window_width, window_height);
-                self.gpu_toggle.render(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height);
+                self.gpu_toggle.render_ex(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height, gpu_covered);
+                let threads_covered = any_dropdown_covers(self.threads_slider.y);
                 self.draw_row_bg(encoder, view, queue, self.threads_slider.y, window_width, window_height);
-                self.threads_slider.render(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height);
+                self.threads_slider.render_ex(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height, threads_covered);
                 self.backend_select.y -= content_y_offset;
                 self.english_only_toggle.y -= content_y_offset;
                 self.model_select.y -= content_y_offset;
@@ -947,10 +1314,12 @@ impl SettingsPanel {
                 self.volume_slider.y += content_y_offset;
                 self.draw_row_bg(encoder, view, queue, self.vad_sensitivity_select.y, window_width, window_height);
                 self.vad_sensitivity_select.render(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height, false);
+                let sound_covered = self.vad_sensitivity_select.covers_y(self.sound_toggle.y);
                 self.draw_row_bg(encoder, view, queue, self.sound_toggle.y, window_width, window_height);
-                self.sound_toggle.render(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height);
+                self.sound_toggle.render_ex(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height, sound_covered);
+                let volume_covered = self.vad_sensitivity_select.covers_y(self.volume_slider.y);
                 self.draw_row_bg(encoder, view, queue, self.volume_slider.y, window_width, window_height);
-                self.volume_slider.render(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height);
+                self.volume_slider.render_ex(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height, volume_covered);
                 self.vad_sensitivity_select.y -= content_y_offset;
                 self.sound_toggle.y -= content_y_offset;
                 self.volume_slider.y -= content_y_offset;
@@ -960,6 +1329,13 @@ impl SettingsPanel {
                 self.clear_on_session_toggle.y += content_y_offset;
                 self.post_processing_toggle.y += content_y_offset;
                 self.typewriter_toggle.y += content_y_offset;
+                self.shortcut_mode_select.y += content_y_offset;
+                self.paste_shortcut_select.y += content_y_offset;
+                self.enhancement_toggle.y += content_y_offset;
+                let any_behavior_dropdown_covers = |y: f32| -> bool {
+                    self.shortcut_mode_select.covers_y(y) || self.paste_shortcut_select.covers_y(y)
+                };
+                let paste_covered = self.shortcut_mode_select.covers_y(self.paste_shortcut_select.y);
                 self.draw_row_bg(encoder, view, queue, self.auto_paste_toggle.y, window_width, window_height);
                 self.auto_paste_toggle.render(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height);
                 self.draw_row_bg(encoder, view, queue, self.clear_on_session_toggle.y, window_width, window_height);
@@ -968,10 +1344,20 @@ impl SettingsPanel {
                 self.post_processing_toggle.render(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height);
                 self.draw_row_bg(encoder, view, queue, self.typewriter_toggle.y, window_width, window_height);
                 self.typewriter_toggle.render(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height);
+                self.draw_row_bg(encoder, view, queue, self.shortcut_mode_select.y, window_width, window_height);
+                self.shortcut_mode_select.render(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height, false);
+                self.draw_row_bg(encoder, view, queue, self.paste_shortcut_select.y, window_width, window_height);
+                self.paste_shortcut_select.render(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height, paste_covered);
+                let enhancement_covered = any_behavior_dropdown_covers(self.enhancement_toggle.y);
+                self.draw_row_bg(encoder, view, queue, self.enhancement_toggle.y, window_width, window_height);
+                self.enhancement_toggle.render_ex(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height, enhancement_covered);
                 self.auto_paste_toggle.y -= content_y_offset;
                 self.clear_on_session_toggle.y -= content_y_offset;
                 self.post_processing_toggle.y -= content_y_offset;
                 self.typewriter_toggle.y -= content_y_offset;
+                self.shortcut_mode_select.y -= content_y_offset;
+                self.paste_shortcut_select.y -= content_y_offset;
+                self.enhancement_toggle.y -= content_y_offset;
             }
             SettingsTab::Display => {
                 self.vsync_select.y += content_y_offset;
@@ -979,24 +1365,72 @@ impl SettingsPanel {
                 self.system_tray_toggle.y += content_y_offset;
                 self.draw_row_bg(encoder, view, queue, self.vsync_select.y, window_width, window_height);
                 self.vsync_select.render(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height, false);
+                let fps_covered = self.vsync_select.covers_y(self.target_fps_slider.y);
                 self.draw_row_bg(encoder, view, queue, self.target_fps_slider.y, window_width, window_height);
-                self.target_fps_slider.render(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height);
+                self.target_fps_slider.render_ex(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height, fps_covered);
+                let tray_covered = self.vsync_select.covers_y(self.system_tray_toggle.y);
                 self.draw_row_bg(encoder, view, queue, self.system_tray_toggle.y, window_width, window_height);
-                self.system_tray_toggle.render(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height);
+                self.system_tray_toggle.render_ex(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height, tray_covered);
                 self.vsync_select.y -= content_y_offset;
                 self.target_fps_slider.y -= content_y_offset;
                 self.system_tray_toggle.y -= content_y_offset;
             }
+            SettingsTab::Appearance => {
+                self.window_position_select.y += content_y_offset;
+                self.font_size_slider.y += content_y_offset;
+                self.recording_indicator_toggle.y += content_y_offset;
+                self.draw_row_bg(encoder, view, queue, self.window_position_select.y, window_width, window_height);
+                self.window_position_select.render(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height, false);
+                let font_covered = self.window_position_select.covers_y(self.font_size_slider.y);
+                self.draw_row_bg(encoder, view, queue, self.font_size_slider.y, window_width, window_height);
+                self.font_size_slider.render_ex(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height, font_covered);
+                let indicator_covered = self.window_position_select.covers_y(self.recording_indicator_toggle.y);
+                self.draw_row_bg(encoder, view, queue, self.recording_indicator_toggle.y, window_width, window_height);
+                self.recording_indicator_toggle.render_ex(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height, indicator_covered);
+                self.window_position_select.y -= content_y_offset;
+                self.font_size_slider.y -= content_y_offset;
+                self.recording_indicator_toggle.y -= content_y_offset;
+            }
         }
 
-        // Apply button
+        // Apply and Reset buttons
         {
             let num_rows = self.tab_row_count(self.active_tab);
-            let apply_y = CONTENT_Y + (num_rows as f32) * (ROW_HEIGHT + SPACING) + 12.0 + content_y_offset;
+            let buttons_y = CONTENT_Y + (num_rows as f32) * (ROW_HEIGHT + SPACING) + 12.0 + content_y_offset;
             let w = default_width(window_width);
-            let apply_btn_width = 80.0f32;
-            let apply_btn_x = WIDGET_X + (w - apply_btn_width) / 2.0;
+            let btn_width = 80.0f32;
+            let btn_gap = 8.0f32;
+            let total_width = btn_width * 2.0 + btn_gap;
+            let start_x = WIDGET_X + (w - total_width) / 2.0;
+            let reset_btn_x = start_x;
+            let apply_btn_x = start_x + btn_width + btn_gap;
 
+            // Reset button
+            self.widget_renderer.draw_rounded_rect(
+                encoder, view, queue,
+                reset_btn_x, buttons_y,
+                btn_width, APPLY_BUTTON_HEIGHT,
+                8.0,
+                [0.15, 0.15, 0.2, 1.0],
+                window_width, window_height,
+            );
+            {
+                let label = "Reset";
+                let char_width = 6.5f32;
+                let text_width = label.len() as f32 * char_width;
+                let text_x = reset_btn_x + (btn_width - text_width) / 2.0;
+                let text_y = buttons_y + (APPLY_BUTTON_HEIGHT - 14.0) / 2.0;
+                text_items.push(TextItem {
+                    text: label.to_string(),
+                    x: text_x,
+                    y: text_y,
+                    scale: 1.0,
+                    color: [0.8, 0.8, 0.85, 1.0],
+                    max_width: btn_width,
+                });
+            }
+
+            // Apply button
             let (bg_color, text_color) = if self.has_pending_changes {
                 ([0.010, 0.787, 0.214, 1.0], [1.0, 1.0, 1.0, 1.0])
             } else {
@@ -1005,26 +1439,27 @@ impl SettingsPanel {
 
             self.widget_renderer.draw_rounded_rect(
                 encoder, view, queue,
-                apply_btn_x, apply_y,
-                apply_btn_width, APPLY_BUTTON_HEIGHT,
+                apply_btn_x, buttons_y,
+                btn_width, APPLY_BUTTON_HEIGHT,
                 8.0,
                 bg_color,
                 window_width, window_height,
             );
-
-            let label = "Apply";
-            let char_width = 6.5f32;
-            let text_width = label.len() as f32 * char_width;
-            let text_x = apply_btn_x + (apply_btn_width - text_width) / 2.0;
-            let text_y = apply_y + (APPLY_BUTTON_HEIGHT - 14.0) / 2.0;
-            text_items.push(TextItem {
-                text: label.to_string(),
-                x: text_x,
-                y: text_y,
-                scale: 1.0,
-                color: text_color,
-                max_width: apply_btn_width,
-            });
+            {
+                let label = "Apply";
+                let char_width = 6.5f32;
+                let text_width = label.len() as f32 * char_width;
+                let text_x = apply_btn_x + (btn_width - text_width) / 2.0;
+                let text_y = buttons_y + (APPLY_BUTTON_HEIGHT - 14.0) / 2.0;
+                text_items.push(TextItem {
+                    text: label.to_string(),
+                    x: text_x,
+                    y: text_y,
+                    scale: 1.0,
+                    color: text_color,
+                    max_width: btn_width,
+                });
+            }
         }
 
         // Flush all batched widget rects (row bgs, controls)
@@ -1051,15 +1486,62 @@ impl SettingsPanel {
                 self.vad_sensitivity_select.render_dropdown(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height);
                 self.vad_sensitivity_select.y -= content_y_offset;
             }
+            SettingsTab::Behavior => {
+                self.shortcut_mode_select.y += content_y_offset;
+                self.paste_shortcut_select.y += content_y_offset;
+                self.shortcut_mode_select.render_dropdown(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height);
+                self.paste_shortcut_select.render_dropdown(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height);
+                self.shortcut_mode_select.y -= content_y_offset;
+                self.paste_shortcut_select.y -= content_y_offset;
+            }
             SettingsTab::Display => {
                 self.vsync_select.y += content_y_offset;
                 self.vsync_select.render_dropdown(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height);
                 self.vsync_select.y -= content_y_offset;
             }
-            _ => {}
+            SettingsTab::Appearance => {
+                self.window_position_select.y += content_y_offset;
+                self.window_position_select.render_dropdown(encoder, view, &self.widget_renderer, &mut text_items, queue, window_width, window_height);
+                self.window_position_select.y -= content_y_offset;
+            }
         }
 
-        // Flush dropdown rects, then render all text in one batch
+        // Render tooltip background rect before text flush (so it's behind tooltip text but on top of dropdown rects)
+        if let Some(tip_text) = self.hovered_tooltip {
+            if self.hover_start.elapsed().as_millis() >= 150 {
+                let padding = 6.0f32;
+                let font_size = 11.0f32;
+                let char_w = font_size * 0.6;
+                let tip_w = tip_text.len() as f32 * char_w + padding * 2.0;
+                let tip_h = font_size + padding * 2.0;
+                let w = default_width(window_width);
+                let tip_x = (WIDGET_X + w / 2.0 - tip_w / 2.0)
+                    .max(2.0)
+                    .min(window_width as f32 - tip_w - 2.0);
+                let tip_y = (self.tooltip_y + ROW_HEIGHT + 4.0)
+                    .min(window_height as f32 - tip_h - 2.0);
+
+                self.widget_renderer.draw_rounded_rect(
+                    encoder, view, queue,
+                    tip_x, tip_y,
+                    tip_w, tip_h,
+                    4.0,
+                    [0.12, 0.12, 0.16, 0.95],
+                    window_width, window_height,
+                );
+
+                text_items.push(TextItem {
+                    text: tip_text.to_string(),
+                    x: tip_x + padding,
+                    y: tip_y + padding,
+                    scale: font_size / 14.0,
+                    color: [0.8, 0.8, 0.85, 1.0],
+                    max_width: tip_w - padding * 2.0,
+                });
+            }
+        }
+
+        // Flush all rects (dropdowns + tooltip bg), then render ALL text in a single batch
         self.widget_renderer.flush(encoder, view, window_width, window_height);
         self.batch_text_renderer.render_batch(encoder, view, &text_items);
     }

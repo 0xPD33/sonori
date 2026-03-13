@@ -119,6 +119,10 @@ impl Slider {
         self.dragging = false;
     }
 
+    pub fn mark_changed(&mut self) {
+        self.changed = true;
+    }
+
     pub fn take_changed(&mut self) -> Option<f32> {
         if self.changed {
             self.changed = false;
@@ -138,16 +142,32 @@ impl Slider {
         window_width: u32,
         window_height: u32,
     ) {
-        // Collect label text item
-        let label_width = self.width - TRACK_WIDTH - VALUE_DISPLAY_WIDTH - 16.0;
-        text_items.push(TextItem {
-            text: self.label.clone(),
-            x: self.x + 4.0,
-            y: self.y + 4.0,
-            scale: 1.0,
-            color: [0.604, 0.604, 0.670, 1.0],
-            max_width: label_width,
-        });
+        self.render_ex(encoder, view, widget_renderer, text_items, queue, window_width, window_height, false);
+    }
+
+    pub fn render_ex(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        widget_renderer: &WidgetRenderer,
+        text_items: &mut Vec<TextItem>,
+        queue: &wgpu::Queue,
+        window_width: u32,
+        window_height: u32,
+        covered: bool,
+    ) {
+        if !covered {
+            // Collect label text item
+            let label_width = self.width - TRACK_WIDTH - VALUE_DISPLAY_WIDTH - 16.0;
+            text_items.push(TextItem {
+                text: self.label.clone(),
+                x: self.x + 4.0,
+                y: self.y + 4.0,
+                scale: 1.0,
+                color: [0.604, 0.604, 0.670, 1.0],
+                max_width: label_width,
+            });
+        }
 
         let track_x = self.track_x();
         let track_y = self.track_y();
@@ -203,21 +223,23 @@ impl Slider {
             window_height,
         );
 
-        // Collect value text item
-        let value_text = if self.step >= 1.0 {
-            format!("{}", self.value as i32)
-        } else {
-            format!("{:.1}", self.value)
-        };
+        if !covered {
+            // Collect value text item
+            let value_text = if self.step >= 1.0 {
+                format!("{}", self.value as i32)
+            } else {
+                format!("{:.1}", self.value)
+            };
 
-        let value_x = track_x + TRACK_WIDTH + 8.0;
-        text_items.push(TextItem {
-            text: value_text,
-            x: value_x,
-            y: self.y + 4.0,
-            scale: 1.0,
-            color: [0.262, 0.262, 0.318, 0.9],
-            max_width: VALUE_DISPLAY_WIDTH,
-        });
+            let value_x = track_x + TRACK_WIDTH + 8.0;
+            text_items.push(TextItem {
+                text: value_text,
+                x: value_x,
+                y: self.y + 4.0,
+                scale: 1.0,
+                color: [0.262, 0.262, 0.318, 0.9],
+                max_width: VALUE_DISPLAY_WIDTH,
+            });
+        }
     }
 }
