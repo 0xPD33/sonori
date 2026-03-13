@@ -178,17 +178,31 @@ fn convert_model(model_name: &str, output_dir: &Path) -> Result<()> {
         on_nixos, in_shell
     );
 
-    // Prepare the conversion command
-    let conversion_script = format!(
-        "ct2-transformers-converter --force --model {} --output_dir {} --copy_files preprocessor_config.json tokenizer.json",
+    let output_dir_str = output_dir
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("Model output path contains invalid UTF-8: {:?}", output_dir))?;
+
+    let converter_args = [
+        "--force",
+        "--model",
         model_name,
-        output_dir.to_str()
-            .ok_or_else(|| anyhow::anyhow!("Model output path contains invalid UTF-8: {:?}", output_dir))?
-    );
+        "--output_dir",
+        output_dir_str,
+        "--copy_files",
+        "preprocessor_config.json",
+        "tokenizer.json",
+    ];
 
     let status = if on_nixos {
         // On NixOS but not in a shell, try to use the provided shell.nix in model-conversion directory
         println!("On NixOS: Using model-conversion/shell.nix");
+
+        // nix-shell --command runs in a shell context, so quote arguments to prevent injection
+        let quoted_args: Vec<String> = converter_args
+            .iter()
+            .map(|arg| format!("'{}'", arg.replace('\'', "'\\''")))
+            .collect();
+        let conversion_script = format!("ct2-transformers-converter {}", quoted_args.join(" "));
 
         // Get the repository root directory to find model-conversion/shell.nix
         let current_dir = std::env::current_dir()?;
@@ -217,11 +231,10 @@ fn convert_model(model_name: &str, output_dir: &Path) -> Result<()> {
                 .status()
         }
     } else {
-        // Not on NixOS, run directly
+        // Not on NixOS, run directly without shell
         println!("Not on NixOS: Running conversion directly");
-        Command::new("sh")
-            .arg("-c")
-            .arg(&conversion_script)
+        Command::new("ct2-transformers-converter")
+            .args(&converter_args)
             .status()
     }
     .context("Failed to run conversion command")?;
