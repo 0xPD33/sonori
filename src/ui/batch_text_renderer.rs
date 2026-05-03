@@ -91,8 +91,10 @@ impl BatchTextRenderer {
 
         for item in items {
             let font_size = 10.0 * item.scale;
-            let mut buffer =
-                Buffer::new(&mut self.font_system, Metrics::new(font_size, font_size * 1.1));
+            let mut buffer = Buffer::new(
+                &mut self.font_system,
+                Metrics::new(font_size, font_size * 1.1),
+            );
 
             buffer.set_size(&mut self.font_system, Some(item.max_width), None);
 

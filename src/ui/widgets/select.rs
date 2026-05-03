@@ -208,7 +208,11 @@ impl Select {
             }
 
             // Collect chevron text item
-            let chevron = if self.expanded { "\u{25B2}" } else { "\u{25BC}" };
+            let chevron = if self.expanded {
+                "\u{25B2}"
+            } else {
+                "\u{25BC}"
+            };
             text_items.push(TextItem {
                 text: chevron.to_string(),
                 x: box_x + SELECT_BOX_WIDTH - CHEVRON_WIDTH - 4.0,
@@ -240,12 +244,17 @@ impl Select {
 
         // Draw dropdown background over the select box area
         widget_renderer.draw_rounded_rect(
-            encoder, view, queue,
-            box_x, dropdown_y,
-            SELECT_BOX_WIDTH, self.dropdown_height(),
+            encoder,
+            view,
+            queue,
+            box_x,
+            dropdown_y,
+            SELECT_BOX_WIDTH,
+            self.dropdown_height(),
             4.0,
             [0.005, 0.005, 0.010, 1.0],
-            window_width, window_height,
+            window_width,
+            window_height,
         );
 
         for (i, option) in self.options.iter().enumerate() {
@@ -262,11 +271,17 @@ impl Select {
                 };
 
                 widget_renderer.draw_rounded_rect(
-                    encoder, view, queue,
-                    box_x + 2.0, item_y + 1.0,
-                    SELECT_BOX_WIDTH - 4.0, DROPDOWN_ITEM_HEIGHT - 2.0,
-                    3.0, highlight_color,
-                    window_width, window_height,
+                    encoder,
+                    view,
+                    queue,
+                    box_x + 2.0,
+                    item_y + 1.0,
+                    SELECT_BOX_WIDTH - 4.0,
+                    DROPDOWN_ITEM_HEIGHT - 2.0,
+                    3.0,
+                    highlight_color,
+                    window_width,
+                    window_height,
                 );
             }
 

@@ -269,7 +269,7 @@ impl Spectrogram {
             })
             .collect();
 
-        let spectrogram = Self {
+        Self {
             config: SpectrogramConfig::default(),
             _device: device,
             queue,
@@ -287,9 +287,7 @@ impl Spectrogram {
             _window: window,
             bar_instance_template,
             cached_instances,
-        };
-
-        spectrogram
+        }
     }
 
     pub fn resize(&mut self, new_size: PhysicalSize<u32>) {
@@ -348,7 +346,7 @@ impl Spectrogram {
         let audio_energy = {
             let sample_step = (audio_samples.len() / 20).max(1);
             let mut sum = 0.0;
-            let count = (audio_samples.len() + sample_step - 1) / sample_step; // Ceiling division
+            let count = audio_samples.len().div_ceil(sample_step);
 
             for i in (0..audio_samples.len()).step_by(sample_step) {
                 sum += audio_samples[i].abs();
@@ -368,7 +366,7 @@ impl Spectrogram {
             // Optimize for fewer samples than bars
             let step = audio_samples.len().max(1) / num_bars.max(1);
 
-            for i in 0..num_bars {
+            for (i, value) in smoothed_data.iter_mut().enumerate().take(num_bars) {
                 let idx = (i * step).min(audio_samples.len().saturating_sub(1));
                 let sample = if idx < audio_samples.len() {
                     audio_samples[idx].abs()
@@ -377,14 +375,14 @@ impl Spectrogram {
                 };
 
                 // Apply a non-linear scaling (capped at MAX_BAR_HEIGHT)
-                smoothed_data[i] =
+                *value =
                     (sample * self.config.sample_amplification).min(self.config.max_bar_height);
             }
         } else {
             // Optimize for more samples than bars
             let samples_per_bar = audio_samples.len() / num_bars;
 
-            for i in 0..num_bars {
+            for (i, value) in smoothed_data.iter_mut().enumerate().take(num_bars) {
                 let start_idx = i * samples_per_bar;
                 let end_idx = ((i + 1) * samples_per_bar).min(audio_samples.len());
                 let segment_len = end_idx - start_idx;
@@ -399,10 +397,10 @@ impl Spectrogram {
                     let avg = sum / segment_len as f32;
 
                     // Apply non-linear scaling
-                    smoothed_data[i] = (avg.sqrt() * self.config.scaled_amplification)
+                    *value = (avg.sqrt() * self.config.scaled_amplification)
                         .min(self.config.max_bar_height);
                 } else {
-                    smoothed_data[i] = self.config.min_amplitude;
+                    *value = self.config.min_amplitude;
                 }
             }
         }

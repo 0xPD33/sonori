@@ -153,12 +153,8 @@ impl Button {
             || button_type == ButtonType::ModeToggle
             || button_type == ButtonType::Settings
         {
-            // Create rotation uniform buffer (includes mode for ModeToggle)
-            let initial_data = if button_type == ButtonType::ModeToggle {
-                [0.0f32, 0.0f32] // rotation, mode (0.0 = RealTime by default)
-            } else {
-                [0.0f32, 0.0f32] // rotation, unused mode field
-            };
+            // rotation, mode/unused field
+            let initial_data = [0.0f32, 0.0f32];
             let rotation_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Shader Button Uniform Buffer"),
                 contents: bytemuck::cast_slice(&initial_data),
@@ -351,7 +347,7 @@ impl Button {
                     ButtonType::Accept => Some("fs_copy"), // Use texture-based rendering
                     ButtonType::ModeToggle => Some("fs_mode_toggle"), // Custom shader for R/M text
                     ButtonType::MagicMode => Some("fs_texture_opacity"), // Texture with dynamic opacity
-                    ButtonType::Settings => Some("fs_settings"), // Gear icon shader
+                    ButtonType::Settings => Some("fs_settings"),         // Gear icon shader
                 },
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
@@ -488,9 +484,7 @@ impl Button {
     // Get target values for current state
     fn get_target_values(&self) -> (f32, f32) {
         match (self.button_type, self.state) {
-            (ButtonType::Close | ButtonType::Settings, ButtonState::Hover) => {
-                (1.0, HOVER_ROTATION)
-            }
+            (ButtonType::Close | ButtonType::Settings, ButtonState::Hover) => (1.0, HOVER_ROTATION),
             (ButtonType::Close | ButtonType::Settings, _) => (1.0, 0.0),
             (_, ButtonState::Hover) => (HOVER_SCALE, 0.0),
             (_, ButtonState::Pressed) => (PRESS_SCALE, 0.0),
@@ -615,17 +609,13 @@ impl Button {
 impl ButtonManager {
     /// Calculate dynamic button layout parameters based on window dimensions
     fn calculate_layout_params(window_width: u32) -> ButtonLayoutParams {
-        let scale_factor = (window_width as f32 / 240.0).max(0.7).min(1.2);
+        let scale_factor = (window_width as f32 / 240.0).clamp(0.7, 1.2);
 
         ButtonLayoutParams {
             regular_button_size: (COPY_BUTTON_BASE_SIZE * scale_factor) as u32,
             close_button_size: (CLOSE_BUTTON_BASE_SIZE * scale_factor) as u32,
-            margin: ((window_width as f32) * BUTTON_MARGIN_RATIO)
-                .max(6.0)
-                .min(16.0) as u32,
-            spacing: ((window_width as f32) * BUTTON_SPACING_RATIO)
-                .max(4.0)
-                .min(12.0) as u32,
+            margin: ((window_width as f32) * BUTTON_MARGIN_RATIO).clamp(6.0, 16.0) as u32,
+            spacing: ((window_width as f32) * BUTTON_SPACING_RATIO).clamp(4.0, 12.0) as u32,
         }
     }
 

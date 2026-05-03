@@ -275,20 +275,15 @@ impl Default for SoundConfig {
 }
 
 /// VAD sensitivity presets for different acoustic environments
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum VadSensitivity {
     /// Less sensitive - reduces false positives in noisy environments
     Low,
     /// Balanced - good for most environments (default)
+    #[default]
     Medium,
     /// More sensitive - catches quiet speech, may trigger on background noise
     High,
-}
-
-impl Default for VadSensitivity {
-    fn default() -> Self {
-        VadSensitivity::Medium
-    }
 }
 
 impl VadSensitivity {
@@ -312,9 +307,10 @@ impl VadSensitivity {
 }
 
 /// Window position presets for layer-shell anchoring
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum WindowPosition {
     BottomLeft,
+    #[default]
     BottomCenter,
     BottomRight,
     TopLeft,
@@ -323,12 +319,7 @@ pub enum WindowPosition {
     MiddleLeft,
     MiddleCenter,
     MiddleRight,
-}
-
-impl Default for WindowPosition {
-    fn default() -> Self {
-        WindowPosition::BottomCenter
-    }
+    Custom,
 }
 
 impl WindowPosition {
@@ -348,8 +339,16 @@ impl WindowPosition {
             WindowPosition::MiddleLeft => Anchor::LEFT,
             WindowPosition::MiddleCenter => Anchor::empty(), // No anchors = centered
             WindowPosition::MiddleRight => Anchor::RIGHT,
+            WindowPosition::Custom => Anchor::TOP | Anchor::LEFT,
         }
     }
+}
+
+/// Pixel position for a user-dragged overlay window.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CustomWindowPosition {
+    pub x: i32,
+    pub y: i32,
 }
 
 /// Configuration for display and rendering settings
@@ -369,8 +368,12 @@ pub struct DisplayConfig {
 
     /// Window position on screen (layer-shell anchor configuration)
     /// Available positions: BottomLeft, BottomCenter, BottomRight,
-    /// TopLeft, TopCenter, TopRight, MiddleLeft, MiddleCenter, MiddleRight
+    /// TopLeft, TopCenter, TopRight, MiddleLeft, MiddleCenter, MiddleRight, Custom
     pub window_position: WindowPosition,
+
+    /// Position used when window_position is Custom.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_window_position: Option<CustomWindowPosition>,
 }
 
 /// Configuration for system tray behavior
@@ -387,6 +390,7 @@ impl Default for DisplayConfig {
             vsync_mode: "Enabled".to_string(), // Default to traditional vsync
             target_fps: 60,                    // Cap at 60 FPS when vsync disabled
             window_position: WindowPosition::default(),
+            custom_window_position: None,
         }
     }
 }
@@ -444,7 +448,14 @@ impl DisplayConfig {
             "Adaptive" => wgpu::PresentMode::FifoRelaxed,
             "Disabled" => wgpu::PresentMode::Immediate,
             "Mailbox" => wgpu::PresentMode::Mailbox,
-            "Auto" | _ => {
+            "Auto" => {
+                // Auto mode: prefer Fifo, but accept whatever is available
+                return available_modes
+                    .first()
+                    .copied()
+                    .unwrap_or(wgpu::PresentMode::Fifo);
+            }
+            _ => {
                 // Auto mode: prefer Fifo, but accept whatever is available
                 return available_modes
                     .first()
@@ -478,7 +489,7 @@ impl DisplayConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct AppConfig {
     /// General core configuration
@@ -613,31 +624,17 @@ impl Default for WhisperCppOptions {
 }
 
 /// Moonshine-specific options
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct MoonshineOptions {
     /// Whether to use cached decoder (prefill + decode steps) for faster inference
     pub enable_cache: bool,
 }
 
-impl Default for MoonshineOptions {
-    fn default() -> Self {
-        Self {
-            enable_cache: false, // Default to uncached for simplicity initially
-        }
-    }
-}
-
 /// Parakeet TDT-specific options
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct ParakeetOptions {}
-
-impl Default for ParakeetOptions {
-    fn default() -> Self {
-        Self {}
-    }
-}
 
 /// Configuration for Voice Activity Detection
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -716,34 +713,6 @@ impl From<(VadConfigSerde, RealtimeModeConfig, usize, usize)> for SileroVadConfi
             silence_tolerance_frames: config.silence_tolerance_frames,
             speech_end_threshold: config.sensitivity.speech_end_threshold(),
             speech_prob_smoothing: config.speech_prob_smoothing,
-        }
-    }
-}
-
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            general_config: GeneralConfig::default(),
-            backend_config: BackendConfig::default(),
-            audio_processor_config: AudioProcessorConfig::default(),
-            realtime_mode_config: RealtimeModeConfig::default(),
-            manual_mode_config: ManualModeConfig::default(),
-            vad_config: VadConfigSerde::default(),
-            common_transcription_options: CommonTranscriptionOptions::default(),
-            ctranslate2_options: CT2Options::default(),
-            whisper_cpp_options: WhisperCppOptions::default(),
-            moonshine_options: MoonshineOptions::default(),
-            parakeet_options: ParakeetOptions::default(),
-            portal_config: PortalConfig::default(),
-            display_config: DisplayConfig::default(),
-            window_behavior_config: WindowBehaviorConfig::default(),
-            sound_config: SoundConfig::default(),
-            debug_config: DebugConfig::default(),
-            post_process_config: PostProcessConfig::default(),
-            enhancement_config: EnhancementConfig::default(),
-            ui_config: UiConfig::default(),
-            compute_type: None,
-            device: None,
         }
     }
 }
@@ -851,15 +820,13 @@ fn user_config_path() -> Option<std::path::PathBuf> {
                 .join("sonori")
                 .join("config.toml"),
         )
-    } else if let Some(home) = std::env::var_os("HOME") {
-        Some(
+    } else {
+        std::env::var_os("HOME").map(|home| {
             PathBuf::from(home)
                 .join(".config")
                 .join("sonori")
-                .join("config.toml"),
-        )
-    } else {
-        None
+                .join("config.toml")
+        })
     }
 }
 

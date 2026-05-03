@@ -106,7 +106,16 @@ impl Toggle {
         window_width: u32,
         window_height: u32,
     ) {
-        self.render_ex(encoder, view, widget_renderer, text_items, queue, window_width, window_height, false);
+        self.render_ex(
+            encoder,
+            view,
+            widget_renderer,
+            text_items,
+            queue,
+            window_width,
+            window_height,
+            false,
+        );
     }
 
     pub fn render_ex(

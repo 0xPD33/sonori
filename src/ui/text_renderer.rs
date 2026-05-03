@@ -214,20 +214,23 @@ impl TextRenderer {
 
         render_pass.set_scissor_rect(clip_x, clip_y, clip_w, clip_h);
 
-        if let Ok(_) = self.renderer.prepare(
-            &self.device,
-            &self.queue,
-            &mut self.font_system,
-            &mut self.atlas,
-            &self.viewport,
-            [text_area],
-            &mut self.cache,
-        ) {
+        if self
+            .renderer
+            .prepare(
+                &self.device,
+                &self.queue,
+                &mut self.font_system,
+                &mut self.atlas,
+                &self.viewport,
+                [text_area],
+                &mut self.cache,
+            )
+            .is_ok()
+        {
             let _ = self
                 .renderer
                 .render(&self.atlas, &self.viewport, &mut render_pass);
         }
-
     }
 
     /// Trim the atlas to free unused entries.

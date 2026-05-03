@@ -72,9 +72,9 @@ impl LayoutManager {
     /// Calculate the status bar position (between text area and spectrogram)
     pub fn get_status_bar_position(&self) -> (u32, u32, u32, u32) {
         (
-            0,                    // x position
-            self.text_area_height, // y position (right after text area)
-            self.window_width,    // width
+            0,                      // x position
+            self.text_area_height,  // y position (right after text area)
+            self.window_width,      // width
             self.status_bar_height, // height
         )
     }
@@ -84,8 +84,9 @@ impl LayoutManager {
         let status_bar_bottom_margin = 3u32;
         (
             0.0, // x position
-            (self.text_area_height + self.status_bar_height + self.gap + status_bar_bottom_margin) as f32, // y position
-            self.spectrogram_width as f32,  // width
+            (self.text_area_height + self.status_bar_height + self.gap + status_bar_bottom_margin)
+                as f32, // y position
+            self.spectrogram_width as f32, // width
             self.spectrogram_height as f32, // height
         )
     }

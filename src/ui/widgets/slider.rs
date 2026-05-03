@@ -142,7 +142,16 @@ impl Slider {
         window_width: u32,
         window_height: u32,
     ) {
-        self.render_ex(encoder, view, widget_renderer, text_items, queue, window_width, window_height, false);
+        self.render_ex(
+            encoder,
+            view,
+            widget_renderer,
+            text_items,
+            queue,
+            window_width,
+            window_height,
+            false,
+        );
     }
 
     pub fn render_ex(
@@ -237,7 +246,7 @@ impl Slider {
                 x: value_x,
                 y: self.y + 4.0,
                 scale: 1.0,
-                color: [0.262, 0.262, 0.318, 0.9],
+                color: [0.262, 0.262, 0.319, 0.9],
                 max_width: VALUE_DISPLAY_WIDTH,
             });
         }
