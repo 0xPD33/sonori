@@ -119,7 +119,7 @@ quantization_level = "medium"        # Good balance
 - `large-v3-turbo` for best accuracy (requires good GPU)
 - Models without `.en` support multiple languages
 
-**How do I change where the window appears?** Add `window_position` to the `[display_config]` section. Available positions: `BottomLeft`, `BottomCenter` (default), `BottomRight`, `TopLeft`, `TopCenter`, `TopRight`, `MiddleLeft`, `MiddleCenter`, `MiddleRight`.
+**How do I change where the window appears?** Add `window_position` to the `[display_config]` section. Available positions: `BottomLeft`, `BottomCenter` (default), `BottomRight`, `TopLeft`, `TopCenter`, `TopRight`, `MiddleLeft`, `MiddleCenter`, `MiddleRight`, `Custom`. Holding Alt or Super while dragging the overlay stores a `Custom` position automatically.
 
 ## Complete Configuration Example
 
@@ -210,7 +210,7 @@ target_fps = 60                       # Target FPS when vsync is disabled
 window_position = "BottomCenter"      # Window position on screen
                                       # Available: BottomLeft, BottomCenter, BottomRight,
                                       #            TopLeft, TopCenter, TopRight,
-                                      #            MiddleLeft, MiddleCenter, MiddleRight
+                                      #            MiddleLeft, MiddleCenter, MiddleRight, Custom
 
 [window_behavior_config]
 show_in_system_tray = true            # Show icon in system tray
@@ -254,7 +254,7 @@ Sonori supports multiple transcription backends, each with different strengths:
 #### CTranslate2 Backend
 Recommended models:
 - `openai/whisper-tiny.en` - Tiny model, English only (for low-end CPUs)
-- `openai/whisper-base.en` - Base model, English only (default, for low to mid-range CPUs)
+- `openai/whisper-base.en` - Base model, English only, for low to mid-range CPUs
 - `distil-whisper/distil-small.en` - Small model, English only (for mid to high-range CPUs)
 - `distil-whisper/distil-medium.en` - Medium model, English only (for high-end CPUs only)
 
@@ -357,9 +357,9 @@ These parameters fine-tune the VAD behavior (defaults work well for most users):
 - `vsync_mode`: VSync options - "Enabled" (default), "Adaptive", "Disabled", "Mailbox", "Auto"
 - `target_fps`: Frame rate cap when VSync is disabled (default: 60)
 - `window_position`: Position of the overlay window on screen (default: "BottomCenter")
-  - Available positions: `BottomLeft`, `BottomCenter`, `BottomRight`, `TopLeft`, `TopCenter`, `TopRight`, `MiddleLeft`, `MiddleCenter`, `MiddleRight`
+  - Available positions: `BottomLeft`, `BottomCenter`, `BottomRight`, `TopLeft`, `TopCenter`, `TopRight`, `MiddleLeft`, `MiddleCenter`, `MiddleRight`, `Custom`
+  - Hold Alt or Super while dragging the overlay to persist a custom position
   - Uses Wayland layer-shell anchors for precise positioning
-  - Note: Window dragging is not supported by the Wayland layer-shell protocol
 
 #### Window Behavior
 - `show_in_system_tray`: Show application icon in system tray (default: true)

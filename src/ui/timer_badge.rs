@@ -83,6 +83,11 @@ impl TimerBadge {
         self.recording_start.is_some()
     }
 
+    pub fn apply_ui_config(&mut self, ui_config: &crate::config::UiConfig) {
+        self.indicator_color = ui_config.recording_indicator_color;
+        self.show_indicator = ui_config.show_recording_indicator;
+    }
+
     /// Format duration as M:SS or H:MM:SS
     fn format_duration(duration: Duration) -> String {
         let total_secs = duration.as_secs();

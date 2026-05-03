@@ -26,8 +26,8 @@ PortAudio → Silero VAD → Backend Abstraction (CT2/WhisperCpp) → Text Clean
 1. **Audio Capture Layer** - PortAudio-based real-time audio input with CPAL fallback
 2. **Voice Activity Detection** - Silero VAD with ONNX Runtime inference
 3. **Multi-Backend Transcription** - Unified backend abstraction supporting:
-   - CTranslate2 (CUDA/CPU, default)
-   - Whisper.cpp (Vulkan/OpenBLAS/CPU, implemented)
+   - CTranslate2 (CUDA/CPU)
+   - Whisper.cpp (Vulkan/OpenBLAS/CPU, default)
    - Parakeet (planned)
    - Supporting both real-time streaming and manual batch modes
 4. **Text Post-Processing** - Configurable text cleanup and normalization pipeline for transcription output
@@ -39,8 +39,8 @@ PortAudio → Silero VAD → Backend Abstraction (CT2/WhisperCpp) → Text Clean
 
 Sonori supports two transcription modes configurable via `transcription_mode` in config.toml:
 
-- **RealTime Mode** (default): Continuous streaming transcription with low-latency VAD-triggered segments.
-- **Manual Mode**: On-demand session-based transcription where audio is accumulated in a buffer until the user stops the session, then processed as a batch. Supports configurable max duration, auto-restart, and clearing on new sessions.
+- **RealTime Mode**: Continuous streaming transcription with low-latency VAD-triggered segments.
+- **Manual Mode** (default): On-demand session-based transcription where audio is accumulated in a buffer until the user stops the session, then processed as a batch. Supports configurable max duration, auto-restart, and clearing on new sessions.
 
 Modes can be toggled at runtime via UI button or CLI flags (`--mode manual`). The audio processor branches logic based on the current mode, using atomic state flags for thread-safe switching.
 
@@ -128,13 +128,13 @@ Modes can be toggled at runtime via UI button or CLI flags (`--mode manual`). Th
 Sonori uses an enum-based dispatch pattern for zero-cost abstraction across multiple transcription backends:
 
 #### Backend Types
-- **CTranslate2** (default) - Fast CPU/GPU inference using CTranslate2 optimization of Whisper models
+- **CTranslate2** - Fast CPU/GPU inference using CTranslate2 optimization of Whisper models
   - GPU: CUDA support
   - Quantization: INT8 (default), FLOAT16, FLOAT32
   - Model format: Directory with model.bin, config.json, tokenizer.json
   - Max segment: 60 seconds
 
-- **Whisper.cpp** - Lightweight, portable inference using whisper.cpp bindings (implemented)
+- **Whisper.cpp** (default) - Lightweight, portable inference using whisper.cpp bindings (implemented)
   - GPU: Vulkan support, CPU optimization with OpenBLAS
   - Quantization: q8_0 (default), q5_1, f32
   - Model format: Single .bin GGML file
@@ -162,7 +162,7 @@ The factory (`backend/factory.rs`) instantiates the correct backend based on con
 Unified `BackendConfig` structure provides:
 - `backend`: Backend selection (enum)
 - `threads`: CPU thread count (default: min(4, num_cpus))
-- `gpu_enabled`: GPU acceleration toggle (default: false for compatibility)
+- `gpu_enabled`: GPU acceleration toggle (default: true)
 - `quantization_level`: Model precision trade-off
 
 Backend-specific options are maintained in separate config structs:

@@ -117,6 +117,7 @@ paste_shortcut = "ctrl_shift_v"        # ctrl_shift_v (terminals) or ctrl_v (app
 vsync_mode = "Enabled"                 # Auto, Enabled, Adaptive, Disabled, Mailbox
 target_fps = 60
 window_position = "BottomCenter"       # BottomCenter, TopCenter, MiddleCenter, etc.
+# custom_window_position is set automatically after Alt/Super dragging the overlay.
 
 [window_behavior_config]
 show_in_system_tray = true

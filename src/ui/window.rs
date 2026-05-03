@@ -24,6 +24,7 @@ use super::text_processor::TextProcessor;
 use super::text_window::TextWindow;
 use super::timer_badge::TimerBadge;
 use super::tooltip::Tooltip;
+use crate::config::{DisplayConfig, UiConfig};
 use parking_lot::RwLock;
 
 pub const SPECTROGRAM_WIDTH: u32 = 240; // Width of the spectrogram
@@ -33,6 +34,10 @@ pub const MARGIN: i32 = 32; // Margin from the bottom of the screen
 pub const GAP: u32 = 0; // Gap replaced by status bar top border
 pub const RIGHT_MARGIN: f32 = 4.0; // Right margin for text area
 pub const LEFT_MARGIN: f32 = 4.0; // Left margin for text area
+
+fn target_frame_duration(target_fps: u32) -> std::time::Duration {
+    std::time::Duration::from_secs_f64(1.0 / target_fps.max(1) as f64)
+}
 
 pub struct WindowState {
     pub window: Arc<dyn Window>,
@@ -65,6 +70,8 @@ pub struct WindowState {
     transcription_mode_ref: Arc<std::sync::atomic::AtomicU8>,
     last_known_mode: crate::real_time_transcriber::TranscriptionMode,
     // Dynamic sizing
+    pub fixed_window_width: u32,
+    pub fixed_window_height: u32,
     pub window_width: u32,
     pub window_height: u32,
     pub spectrogram_width: u32,
@@ -81,6 +88,7 @@ pub struct WindowState {
     last_hover_update: std::time::Instant,
     // Typewriter effect for transcription reveal
     typewriter: super::typewriter::TypewriterEffect,
+    ui_config: UiConfig,
     typewriter_enabled: bool,
     last_processing_state: crate::ui::common::ProcessingState,
     // Reusable buffers to avoid per-frame allocations
@@ -99,7 +107,7 @@ impl WindowState {
             tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>,
         >,
         transcription_mode_ref: Arc<std::sync::atomic::AtomicU8>,
-        display_config: &crate::config::DisplayConfig,
+        display_config: &DisplayConfig,
         window_width: u32,
         window_height: u32,
         spectrogram_width: u32,
@@ -155,8 +163,7 @@ impl WindowState {
             .formats
             .iter()
             .copied()
-            .filter(|f| f.is_srgb())
-            .next()
+            .find(|f| f.is_srgb())
             .unwrap_or(surface_caps.formats[0]);
 
         // Select present mode based on display configuration
@@ -273,6 +280,9 @@ impl WindowState {
             )))
         });
 
+        let (app_config, _) = crate::config::read_app_config_with_path();
+        let ui_config = app_config.ui_config;
+
         // Status bar height: ~18px scaled
         let status_bar_height = 20u32;
 
@@ -283,6 +293,7 @@ impl WindowState {
             &config,
             PhysicalSize::new(config.width, config.height),
             backend_status.clone(),
+            &ui_config,
         );
 
         // Create the scrollbar
@@ -316,10 +327,6 @@ impl WindowState {
         // Create loading animation
         let loading_animation = LoadingAnimation::new(&Arc::new(device.clone()), config.format);
 
-        // Load UI config for timer badge
-        let (app_config, _) = crate::config::read_app_config_with_path();
-        let ui_config = app_config.ui_config;
-
         // Create timer badge
         let timer_badge = TimerBadge::new(
             &Arc::new(device.clone()),
@@ -329,8 +336,8 @@ impl WindowState {
         );
 
         // Calculate target frame duration from display config
-        let target_frame_duration =
-            std::time::Duration::from_secs_f64(1.0 / display_config.target_fps as f64);
+        let target_frame_duration = target_frame_duration(display_config.target_fps);
+        let typewriter_enabled = ui_config.typewriter_effect;
 
         Self {
             window,
@@ -374,6 +381,8 @@ impl WindowState {
             last_known_mode,
 
             // Dynamic sizing
+            fixed_window_width: window_width,
+            fixed_window_height: window_height,
             window_width,
             window_height,
             spectrogram_width,
@@ -393,7 +402,8 @@ impl WindowState {
 
             // Typewriter effect
             typewriter: super::typewriter::TypewriterEffect::new(),
-            typewriter_enabled: ui_config.typewriter_effect,
+            ui_config,
+            typewriter_enabled,
             last_processing_state: crate::ui::common::ProcessingState::Idle,
 
             // Reusable buffers
@@ -408,11 +418,25 @@ impl WindowState {
             self.config.height = height;
             self.surface.configure(&self.device, &self.config);
 
+            self.window_width = width;
+            self.window_height = height;
+            self.spectrogram_width = width;
+            self.spectrogram_height = (height as f32 * 0.32) as u32;
+            let status_bar_height = self.layout_manager.status_bar_height;
+            self.text_area_height =
+                ((height as f32 * 0.66) as u32).saturating_sub(status_bar_height);
+
             // Update layout manager dimensions
             self.layout_manager.update_dimensions(width, height);
+            self.layout_manager.spectrogram_width = self.spectrogram_width;
+            self.layout_manager.spectrogram_height = self.spectrogram_height;
+            self.layout_manager.text_area_height = self.text_area_height;
 
             if let Some(spectrogram) = &mut self.spectrogram {
-                spectrogram.resize(PhysicalSize::new(width, height));
+                spectrogram.resize(PhysicalSize::new(
+                    self.spectrogram_width,
+                    self.spectrogram_height,
+                ));
             }
 
             self.text_window.resize(PhysicalSize::new(width, height));
@@ -437,6 +461,15 @@ impl WindowState {
             );
             self.spectrogram = Some(spectrogram);
         }
+    }
+
+    pub fn apply_runtime_config(&mut self, display_config: &DisplayConfig, ui_config: &UiConfig) {
+        self.target_frame_duration = target_frame_duration(display_config.target_fps);
+        self.typewriter_enabled = ui_config.typewriter_effect;
+        self.status_bar.apply_ui_config(ui_config);
+        self.timer_badge.apply_ui_config(ui_config);
+        self.ui_config = ui_config.clone();
+        self.window.request_redraw();
     }
 
     pub fn draw(&mut self, _width: u32) {
@@ -565,8 +598,6 @@ impl WindowState {
         }
 
         // Determine if scrollbar is needed and the actual width to use for text area
-        let need_scrollbar: bool;
-        let text_area_width: u32;
         let text_area_height = self.layout_manager.get_text_area_height();
 
         // Always ensure the spectrogram is initialized
@@ -596,11 +627,16 @@ impl WindowState {
                     match processing_state {
                         crate::ui::common::ProcessingState::Transcribing => {
                             if status.state == crate::ui::common::BackendStatusState::Ready {
-                                status.state = crate::ui::common::BackendStatusState::Loading("Transcribing...".to_string());
+                                status.state = crate::ui::common::BackendStatusState::Loading(
+                                    "Transcribing...".to_string(),
+                                );
                             }
                         }
-                        crate::ui::common::ProcessingState::Idle | crate::ui::common::ProcessingState::Completed => {
-                            if let crate::ui::common::BackendStatusState::Loading(msg) = &status.state {
+                        crate::ui::common::ProcessingState::Idle
+                        | crate::ui::common::ProcessingState::Completed => {
+                            if let crate::ui::common::BackendStatusState::Loading(msg) =
+                                &status.state
+                            {
                                 if msg == "Transcribing..." {
                                     status.state = crate::ui::common::BackendStatusState::Ready;
                                 }
@@ -670,7 +706,8 @@ impl WindowState {
         let base_width = 240.0;
         let max_scale = 1.4; // Reduced from 1.5 to 1.4 for better proportions
         let raw_scale = self.window_width as f32 / base_width;
-        let text_scale = raw_scale.min(max_scale).max(0.85); // Increased minimum to 0.85x for better readability
+        let configured_font_scale = (self.ui_config.font_size / 10.0).clamp(0.5, 3.0);
+        let text_scale = raw_scale.min(max_scale).max(0.85) * configured_font_scale; // Increased minimum to 0.85x for better readability
 
         // Update text processor metrics to match actual rendered font size
         self.text_processor.update_metrics(text_scale);
@@ -682,10 +719,10 @@ impl WindowState {
             text_area_height as f32,
         );
 
-        need_scrollbar = layout_info.need_scrollbar;
+        let need_scrollbar = layout_info.need_scrollbar;
 
         // Set text area width based on whether scrollbar is needed
-        text_area_width = self
+        let text_area_width = self
             .layout_manager
             .calculate_text_area_width(need_scrollbar);
 
@@ -756,9 +793,9 @@ impl WindowState {
             self.loading_animation
                 .get_processing_color(processing_state)
         } else if is_speaking {
-            [0.1, 0.9, 0.5, 1.0] // Brighter teal-green for better visibility
+            self.ui_config.speaking_color
         } else {
-            [1.0, 0.85, 0.15, 1.0] // Slightly warmer gold for better readability
+            self.ui_config.idle_color
         };
 
         // Render loading animation if processing, otherwise render text
@@ -816,7 +853,7 @@ impl WindowState {
             self.text_window.render(
                 &mut encoder,
                 &view,
-                &render_text,
+                render_text,
                 text_area_width,
                 text_area_height,
                 self.gap,
@@ -831,15 +868,8 @@ impl WindowState {
         // Render status bar between text area and spectrogram
         {
             let (sb_x, sb_y, sb_w, sb_h) = self.layout_manager.get_status_bar_position();
-            self.status_bar.render(
-                &mut encoder,
-                &view,
-                &self.queue,
-                sb_x,
-                sb_y,
-                sb_w,
-                sb_h,
-            );
+            self.status_bar
+                .render(&mut encoder, &view, &self.queue, sb_x, sb_y, sb_w, sb_h);
         }
 
         // Draw scrollbar only if needed
@@ -889,7 +919,8 @@ impl WindowState {
             );
 
             // Only render buttons when hovering over transcript area
-            (&mut self.button_manager).render(&view, &mut encoder, true, &self.queue);
+            self.button_manager
+                .render(&view, &mut encoder, true, &self.queue);
 
             // Render tooltip (after buttons, so it appears on top)
             self.tooltip

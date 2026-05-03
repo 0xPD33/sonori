@@ -5,6 +5,7 @@ use winit::keyboard::Key;
 use winit::window::Window;
 
 use super::settings_panel::SettingsPanel;
+use crate::config::AppConfig;
 
 pub struct SettingsWindow {
     pub window: Arc<dyn Window>,
@@ -15,6 +16,7 @@ pub struct SettingsWindow {
     panel: SettingsPanel,
     backend_command_tx:
         Option<tokio::sync::mpsc::UnboundedSender<crate::backend_manager::BackendCommand>>,
+    applied_config: Option<AppConfig>,
 }
 
 impl SettingsWindow {
@@ -24,25 +26,25 @@ impl SettingsWindow {
         device: wgpu::Device,
         queue: wgpu::Queue,
         surface_format: wgpu::TextureFormat,
+        initial_config: &AppConfig,
         backend_command_tx: Option<
             tokio::sync::mpsc::UnboundedSender<crate::backend_manager::BackendCommand>,
         >,
     ) -> Self {
         let window: Arc<dyn Window> = Arc::from(window);
 
-        let surface = instance.create_surface(window.clone()).expect(
-            "Failed to create GPU surface for settings window.",
-        );
+        let surface = instance
+            .create_surface(window.clone())
+            .expect("Failed to create GPU surface for settings window.");
 
         let size = window.outer_size();
 
-        let adapter =
-            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::default(),
-                compatible_surface: Some(&surface),
-                force_fallback_adapter: false,
-            }))
-            .expect("No suitable GPU adapter found.");
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::default(),
+            compatible_surface: Some(&surface),
+            force_fallback_adapter: false,
+        }))
+        .expect("No suitable GPU adapter found.");
 
         let surface_caps = surface.get_capabilities(&adapter);
 
@@ -82,9 +84,7 @@ impl SettingsWindow {
         panel.is_open = true;
         panel.animation_progress = 1.0;
         panel.animation_active = false;
-
-        let (app_config, _) = crate::config::read_app_config_with_path();
-        panel.populate_from_config(&app_config);
+        panel.populate_from_config(initial_config);
 
         Self {
             window,
@@ -94,6 +94,7 @@ impl SettingsWindow {
             config,
             panel,
             backend_command_tx,
+            applied_config: None,
         }
     }
 
@@ -190,13 +191,20 @@ impl SettingsWindow {
         self.panel.close_requested
     }
 
+    pub fn take_applied_config(&mut self) -> Option<AppConfig> {
+        self.applied_config.take()
+    }
+
     fn apply_settings_changes(&mut self) {
         let (mut app_config, _) = crate::config::read_app_config_with_path();
         let (any_changed, needs_reload) = self.panel.apply_pending_changes(&mut app_config);
         if any_changed {
             if let Err(e) = crate::config::write_app_config(&app_config) {
                 eprintln!("Failed to write config: {}", e);
+                return;
             }
+            self.panel.populate_from_config(&app_config);
+            self.applied_config = Some(app_config.clone());
             if needs_reload {
                 if let Some(tx) = &self.backend_command_tx {
                     let _ = tx.send(crate::backend_manager::BackendCommand::Reload {

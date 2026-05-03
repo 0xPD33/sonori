@@ -6,6 +6,7 @@ use winit::dpi::PhysicalSize;
 
 use super::common::{BackendStatus, BackendStatusState};
 use super::text_renderer::TextRenderer;
+use crate::config::UiConfig;
 
 const ERROR_FADE_DURATION_SECS: f64 = 10.0;
 
@@ -19,6 +20,8 @@ pub struct StatusBar {
     recording_dot_renderer: TextRenderer,
     recording_timer_renderer: TextRenderer,
     status: Arc<RwLock<BackendStatus>>,
+    recording_indicator_color: [f32; 4],
+    show_recording_indicator: bool,
     pulse_phase: f32,
     last_update: std::time::Instant,
 }
@@ -30,6 +33,7 @@ impl StatusBar {
         config: &wgpu::SurfaceConfiguration,
         size: PhysicalSize<u32>,
         status: Arc<RwLock<BackendStatus>>,
+        ui_config: &UiConfig,
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Status Bar Shader"),
@@ -109,12 +113,7 @@ impl StatusBar {
             cache: None,
         });
 
-        let vertices: [[f32; 2]; 4] = [
-            [-1.0, -1.0],
-            [1.0, -1.0],
-            [-1.0, 1.0],
-            [1.0, 1.0],
-        ];
+        let vertices: [[f32; 2]; 4] = [[-1.0, -1.0], [1.0, -1.0], [-1.0, 1.0], [1.0, 1.0]];
 
         let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Status Bar Vertices"),
@@ -160,9 +159,16 @@ impl StatusBar {
             recording_dot_renderer,
             recording_timer_renderer,
             status,
+            recording_indicator_color: ui_config.recording_indicator_color,
+            show_recording_indicator: ui_config.show_recording_indicator,
             pulse_phase: 0.0,
             last_update: std::time::Instant::now(),
         }
+    }
+
+    pub fn apply_ui_config(&mut self, ui_config: &UiConfig) {
+        self.recording_indicator_color = ui_config.recording_indicator_color;
+        self.show_recording_indicator = ui_config.show_recording_indicator;
     }
 
     pub fn resize(&mut self, size: PhysicalSize<u32>) {
@@ -189,7 +195,16 @@ impl StatusBar {
         self.pulse_phase = (self.pulse_phase + delta * 3.0) % (2.0 * std::f32::consts::PI);
 
         // Extract all data from the locked status
-        let (error_tint, download_progress, prefix_text, status_text, status_color, is_recording, recording_elapsed, is_loading) = {
+        let (
+            error_tint,
+            download_progress,
+            prefix_text,
+            status_text,
+            status_color,
+            is_recording,
+            recording_elapsed,
+            is_loading,
+        ) = {
             let mut status = self.status.write();
 
             // Auto-clear errors after ERROR_FADE_DURATION_SECS
@@ -249,7 +264,16 @@ impl StatusBar {
             let download_progress = status.download_progress.unwrap_or(-1.0);
             let is_loading = matches!(status.state, BackendStatusState::Loading(_));
 
-            (error_tint, download_progress, prefix_text, status_text, status_color, is_recording, recording_elapsed, is_loading)
+            (
+                error_tint,
+                download_progress,
+                prefix_text,
+                status_text,
+                status_color,
+                is_recording,
+                recording_elapsed,
+                is_loading,
+            )
         };
 
         // Compute loading sweep phase (animated indeterminate bar)
@@ -305,7 +329,9 @@ impl StatusBar {
         let left_padding = 10.0;
 
         // Measure prefix width for precise status text placement
-        let prefix_width = self.left_text_renderer.measure_text(&prefix_text, text_scale);
+        let prefix_width = self
+            .left_text_renderer
+            .measure_text(&prefix_text, text_scale);
 
         // Render prefix text: "BackendName · ModelName · "
         self.left_text_renderer.render_text(
@@ -348,34 +374,56 @@ impl StatusBar {
                 let pulse_alpha = 0.5 + 0.5 * self.pulse_phase.sin();
                 let dot_text = "\u{25CF}"; // filled circle
 
-                let dot_color: [f32; 4] = [1.0, 0.2, 0.2, pulse_alpha];
+                let dot_color: [f32; 4] = [
+                    self.recording_indicator_color[0],
+                    self.recording_indicator_color[1],
+                    self.recording_indicator_color[2],
+                    pulse_alpha * self.recording_indicator_color[3],
+                ];
                 let timer_color: [f32; 4] = [0.9, 0.9, 0.9, 0.9];
 
-                let dot_width = self.recording_dot_renderer.measure_text(dot_text, text_scale);
-                let timer_width = self.recording_timer_renderer.measure_text(&timer_text, text_scale);
+                let dot_width = if self.show_recording_indicator {
+                    self.recording_dot_renderer
+                        .measure_text(dot_text, text_scale)
+                } else {
+                    0.0
+                };
+                let timer_width = self
+                    .recording_timer_renderer
+                    .measure_text(&timer_text, text_scale);
                 let spacing = 4.0;
-                let total_right_width = dot_width + spacing + timer_width;
+                let total_right_width = if self.show_recording_indicator {
+                    dot_width + spacing + timer_width
+                } else {
+                    timer_width
+                };
                 let right_start_x =
                     bar_x as f32 + bar_width as f32 - total_right_width - left_padding;
 
-                self.recording_dot_renderer.render_text(
-                    view,
-                    encoder,
-                    dot_text,
-                    right_start_x,
-                    bar_y as f32 + text_y_offset,
-                    text_scale,
-                    dot_color,
-                    bar_width,
-                    bar_height,
-                    None,
-                );
+                if self.show_recording_indicator {
+                    self.recording_dot_renderer.render_text(
+                        view,
+                        encoder,
+                        dot_text,
+                        right_start_x,
+                        bar_y as f32 + text_y_offset,
+                        text_scale,
+                        dot_color,
+                        bar_width,
+                        bar_height,
+                        None,
+                    );
+                }
 
                 self.recording_timer_renderer.render_text(
                     view,
                     encoder,
                     &timer_text,
-                    right_start_x + dot_width + spacing,
+                    if self.show_recording_indicator {
+                        right_start_x + dot_width + spacing
+                    } else {
+                        right_start_x
+                    },
                     bar_y as f32 + text_y_offset,
                     text_scale,
                     timer_color,

@@ -5,8 +5,8 @@ use std::sync::Arc;
 use winit::{
     application::ApplicationHandler,
     cursor::CursorIcon,
-    dpi::{LogicalPosition, PhysicalSize},
-    event::{ElementState, KeyEvent, Modifiers, WindowEvent},
+    dpi::{LogicalPosition, LogicalSize, PhysicalSize},
+    event::{DeviceEvent, DeviceId, ElementState, KeyEvent, Modifiers, MouseButton, WindowEvent},
     event_loop::{ActiveEventLoop, DeviceEvents, EventLoop},
     keyboard::{KeyCode, PhysicalKey},
     monitor::{MonitorHandle, VideoMode},
@@ -14,7 +14,7 @@ use winit::{
     window::{WindowAttributes, WindowId},
 };
 
-use winit::platform::wayland::{KeyboardInteractivity, Layer, WindowAttributesWayland};
+use winit::platform::wayland::{Anchor, KeyboardInteractivity, Layer, WindowAttributesWayland};
 
 use super::common::{AudioVisualizationData, BackendStatus};
 use super::settings_window::SettingsWindow;
@@ -22,7 +22,15 @@ use super::window::WindowState;
 
 // Constants from window.rs
 use super::window::MARGIN;
-use crate::config::AppConfig;
+use crate::config::{AppConfig, CustomWindowPosition, DisplayConfig, WindowPosition};
+
+const DRAG_DEBUG_ENV: &str = "SONORI_DRAG_DEBUG";
+const DRAG_RAW_MOTION_SCALE: f64 = 1.25;
+const DRAG_CATCH_UP_FACTOR: f64 = 0.04;
+const DRAG_MAX_CATCH_UP_PX: f64 = 2.0;
+const DRAG_MAX_CATCH_UP_TO_RAW_RATIO: f64 = 0.25;
+const DRAG_MAX_FRAME_DELTA_PX: f64 = 96.0;
+const DRAG_EDGE_INSET_PX: i32 = 32;
 
 pub fn run() {
     let event_loop = EventLoop::new()
@@ -46,6 +54,7 @@ pub fn run() {
         backend_command_tx: None,
         settings_window: None,
         settings_window_id: None,
+        window_drag: None,
     };
     event_loop
         .run_app(&mut app)
@@ -87,6 +96,7 @@ pub fn run_with_audio_data(
         backend_command_tx,
         settings_window: None,
         settings_window_id: None,
+        window_drag: None,
     };
 
     event_loop
@@ -113,6 +123,24 @@ pub struct WindowApp {
         Option<tokio::sync::mpsc::UnboundedSender<crate::backend_manager::BackendCommand>>,
     pub settings_window: Option<SettingsWindow>,
     pub settings_window_id: Option<WindowId>,
+    window_drag: Option<WindowDragState>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct WindowDragState {
+    window_id: WindowId,
+    position: LogicalPosition<f64>,
+    scale_factor: f64,
+    grab_offset: LogicalPosition<f64>,
+    latest_pointer_position: LogicalPosition<f64>,
+    pending_delta_x: f64,
+    pending_delta_y: f64,
+    monitor_size: LogicalSize<u32>,
+    window_size: LogicalSize<u32>,
+    pointer_event_count: u32,
+    raw_event_count: u32,
+    update_count: u32,
+    debug_enabled: bool,
 }
 
 impl WindowApp {
@@ -159,6 +187,7 @@ impl WindowApp {
                     device,
                     queue,
                     format,
+                    &self.config,
                     self.backend_command_tx.clone(),
                 );
                 let id = settings_win.window.id();
@@ -177,6 +206,393 @@ impl WindowApp {
             let _ = tray_tx.send(crate::system_tray::TrayUpdate::Recording(is_recording));
         }
     }
+
+    fn drag_modifier_active(&self) -> bool {
+        let modifiers = self.current_modifiers.state();
+        modifiers.alt_key() || modifiers.meta_key()
+    }
+
+    fn begin_window_drag(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        window_id: WindowId,
+        pointer_position: winit::dpi::PhysicalPosition<f64>,
+    ) -> bool {
+        let Some(window) = self.windows.get(&window_id) else {
+            return false;
+        };
+
+        let Some(physical_monitor_size) = current_monitor_size(event_loop) else {
+            return false;
+        };
+
+        let scale_factor = window.window.scale_factor();
+        let monitor_size = physical_monitor_size.to_logical::<u32>(scale_factor);
+        let window_size = LogicalSize::new(window.fixed_window_width, window.fixed_window_height);
+        let start_position =
+            configured_window_position(&self.config.display_config, monitor_size, window_size);
+
+        if event_loop.is_wayland() {
+            set_wayland_layer_custom_positioning(window.window.as_ref());
+        }
+
+        let pointer_position = pointer_position.to_logical(scale_factor);
+        let debug_enabled = std::env::var_os(DRAG_DEBUG_ENV).is_some();
+
+        if debug_enabled {
+            eprintln!(
+                "drag:start scale={scale_factor:.3} pos=({}, {}) pointer=({:.1}, {:.1}) monitor=({}, {}) window=({}, {})",
+                start_position.x,
+                start_position.y,
+                pointer_position.x,
+                pointer_position.y,
+                monitor_size.width,
+                monitor_size.height,
+                window_size.width,
+                window_size.height
+            );
+        }
+
+        self.window_drag = Some(WindowDragState {
+            window_id,
+            position: LogicalPosition::new(start_position.x as f64, start_position.y as f64),
+            scale_factor,
+            grab_offset: pointer_position,
+            latest_pointer_position: pointer_position,
+            pending_delta_x: 0.0,
+            pending_delta_y: 0.0,
+            monitor_size,
+            window_size,
+            pointer_event_count: 0,
+            raw_event_count: 0,
+            update_count: 0,
+            debug_enabled,
+        });
+
+        self.move_window_to(window_id, start_position);
+        true
+    }
+
+    fn queue_window_drag_pointer_position(
+        &mut self,
+        window_id: WindowId,
+        pointer_position: winit::dpi::PhysicalPosition<f64>,
+    ) {
+        let Some(window) = self.windows.get(&window_id) else {
+            return;
+        };
+
+        if let Some(drag) = self.window_drag.as_mut() {
+            if drag.window_id != window_id {
+                return;
+            }
+
+            let pointer_position: LogicalPosition<f64> =
+                pointer_position.to_logical(drag.scale_factor);
+            drag.latest_pointer_position = pointer_position;
+            drag.pointer_event_count = drag.pointer_event_count.saturating_add(1);
+
+            window.window.request_redraw();
+        }
+    }
+
+    fn queue_window_drag_raw_motion(&mut self, delta: (f64, f64)) {
+        let Some(drag) = self.window_drag.as_mut() else {
+            return;
+        };
+
+        drag.pending_delta_x += delta.0 * DRAG_RAW_MOTION_SCALE;
+        drag.pending_delta_y += delta.1 * DRAG_RAW_MOTION_SCALE;
+        drag.raw_event_count = drag.raw_event_count.saturating_add(1);
+
+        if let Some(window) = self.windows.get(&drag.window_id) {
+            window.window.request_redraw();
+        }
+    }
+
+    fn apply_queued_window_drag(&mut self, window_id: WindowId) -> bool {
+        let Some((window_id, position)) = self.window_drag.as_mut().and_then(|drag| {
+            if drag.window_id != window_id {
+                return None;
+            }
+
+            if drag.pending_delta_x == 0.0 && drag.pending_delta_y == 0.0 {
+                return None;
+            }
+
+            let pointer_error_x = drag.latest_pointer_position.x - drag.grab_offset.x;
+            let pointer_error_y = drag.latest_pointer_position.y - drag.grab_offset.y;
+            let catch_up_x = bounded_drag_catch_up(pointer_error_x, drag.pending_delta_x);
+            let catch_up_y = bounded_drag_catch_up(pointer_error_y, drag.pending_delta_y);
+            let delta_x =
+                (drag.pending_delta_x + catch_up_x).clamp(-DRAG_MAX_FRAME_DELTA_PX, DRAG_MAX_FRAME_DELTA_PX);
+            let delta_y =
+                (drag.pending_delta_y + catch_up_y).clamp(-DRAG_MAX_FRAME_DELTA_PX, DRAG_MAX_FRAME_DELTA_PX);
+
+            drag.pending_delta_x = 0.0;
+            drag.pending_delta_y = 0.0;
+
+            drag.position.x += delta_x;
+            drag.position.y += delta_y;
+            drag.position =
+                clamp_window_position_f64(drag.position, drag.monitor_size, drag.window_size);
+            drag.update_count = drag.update_count.saturating_add(1);
+            let rounded_position = round_window_position(drag.position);
+
+            if drag.debug_enabled {
+                eprintln!(
+                    "drag:move update={} pointer_events={} raw_events={} raw=({:.1}, {:.1}) pointer=({:.1}, {:.1}) error=({:.1}, {:.1}) catch_up=({:.1}, {:.1}) applied=({:.1}, {:.1}) pos=({}, {})",
+                    drag.update_count,
+                    drag.pointer_event_count,
+                    drag.raw_event_count,
+                    delta_x - catch_up_x,
+                    delta_y - catch_up_y,
+                    drag.latest_pointer_position.x,
+                    drag.latest_pointer_position.y,
+                    pointer_error_x,
+                    pointer_error_y,
+                    catch_up_x,
+                    catch_up_y,
+                    delta_x,
+                    delta_y,
+                    rounded_position.x,
+                    rounded_position.y
+                );
+            }
+
+            Some((drag.window_id, rounded_position))
+        }) else {
+            return false;
+        };
+
+        self.move_window_to(window_id, position);
+        true
+    }
+
+    fn end_window_drag(&mut self, window_id: WindowId) -> bool {
+        self.apply_queued_window_drag(window_id);
+
+        let Some(drag) = self.window_drag else {
+            return false;
+        };
+
+        if drag.window_id != window_id {
+            return false;
+        }
+
+        self.window_drag = None;
+        let position = round_window_position(drag.position);
+        if drag.debug_enabled {
+            eprintln!(
+                "drag:end pos=({}, {}) pointer_events={} raw_events={} updates={}",
+                position.x,
+                position.y,
+                drag.pointer_event_count,
+                drag.raw_event_count,
+                drag.update_count
+            );
+        }
+        self.persist_custom_window_position(position);
+        true
+    }
+
+    fn move_window_to(&self, window_id: WindowId, position: LogicalPosition<i32>) {
+        if let Some(window) = self.windows.get(&window_id) {
+            if let Some(wayland_window) = window
+                .window
+                .as_ref()
+                .cast_ref::<winit::platform::wayland::Window>()
+            {
+                wayland_window.set_anchor(Anchor::TOP | Anchor::LEFT);
+                wayland_window.set_margin(position.y, 0, 0, position.x);
+            } else {
+                window.window.set_outer_position(position.into());
+            }
+            window.window.request_redraw();
+        }
+    }
+
+    fn persist_custom_window_position(&mut self, position: LogicalPosition<i32>) {
+        let custom_position = CustomWindowPosition {
+            x: position.x,
+            y: position.y,
+        };
+
+        self.config.display_config.window_position = WindowPosition::Custom;
+        self.config.display_config.custom_window_position = Some(custom_position);
+
+        let (mut app_config, _) = crate::config::read_app_config_with_path();
+        app_config.display_config.window_position = WindowPosition::Custom;
+        app_config.display_config.custom_window_position = Some(custom_position);
+
+        if let Err(e) = crate::config::write_app_config(&app_config) {
+            eprintln!("Failed to persist dragged window position: {}", e);
+        }
+    }
+
+    fn apply_runtime_config(&mut self, event_loop: &dyn ActiveEventLoop, config: AppConfig) {
+        let display_config = config.display_config.clone();
+        let ui_config = config.ui_config.clone();
+        self.config = config;
+
+        let physical_monitor_size = current_monitor_size(event_loop);
+        let window_ids: Vec<WindowId> = self.windows.keys().copied().collect();
+        for window_id in window_ids {
+            let position = {
+                let Some(window) = self.windows.get_mut(&window_id) else {
+                    continue;
+                };
+
+                window.apply_runtime_config(&display_config, &ui_config);
+
+                let Some(physical_monitor_size) = physical_monitor_size else {
+                    continue;
+                };
+                let scale_factor = window.window.scale_factor();
+                let monitor_size = physical_monitor_size.to_logical::<u32>(scale_factor);
+                let window_size =
+                    LogicalSize::new(window.fixed_window_width, window.fixed_window_height);
+                Some(configured_window_position(
+                    &display_config,
+                    monitor_size,
+                    window_size,
+                ))
+            };
+
+            if let Some(position) = position {
+                self.move_window_to(window_id, position);
+            }
+        }
+    }
+}
+
+fn current_monitor_size(event_loop: &dyn ActiveEventLoop) -> Option<PhysicalSize<u32>> {
+    event_loop
+        .available_monitors()
+        .next()
+        .and_then(|monitor| monitor.current_video_mode())
+        .map(|mode| mode.size())
+}
+
+fn configured_window_position(
+    display_config: &DisplayConfig,
+    monitor_size: LogicalSize<u32>,
+    window_size: LogicalSize<u32>,
+) -> LogicalPosition<i32> {
+    if display_config.window_position == WindowPosition::Custom {
+        if let Some(position) = display_config.custom_window_position {
+            return clamp_window_position(
+                LogicalPosition::new(position.x, position.y),
+                monitor_size,
+                window_size,
+            );
+        }
+    }
+
+    preset_window_position(display_config.window_position, monitor_size, window_size)
+}
+
+fn preset_window_position(
+    position: WindowPosition,
+    monitor_size: LogicalSize<u32>,
+    window_size: LogicalSize<u32>,
+) -> LogicalPosition<i32> {
+    let monitor_width = monitor_size.width as i32;
+    let monitor_height = monitor_size.height as i32;
+    let window_width = window_size.width as i32;
+    let window_height = window_size.height as i32;
+
+    let left = MARGIN;
+    let center_x = (monitor_width - window_width) / 2;
+    let right = monitor_width - window_width - MARGIN;
+    let top = MARGIN;
+    let center_y = (monitor_height - window_height) / 2;
+    let bottom = monitor_height - window_height - MARGIN;
+
+    let (x, y) = match position {
+        WindowPosition::BottomLeft => (left, bottom),
+        WindowPosition::BottomCenter => (center_x, bottom),
+        WindowPosition::BottomRight => (right, bottom),
+        WindowPosition::TopLeft => (left, top),
+        WindowPosition::TopCenter => (center_x, top),
+        WindowPosition::TopRight => (right, top),
+        WindowPosition::MiddleLeft => (left, center_y),
+        WindowPosition::MiddleCenter => (center_x, center_y),
+        WindowPosition::MiddleRight => (right, center_y),
+        WindowPosition::Custom => (center_x, bottom),
+    };
+
+    clamp_window_position(LogicalPosition::new(x, y), monitor_size, window_size)
+}
+
+fn clamp_window_position(
+    position: LogicalPosition<i32>,
+    monitor_size: LogicalSize<u32>,
+    window_size: LogicalSize<u32>,
+) -> LogicalPosition<i32> {
+    let max_x = (monitor_size.width as i32 - window_size.width as i32 - DRAG_EDGE_INSET_PX).max(0);
+    let max_y =
+        (monitor_size.height as i32 - window_size.height as i32 - DRAG_EDGE_INSET_PX).max(0);
+    let min_x = DRAG_EDGE_INSET_PX.min(max_x);
+    let min_y = DRAG_EDGE_INSET_PX.min(max_y);
+
+    LogicalPosition::new(
+        position.x.clamp(min_x, max_x),
+        position.y.clamp(min_y, max_y),
+    )
+}
+
+fn clamp_window_position_f64(
+    position: LogicalPosition<f64>,
+    monitor_size: LogicalSize<u32>,
+    window_size: LogicalSize<u32>,
+) -> LogicalPosition<f64> {
+    let inset = DRAG_EDGE_INSET_PX as f64;
+    let max_x = (monitor_size.width as f64 - window_size.width as f64 - inset).max(0.0);
+    let max_y = (monitor_size.height as f64 - window_size.height as f64 - inset).max(0.0);
+    let min_x = inset.min(max_x);
+    let min_y = inset.min(max_y);
+
+    LogicalPosition::new(
+        position.x.clamp(min_x, max_x),
+        position.y.clamp(min_y, max_y),
+    )
+}
+
+fn round_window_position(position: LogicalPosition<f64>) -> LogicalPosition<i32> {
+    LogicalPosition::new(position.x.round() as i32, position.y.round() as i32)
+}
+
+fn bounded_drag_catch_up(pointer_error: f64, raw_delta: f64) -> f64 {
+    if pointer_error == 0.0 || raw_delta == 0.0 || pointer_error.signum() != raw_delta.signum() {
+        return 0.0;
+    }
+
+    let max_from_raw = raw_delta.abs() * DRAG_MAX_CATCH_UP_TO_RAW_RATIO;
+    let correction = (pointer_error.abs() * DRAG_CATCH_UP_FACTOR)
+        .min(DRAG_MAX_CATCH_UP_PX)
+        .min(max_from_raw);
+
+    raw_delta.signum() * correction
+}
+
+fn layer_shell_margin(
+    display_config: &DisplayConfig,
+    monitor_size: LogicalSize<u32>,
+    window_size: LogicalSize<u32>,
+) -> (i32, i32, i32, i32) {
+    if display_config.window_position == WindowPosition::Custom {
+        let position = configured_window_position(display_config, monitor_size, window_size);
+        return (position.y, 0, 0, position.x);
+    }
+
+    (MARGIN, MARGIN, MARGIN, MARGIN)
+}
+
+fn set_wayland_layer_custom_positioning(window: &dyn winit::window::Window) {
+    if let Some(wayland_window) = window.cast_ref::<winit::platform::wayland::Window>() {
+        wayland_window.set_anchor(Anchor::TOP | Anchor::LEFT);
+    }
 }
 
 impl ApplicationHandler for WindowApp {
@@ -186,8 +602,18 @@ impl ApplicationHandler for WindowApp {
             if !running.load(std::sync::atomic::Ordering::Relaxed) {
                 println!("App resumed but running flag is false - exiting event loop");
                 event_loop.exit();
-                return;
             }
+        }
+    }
+
+    fn device_event(
+        &mut self,
+        _event_loop: &dyn ActiveEventLoop,
+        _device_id: Option<DeviceId>,
+        event: DeviceEvent,
+    ) {
+        if let DeviceEvent::PointerMotion { delta } = event {
+            self.queue_window_drag_raw_motion(delta);
         }
     }
 
@@ -252,12 +678,7 @@ impl ApplicationHandler for WindowApp {
             .with_decorations(false)
             .with_transparent(true);
 
-        if let Some((_, screen)) = event_loop
-            .available_monitors()
-            .into_iter()
-            .enumerate()
-            .next()
-        {
+        if let Some((_, screen)) = event_loop.available_monitors().enumerate().next() {
             let Some(mode) = screen.current_video_mode() else {
                 return;
             };
@@ -317,20 +738,19 @@ impl ApplicationHandler for WindowApp {
         }
         // Route events to settings window if it's the target
         if Some(window_id) == self.settings_window_id {
+            let mut applied_config = None;
+            let mut close_settings = false;
+
             if let Some(sw) = &mut self.settings_window {
                 match event {
                     WindowEvent::CloseRequested => {
-                        self.settings_window = None;
-                        self.settings_window_id = None;
-                        return;
+                        close_settings = true;
                     }
                     WindowEvent::SurfaceResized(size) => {
                         sw.resize(size.width, size.height);
-                        return;
                     }
                     WindowEvent::RedrawRequested => {
                         sw.draw();
-                        return;
                     }
                     WindowEvent::KeyboardInput {
                         event:
@@ -343,41 +763,40 @@ impl ApplicationHandler for WindowApp {
                         ..
                     } => {
                         if key_code == KeyCode::Escape {
-                            self.settings_window = None;
-                            self.settings_window_id = None;
+                            close_settings = true;
                         } else {
                             let shift = self.current_modifiers.state().shift_key();
                             if sw.handle_key(logical_key, shift) {
                                 sw.window.request_redraw();
                             }
                         }
-                        return;
                     }
                     WindowEvent::PointerButton {
-                        state,
-                        position,
-                        ..
+                        state, position, ..
                     } => {
                         if state == ElementState::Pressed {
                             sw.handle_click(position.x as f32, position.y as f32);
+                            applied_config = sw.take_applied_config();
                             if sw.close_requested() {
-                                self.settings_window = None;
-                                self.settings_window_id = None;
-                                return;
+                                close_settings = true;
                             }
                         } else if state == ElementState::Released {
                             sw.handle_mouse_release();
                         }
-                        return;
                     }
                     WindowEvent::PointerMoved { position, .. } => {
                         sw.handle_mouse_move(position.x as f32, position.y as f32);
-                        return;
                     }
-                    _ => {
-                        return;
-                    }
+                    _ => {}
                 }
+            }
+
+            if close_settings {
+                self.settings_window = None;
+                self.settings_window_id = None;
+            }
+            if let Some(config) = applied_config {
+                self.apply_runtime_config(event_loop, config);
             }
             return;
         }
@@ -412,6 +831,37 @@ impl ApplicationHandler for WindowApp {
                 return;
             }
             _ => {}
+        }
+
+        if let WindowEvent::PointerButton { button, state, .. } = &event {
+            let mouse_button = (*button).mouse_button();
+            if mouse_button == MouseButton::Left {
+                if *state == ElementState::Released && self.end_window_drag(window_id) {
+                    return;
+                }
+
+                if *state == ElementState::Pressed && self.drag_modifier_active() {
+                    if let WindowEvent::PointerButton { position, .. } = &event {
+                        if self.begin_window_drag(event_loop, window_id, *position) {
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+
+        if let WindowEvent::PointerMoved { position, .. } = &event {
+            if self
+                .window_drag
+                .is_some_and(|drag| drag.window_id == window_id)
+            {
+                self.queue_window_drag_pointer_position(window_id, *position);
+                return;
+            }
+        }
+
+        if matches!(event, WindowEvent::RedrawRequested) {
+            self.apply_queued_window_drag(window_id);
         }
 
         // Handle other window events
@@ -521,11 +971,19 @@ fn create_window(
     let spectrogram_width = logical_width;
     let spectrogram_height = (logical_height as f32 * 0.32) as u32;
     let status_bar_height = 20u32;
-    let text_area_height = ((logical_height as f32 * 0.66) as u32).saturating_sub(status_bar_height);
+    let text_area_height =
+        ((logical_height as f32 * 0.66) as u32).saturating_sub(status_bar_height);
     let gap = 0u32;
 
     // Set the fixed size in the window attributes
     let mut w = w.with_surface_size(logical_size);
+    let logical_monitor_size = monitor_size.to_logical::<u32>(scale_factor);
+    let positioning_window_size = LogicalSize::new(logical_width, logical_height);
+    let initial_position = configured_window_position(
+        display_config,
+        logical_monitor_size,
+        positioning_window_size,
+    );
 
     // TEMPORARY: Use OnDemand to restore Tab key functionality while debugging portal
     // TODO: Switch to None once portal works (None prevents window from stealing keys)
@@ -535,12 +993,17 @@ fn create_window(
         // For Wayland, create platform-specific attributes using WindowAttributesWayland
         // Get anchor from display configuration
         let anchor = display_config.window_position.to_wayland_anchor();
+        let (top_margin, right_margin, bottom_margin, left_margin) = layer_shell_margin(
+            display_config,
+            logical_monitor_size,
+            positioning_window_size,
+        );
 
         let wayland_attrs = WindowAttributesWayland::default()
             .with_layer_shell()
             .with_anchor(anchor)
             .with_layer(Layer::Overlay)
-            .with_margin(MARGIN as i32, MARGIN as i32, MARGIN as i32, MARGIN as i32)
+            .with_margin(top_margin, right_margin, bottom_margin, left_margin)
             // FIXME: Specifying output causes crashes on niri - let compositor choose
             // .with_output(monitor.native_id())
             .with_keyboard_interactivity(keyboard_mode);
@@ -550,7 +1013,7 @@ fn create_window(
             .with_resizable(false);
     } else {
         w = w
-            .with_position(LogicalPosition::new(0, 0))
+            .with_position(initial_position)
             .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
             // Don't use fullscreen as it would override our fixed size
             // .with_fullscreen(Some(winit::window::Fullscreen::Borderless(None)))
