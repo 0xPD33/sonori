@@ -123,9 +123,7 @@ impl ParakeetBackend {
             let out = encoder_outputs
                 .get("outputs")
                 .ok_or_else(|| {
-                    TranscriptionError::InferenceError(
-                        "Missing encoder 'outputs'".to_string(),
-                    )
+                    TranscriptionError::InferenceError("Missing encoder 'outputs'".to_string())
                 })?
                 .try_extract_array::<f32>()
                 .map(|a| a.to_owned())

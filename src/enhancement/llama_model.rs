@@ -70,7 +70,7 @@ impl LlamaCppModel {
     /// Check if a GGUF model file exists at the given path
     pub fn is_available(model_path: impl AsRef<Path>) -> bool {
         let path = model_path.as_ref();
-        path.exists() && path.extension().map_or(false, |ext| ext == "gguf")
+        path.exists() && path.extension().is_some_and(|ext| ext == "gguf")
     }
 
     /// Enhance a transcription by transforming it into a clear prompt

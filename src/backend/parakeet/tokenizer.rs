@@ -19,11 +19,7 @@ impl ParakeetTokenizer {
         }
 
         let contents = std::fs::read_to_string(&tokens_path).map_err(|e| {
-            TranscriptionError::IoError(format!(
-                "Failed to read {}: {}",
-                tokens_path.display(),
-                e
-            ))
+            TranscriptionError::IoError(format!("Failed to read {}: {}", tokens_path.display(), e))
         })?;
 
         let mut id_to_token = HashMap::new();

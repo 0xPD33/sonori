@@ -24,15 +24,9 @@ impl ParakeetModel {
         let joiner_path =
             resolve_model_file(model_dir, "joiner", &["joiner.int8.onnx", "joiner.onnx"])?;
 
-        println!(
-            "Loading Parakeet encoder from: {}",
-            encoder_path.display()
-        );
+        println!("Loading Parakeet encoder from: {}", encoder_path.display());
         let encoder = load_session(&encoder_path, options)?;
-        println!(
-            "Loading Parakeet decoder from: {}",
-            decoder_path.display()
-        );
+        println!("Loading Parakeet decoder from: {}", decoder_path.display());
         let decoder = load_session(&decoder_path, options)?;
         println!("Loading Parakeet joiner from: {}", joiner_path.display());
         let joiner = load_session(&joiner_path, options)?;

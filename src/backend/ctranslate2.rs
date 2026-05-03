@@ -111,7 +111,7 @@ impl CT2Backend {
         let transcription = result
             .first()
             .map(|s| s.to_string())
-            .unwrap_or_else(|| String::new());
+            .unwrap_or_else(String::new);
 
         Ok(transcription)
     }

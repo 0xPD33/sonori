@@ -258,7 +258,7 @@ fn normalize_accelerator_for_portal(accelerator: &str) -> String {
         .replace("shift+", "SHIFT+");
 
     // Remove any remaining angle brackets
-    normalized = normalized.replace('<', "").replace('>', "");
+    normalized = normalized.replace(['<', '>'], "");
 
     normalized
 }

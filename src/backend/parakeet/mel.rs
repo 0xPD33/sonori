@@ -87,9 +87,7 @@ fn build_mel_filterbank(n_mels: usize, fft_size: usize, sample_rate: f32) -> Vec
 
 fn build_hann_window(size: usize) -> Vec<f32> {
     (0..size)
-        .map(|n| {
-            0.5 * (1.0 - (2.0 * std::f32::consts::PI * n as f32 / size as f32).cos())
-        })
+        .map(|n| 0.5 * (1.0 - (2.0 * std::f32::consts::PI * n as f32 / size as f32).cos()))
         .collect()
 }
 

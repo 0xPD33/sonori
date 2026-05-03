@@ -28,7 +28,7 @@ pub async fn create_backend(
         BackendType::CTranslate2 => {
             // CT2 backend: use model path as-is (directory)
             let ct2_backend = CT2Backend::new(model_path, backend_config)?;
-            Ok(TranscriptionBackend::CTranslate2(ct2_backend))
+            Ok(TranscriptionBackend::CTranslate2(Box::new(ct2_backend)))
         }
 
         BackendType::WhisperCpp => {
@@ -58,19 +58,21 @@ pub async fn create_backend(
 
             // Create the backend with the model
             let whisper_cpp_backend = WhisperCppBackend::new(model_path, backend_config)?;
-            Ok(TranscriptionBackend::WhisperCpp(whisper_cpp_backend))
+            Ok(TranscriptionBackend::WhisperCpp(Box::new(
+                whisper_cpp_backend,
+            )))
         }
 
         BackendType::Parakeet => {
             let parakeet_backend =
                 super::parakeet::ParakeetBackend::new(model_path, backend_config)?;
-            Ok(TranscriptionBackend::Parakeet(parakeet_backend))
+            Ok(TranscriptionBackend::Parakeet(Box::new(parakeet_backend)))
         }
 
         BackendType::Moonshine => {
             let moonshine_backend =
                 super::moonshine::MoonshineBackend::new(model_path, backend_config)?;
-            Ok(TranscriptionBackend::Moonshine(moonshine_backend))
+            Ok(TranscriptionBackend::Moonshine(Box::new(moonshine_backend)))
         }
     }
 }
@@ -93,7 +95,7 @@ fn extract_whisper_cpp_model_name(path: &Path) -> Result<String, TranscriptionEr
     let name = if let Some(pos) = name.rfind("-q") {
         // Check if what follows "-q" looks like a quantization (e.g., "5_1", "8_0")
         let after_q = &name[pos + 2..];
-        if after_q.chars().next().map_or(false, |c| c.is_ascii_digit()) {
+        if after_q.chars().next().is_some_and(|c| c.is_ascii_digit()) {
             &name[..pos]
         } else {
             name

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
-use std::io::{self, ErrorKind};
+use std::io;
 use std::path::{Path, PathBuf};
 
 /// Persisted restore tokens for portal integrations.
@@ -31,8 +31,7 @@ impl PortalTokens {
                 fs::create_dir_all(parent)?;
             }
 
-            let toml = toml::to_string(self)
-                .map_err(|e| io::Error::new(ErrorKind::Other, format!("{e}")))?;
+            let toml = toml::to_string(self).map_err(|e| io::Error::other(format!("{e}")))?;
             fs::write(path, toml)?;
         }
         Ok(())

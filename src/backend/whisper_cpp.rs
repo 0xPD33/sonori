@@ -37,8 +37,10 @@ impl WhisperCppBackend {
         backend_config: &BackendConfig,
     ) -> Result<Self, TranscriptionError> {
         // Create context parameters
-        let mut ctx_params = WhisperContextParameters::default();
-        ctx_params.use_gpu = backend_config.gpu_enabled;
+        let ctx_params = WhisperContextParameters {
+            use_gpu: backend_config.gpu_enabled,
+            ..Default::default()
+        };
 
         // Get model path as string
         let model_path_str = model_path.as_ref().to_str().ok_or_else(|| {

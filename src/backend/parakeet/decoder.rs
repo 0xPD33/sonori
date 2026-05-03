@@ -62,27 +62,21 @@ fn run_decoder(
         .ok_or_else(|| TranscriptionError::InferenceError("Missing decoder 'outputs'".into()))?
         .try_extract_array::<f32>()
         .map(|a| a.to_owned())
-        .map_err(|e| {
-            TranscriptionError::InferenceError(format!("Decoder output error: {}", e))
-        })?;
+        .map_err(|e| TranscriptionError::InferenceError(format!("Decoder output error: {}", e)))?;
 
     let new_states = outputs
         .get("states")
         .ok_or_else(|| TranscriptionError::InferenceError("Missing decoder 'states'".into()))?
         .try_extract_array::<f32>()
         .map(|a| a.to_owned())
-        .map_err(|e| {
-            TranscriptionError::InferenceError(format!("Decoder states error: {}", e))
-        })?;
+        .map_err(|e| TranscriptionError::InferenceError(format!("Decoder states error: {}", e)))?;
 
     let new_concat = outputs
         .get("162")
         .ok_or_else(|| TranscriptionError::InferenceError("Missing decoder '162'".into()))?
         .try_extract_array::<f32>()
         .map(|a| a.to_owned())
-        .map_err(|e| {
-            TranscriptionError::InferenceError(format!("Decoder concat error: {}", e))
-        })?;
+        .map_err(|e| TranscriptionError::InferenceError(format!("Decoder concat error: {}", e)))?;
 
     Ok(DecoderState {
         output: dec_output,
@@ -124,9 +118,7 @@ fn run_joiner(
         .ok_or_else(|| TranscriptionError::InferenceError("Missing joiner 'outputs'".into()))?
         .try_extract_array::<f32>()
         .map(|a| a.to_owned())
-        .map_err(|e| {
-            TranscriptionError::InferenceError(format!("Joiner output error: {}", e))
-        })?;
+        .map_err(|e| TranscriptionError::InferenceError(format!("Joiner output error: {}", e)))?;
 
     Ok(logits.iter().copied().collect())
 }

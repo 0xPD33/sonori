@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// Identifies which backend implementation to use
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum BackendType {
     /// CTranslate2 backend (current default)
@@ -30,6 +30,7 @@ pub enum BackendType {
 
     /// whisper.cpp backend via whisper-rs bindings
     #[serde(alias = "whisper-cpp", alias = "whispercpp")]
+    #[default]
     WhisperCpp,
 
     /// Moonshine ONNX backend
@@ -38,12 +39,6 @@ pub enum BackendType {
 
     /// NVIDIA Parakeet backend (future)
     Parakeet,
-}
-
-impl Default for BackendType {
-    fn default() -> Self {
-        BackendType::WhisperCpp
-    }
 }
 
 impl fmt::Display for BackendType {
@@ -59,7 +54,7 @@ impl fmt::Display for BackendType {
 
 /// Quantization level for model inference
 /// Backends interpret this based on their capabilities
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum QuantizationLevel {
     /// Highest precision, slower inference
@@ -70,18 +65,13 @@ pub enum QuantizationLevel {
     /// Balanced precision and speed (default)
     /// - CTranslate2: FLOAT16 or INT8
     /// - whisper.cpp: q5_1 or q8_0
+    #[default]
     Medium,
 
     /// Lowest precision, fastest inference
     /// - CTranslate2: INT8
     /// - whisper.cpp: q4_0 or q5_0
     Low,
-}
-
-impl Default for QuantizationLevel {
-    fn default() -> Self {
-        QuantizationLevel::Medium
-    }
 }
 
 /// Backend-agnostic configuration for transcription
@@ -141,16 +131,16 @@ pub struct BackendCapabilities {
 /// Uses enum dispatch for zero-cost abstraction
 pub enum TranscriptionBackend {
     /// CTranslate2 backend
-    CTranslate2(ctranslate2::CT2Backend),
+    CTranslate2(Box<ctranslate2::CT2Backend>),
 
     /// whisper.cpp backend
-    WhisperCpp(whisper_cpp::WhisperCppBackend),
+    WhisperCpp(Box<whisper_cpp::WhisperCppBackend>),
 
     /// Moonshine backend
-    Moonshine(moonshine::MoonshineBackend),
+    Moonshine(Box<moonshine::MoonshineBackend>),
 
     /// Parakeet TDT backend
-    Parakeet(parakeet::ParakeetBackend),
+    Parakeet(Box<parakeet::ParakeetBackend>),
 }
 
 impl TranscriptionBackend {

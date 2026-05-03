@@ -23,15 +23,9 @@ const MOONSHINE_ONNX_DIR: &str = "onnx";
 const MOONSHINE_MERGED_DIR: &str = "merged";
 const MOONSHINE_MERGED_VARIANT: &str = "float";
 /// ONNX model files live in the monorepo at onnx/merged/{model_id}/float/
-const MOONSHINE_ONNX_FILES: [&str; 2] = [
-    "encoder_model.onnx",
-    "decoder_model_merged.onnx",
-];
+const MOONSHINE_ONNX_FILES: [&str; 2] = ["encoder_model.onnx", "decoder_model_merged.onnx"];
 /// Config files live in standalone repos: UsefulSensors/moonshine-{model_id}
-const MOONSHINE_CONFIG_FILES: [&str; 2] = [
-    "tokenizer.json",
-    "preprocessor_config.json",
-];
+const MOONSHINE_CONFIG_FILES: [&str; 2] = ["tokenizer.json", "preprocessor_config.json"];
 const MOONSHINE_REQUIRED_FILES: [&str; 4] = [
     "encoder_model.onnx",
     "decoder_model_merged.onnx",
@@ -132,7 +126,7 @@ fn is_moonshine_model_complete(model_dir: &Path) -> Result<bool> {
 }
 
 fn moonshine_model_id(model_name: &str) -> String {
-    let simple = model_name.split('/').last().unwrap_or(model_name);
+    let simple = model_name.split('/').next_back().unwrap_or(model_name);
     simple
         .strip_prefix("moonshine-")
         .unwrap_or(simple)
@@ -178,9 +172,9 @@ fn convert_model(model_name: &str, output_dir: &Path) -> Result<()> {
         on_nixos, in_shell
     );
 
-    let output_dir_str = output_dir
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("Model output path contains invalid UTF-8: {:?}", output_dir))?;
+    let output_dir_str = output_dir.to_str().ok_or_else(|| {
+        anyhow::anyhow!("Model output path contains invalid UTF-8: {:?}", output_dir)
+    })?;
 
     let converter_args = [
         "--force",
@@ -234,7 +228,7 @@ fn convert_model(model_name: &str, output_dir: &Path) -> Result<()> {
         // Not on NixOS, run directly without shell
         println!("Not on NixOS: Running conversion directly");
         Command::new("ct2-transformers-converter")
-            .args(&converter_args)
+            .args(converter_args)
             .status()
     }
     .context("Failed to run conversion command")?;
@@ -436,7 +430,7 @@ pub async fn init_model(model_name: Option<&str>) -> Result<PathBuf> {
 
     // Define paths
     let models_dir = get_models_dir()?;
-    let model_name_simple = model.split('/').last().unwrap_or(model);
+    let model_name_simple = model.split('/').next_back().unwrap_or(model);
     let ct2_model_dir = models_dir.join(format!("{}-ct2", model_name_simple));
 
     // Check if converted model already exists
@@ -733,10 +727,7 @@ async fn init_parakeet_model_with_progress(
             continue;
         }
 
-        let url = format!(
-            "https://huggingface.co/{}/resolve/main/{}",
-            repo, file
-        );
+        let url = format!("https://huggingface.co/{}/resolve/main/{}", repo, file);
         download_file_with_progress(&url, &output_path, on_progress).await?;
     }
 
@@ -888,7 +879,7 @@ pub fn get_enhancement_gguf_path(model: &str) -> Result<PathBuf> {
     let model_dir = get_enhancement_model_dir()?;
 
     // Parse model string to get filename
-    let filename = model.split('/').last().unwrap_or(model);
+    let filename = model.split('/').next_back().unwrap_or(model);
     Ok(model_dir.join(filename))
 }
 

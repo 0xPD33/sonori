@@ -213,8 +213,7 @@ impl MoonshineModel {
             decoder_cached_past_inputs,
             decoder_cached_logits,
             decoder_cached_present_outputs,
-        ) = if let Some(ref cached_session) = decoder_cached {
-            let cached_session = cached_session;
+        ) = if let Some(cached_session) = decoder_cached.as_ref() {
             let cached_input_ids = resolve_input_name(
                 &cached_session.inputs,
                 &["input_ids", "tokens", "decoder_input_ids"],

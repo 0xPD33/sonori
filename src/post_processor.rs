@@ -70,7 +70,7 @@ fn normalize_whitespace(text: String) -> String {
             // Preserve single spaces between words
             ' ' if !result.is_empty()
                 && !result.ends_with(' ')
-                && !chars.peek().map_or(true, |&next| next.is_whitespace()) =>
+                && !chars.peek().is_none_or(|&next| next.is_whitespace()) =>
             {
                 // This is a single space between non-whitespace, keep it
                 result.push(' ');
@@ -78,7 +78,7 @@ fn normalize_whitespace(text: String) -> String {
             // Collapse multiple consecutive whitespace characters
             c if c.is_whitespace() => {
                 // Skip all consecutive whitespace characters
-                while chars.peek().map_or(false, |&next| next.is_whitespace()) {
+                while chars.peek().is_some_and(|&next| next.is_whitespace()) {
                     chars.next();
                 }
                 // Add single space if not at beginning or end
