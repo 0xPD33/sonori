@@ -75,11 +75,10 @@ impl AudioCapture {
             .pa
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("PortAudio not initialized"))?;
-        let input_settings = self
+        let input_settings = *self
             .input_settings
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Audio input settings not initialized"))?
-            .clone();
+            .ok_or_else(|| anyhow::anyhow!("Audio input settings not initialized"))?;
 
         // Clone the recording Arc before moving it into the closure
         let recording_for_callback = recording.clone();
@@ -194,6 +193,12 @@ impl AudioCapture {
         self.pa_stream = None;
         self.pa = None;
         self.input_settings = None;
+    }
+}
+
+impl Default for AudioCapture {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

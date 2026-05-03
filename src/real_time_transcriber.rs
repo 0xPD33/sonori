@@ -12,7 +12,7 @@ use crate::audio_capture::AudioCapture;
 use crate::audio_processor::AudioProcessor;
 use crate::backend::{create_backend, BackendType, TranscriptionBackend};
 use crate::backend_manager::{BackendCommand, BackendManager};
-use crate::config::{read_app_config, AppConfig};
+use crate::config::AppConfig;
 use crate::silero_audio_processor::{AudioSegment, SileroVad};
 use crate::stats_reporter::StatsReporter;
 use crate::transcription_processor::TranscriptionProcessor;
@@ -71,7 +71,6 @@ pub struct ManualSessionStatus {
     pub is_recording: bool,
     pub is_processing: bool,
     pub duration_secs: u32,
-    pub accumulated_samples: usize,
 }
 
 /// Manual transcription session data
@@ -79,22 +78,18 @@ pub struct ManualSessionStatus {
 pub struct ManualSession {
     pub session_id: String,
     pub start_time: Instant,
-    pub accumulated_audio: Vec<f32>,
     pub is_recording: bool,
     pub is_processing: bool,
-    pub max_duration_secs: u32,
 }
 
 impl ManualSession {
-    fn new(max_duration_secs: u32) -> Self {
+    fn new() -> Self {
         let session_id = format!("session_{}", Utc::now().timestamp_micros());
         Self {
             session_id,
             start_time: Instant::now(),
-            accumulated_audio: Vec::new(),
             is_recording: true,
             is_processing: false,
-            max_duration_secs,
         }
     }
 
@@ -108,12 +103,7 @@ impl ManualSession {
             is_recording: self.is_recording,
             is_processing: self.is_processing,
             duration_secs: self.get_duration_secs(),
-            accumulated_samples: self.accumulated_audio.len(),
         }
-    }
-
-    fn is_expired(&self) -> bool {
-        self.get_duration_secs() >= self.max_duration_secs
     }
 }
 
@@ -159,7 +149,6 @@ pub enum ManualSessionCommand {
     CancelSession {
         responder: Option<oneshot::Sender<anyhow::Result<()>>>,
     },
-    GetSessionStatus,
     SwitchMode(TranscriptionMode),
 }
 
@@ -202,6 +191,7 @@ pub struct RealTimeTranscriber {
     backend: Arc<Mutex<Option<Arc<TranscriptionBackend>>>>,
     backend_ready: Arc<AtomicBool>,
     language: String,
+    app_config: Arc<AppConfig>,
 
     // Processing components
     audio_processor: Arc<Mutex<SileroVad>>,
@@ -223,6 +213,10 @@ pub struct RealTimeTranscriber {
     // Task handles for graceful shutdown
     transcription_handle: Option<tokio::task::JoinHandle<()>>,
     audio_handle: Option<tokio::task::JoinHandle<()>>,
+    backend_load_handle: Option<tokio::task::JoinHandle<()>>,
+    backend_manager_handle: Option<tokio::task::JoinHandle<()>>,
+    manual_session_handle: Option<tokio::task::JoinHandle<()>>,
+    recording_monitor_handle: Option<tokio::task::JoinHandle<()>>,
 
     // Audio processor reference for manual transcription
     audio_processor_ref: Option<Arc<crate::audio_processor::AudioProcessor>>,
@@ -247,6 +241,17 @@ pub struct RealTimeTranscriber {
 }
 
 impl RealTimeTranscriber {
+    async fn wait_for_task(mut handle: tokio::task::JoinHandle<()>, name: &str, timeout: Duration) {
+        match tokio::time::timeout(timeout, &mut handle).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => eprintln!("{} task panicked: {:?}", name, e),
+            Err(_) => {
+                eprintln!("{} shutdown timed out; aborting task", name);
+                handle.abort();
+            }
+        }
+    }
+
     /// Creates a new RealTimeTranscriber instance
     ///
     /// # Arguments
@@ -337,7 +342,7 @@ impl RealTimeTranscriber {
             backend_ready.clone(),
             backend_status.clone(),
         );
-        backend_manager.start();
+        let backend_manager_handle = backend_manager.start();
         let backend_command_tx = backend_manager.command_sender();
 
         // Set initial processing state for loading
@@ -352,7 +357,7 @@ impl RealTimeTranscriber {
 
         let backend_status_for_load = backend_status.clone();
         let audio_visualization_data_for_load = audio_visualization_data.clone();
-        tokio::spawn(async move {
+        let backend_load_handle = tokio::spawn(async move {
             println!(
                 "INFO: Loading {} backend with model at {:?}",
                 backend_type, model_path_clone
@@ -409,6 +414,8 @@ impl RealTimeTranscriber {
         let current_manual_session = Arc::new(Mutex::new(None));
         let processing_manual_session = Arc::new(Mutex::new(None));
 
+        let app_config = Arc::new(app_config);
+
         Ok(Self {
             audio_capture: Arc::new(Mutex::new(AudioCapture::new())),
             tx,
@@ -420,6 +427,7 @@ impl RealTimeTranscriber {
             backend,
             backend_ready,
             language: app_config.general_config.language.clone(),
+            app_config,
             audio_processor,
             transcript_history,
             audio_visualization_data,
@@ -431,6 +439,10 @@ impl RealTimeTranscriber {
             stats_reporter: None,
             transcription_handle: None,
             audio_handle: None,
+            backend_load_handle: Some(backend_load_handle),
+            backend_manager_handle: Some(backend_manager_handle),
+            manual_session_handle: None,
+            recording_monitor_handle: None,
             audio_processor_ref: None,
 
             // Manual mode fields
@@ -475,8 +487,11 @@ impl RealTimeTranscriber {
         )?;
 
         // Initialize statistics reporter
-        let stats_reporter =
-            StatsReporter::new(self.transcription_stats.clone(), self.running.clone());
+        let stats_reporter = StatsReporter::new(
+            self.transcription_stats.clone(),
+            self.running.clone(),
+            self.app_config.debug_config.log_stats_enabled,
+        );
         stats_reporter.start_periodic_reporting();
         self.stats_reporter = Some(stats_reporter);
 
@@ -485,15 +500,13 @@ impl RealTimeTranscriber {
             self.backend.clone(),
             self.backend_ready.clone(),
             self.language.clone(),
+            self.app_config.clone(),
             self.running.clone(),
             self.transcription_done_tx.clone(),
             self.transcription_stats.clone(),
             self.audio_visualization_data.clone(),
             self.magic_mode_enabled.clone(),
         );
-
-        // Get config
-        let config = read_app_config();
 
         // Initialize audio processor
         let audio_processor = Arc::new(AudioProcessor::new(
@@ -506,7 +519,7 @@ impl RealTimeTranscriber {
             self.transcription_mode.clone(),
             self.transcription_stats.clone(),
             self.manual_session_tx.clone(),
-            config,
+            (*self.app_config).clone(),
         ));
 
         // Store reference for manual transcription
@@ -534,7 +547,7 @@ impl RealTimeTranscriber {
 
     /// Starts the manual session command processor
     fn start_manual_session_processor(
-        &self,
+        &mut self,
         mut manual_session_rx: mpsc::Receiver<ManualSessionCommand>,
     ) {
         let current_manual_session = self.current_manual_session.clone();
@@ -549,11 +562,10 @@ impl RealTimeTranscriber {
         let audio_capture = self.audio_capture.clone(); // Share audio capture for stream control
         let sound_player = self.sound_player.clone(); // Clone sound player for audio feedback
         let transcription_stats = self.transcription_stats.clone(); // For drain detection
-        let app_config = read_app_config();
-        let manual_mode_config = app_config.manual_mode_config.clone();
+        let manual_mode_config = self.app_config.manual_mode_config.clone();
         let sample_rate = crate::config::SAMPLE_RATE;
 
-        tokio::spawn(async move {
+        self.manual_session_handle = Some(tokio::spawn(async move {
             while running.load(Ordering::Relaxed) {
                 tokio::select! {
                     command = manual_session_rx.recv() => {
@@ -573,8 +585,7 @@ impl RealTimeTranscriber {
                                             continue;
                                         }
 
-                                        let max_duration = manual_mode_config.max_recording_duration_secs;
-                                        let new_session = ManualSession::new(max_duration);
+                                        let new_session = ManualSession::new();
                                         let session_id = new_session.session_id.clone();
 
                                         let can_start = {
@@ -889,10 +900,6 @@ impl RealTimeTranscriber {
                                         }
                                     }
                                 }
-                                ManualSessionCommand::GetSessionStatus => {
-                                    // This is a query command - status is returned via the getter methods
-                                    // The UI can call get_manual_session_status() directly
-                                }
                                 ManualSessionCommand::SwitchMode(new_mode) => {
                                     let old_mode = TranscriptionMode::from_u8(transcription_mode.load(Ordering::Relaxed));
                                     transcription_mode.store(new_mode.as_u8(), Ordering::Relaxed);
@@ -1003,7 +1010,7 @@ impl RealTimeTranscriber {
                     }
                 }
             }
-        });
+        }));
     }
 
     fn move_session_to_processing(
@@ -1067,7 +1074,7 @@ impl RealTimeTranscriber {
 
         // We need a way to communicate with the audio capture from the monitoring task
         // For now, we'll create a simple polling mechanism
-        tokio::spawn(async move {
+        self.recording_monitor_handle = Some(tokio::spawn(async move {
             let mut last_recording_state = false;
             let mut check_interval = tokio::time::interval(tokio::time::Duration::from_millis(100));
 
@@ -1088,7 +1095,7 @@ impl RealTimeTranscriber {
             }
 
             println!("Recording monitor task stopped");
-        });
+        }));
     }
 
     /// Stops the audio capture and transcription process
@@ -1143,22 +1150,28 @@ impl RealTimeTranscriber {
 
         let shutdown_timeout = Duration::from_secs(3);
 
-        // Wait for the audio processor to finish
-        if let Some(handle) = self.audio_handle.take() {
-            match tokio::time::timeout(shutdown_timeout, handle).await {
-                Ok(Err(e)) => eprintln!("Audio processor task panicked: {:?}", e),
-                Err(_) => eprintln!("Audio processor shutdown timed out"),
-                _ => {}
-            }
+        if let Some(handle) = self.recording_monitor_handle.take() {
+            Self::wait_for_task(handle, "Recording monitor", shutdown_timeout).await;
         }
 
-        // Wait for the transcription processor to finish
+        if let Some(handle) = self.manual_session_handle.take() {
+            Self::wait_for_task(handle, "Manual session processor", shutdown_timeout).await;
+        }
+
+        if let Some(handle) = self.audio_handle.take() {
+            Self::wait_for_task(handle, "Audio processor", shutdown_timeout).await;
+        }
+
         if let Some(handle) = self.transcription_handle.take() {
-            match tokio::time::timeout(shutdown_timeout, handle).await {
-                Ok(Err(e)) => eprintln!("Transcription processor task panicked: {:?}", e),
-                Err(_) => eprintln!("Transcription processor shutdown timed out"),
-                _ => {}
-            }
+            Self::wait_for_task(handle, "Transcription processor", shutdown_timeout).await;
+        }
+
+        if let Some(handle) = self.backend_load_handle.take() {
+            Self::wait_for_task(handle, "Backend load", shutdown_timeout).await;
+        }
+
+        if let Some(handle) = self.backend_manager_handle.take() {
+            Self::wait_for_task(handle, "Backend manager", shutdown_timeout).await;
         }
 
         // Clean up whisper model
@@ -1411,76 +1424,5 @@ impl RealTimeTranscriber {
         }
 
         self.processing_manual_session.lock().is_some()
-    }
-
-    /// Get the current manual session accumulated audio for processing
-    pub fn get_manual_session_audio(&self) -> Option<Vec<f32>> {
-        if TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed))
-            != TranscriptionMode::Manual
-        {
-            return None;
-        }
-
-        let current_session = self.current_manual_session.lock();
-        current_session
-            .as_ref()
-            .map(|session| session.accumulated_audio.clone())
-    }
-
-    /// Add audio data to the current manual session
-    pub fn add_audio_to_manual_session(&self, audio_data: &[f32]) -> Result<(), anyhow::Error> {
-        if TranscriptionMode::from_u8(self.transcription_mode.load(Ordering::Relaxed))
-            != TranscriptionMode::Manual
-        {
-            return Ok(()); // Silently ignore if not in manual mode
-        }
-
-        let mut current_session = self.current_manual_session.lock();
-        if let Some(session) = current_session.as_mut() {
-            if session.is_recording {
-                // Check if session has expired
-                if session.is_expired() {
-                    let session_id = session.session_id.clone();
-                    session.is_recording = false;
-                    session.is_processing = true;
-                    println!(
-                        "Manual session {} has reached maximum duration, stopping recording",
-                        session_id
-                    );
-
-                    // Complete the session immediately (mark as done and clear it)
-                    println!("Manual session {} completed and cleared", session_id);
-                    *current_session = None; // Clear the session so new ones can start
-
-                    // Stop recording
-                    self.recording.store(false, Ordering::Relaxed);
-                } else {
-                    // Add audio data to accumulated buffer
-                    session.accumulated_audio.extend_from_slice(audio_data);
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Mark the current manual session as completed
-    pub fn complete_manual_session(&self) -> Result<(), anyhow::Error> {
-        {
-            let mut current_session = self.current_manual_session.lock();
-            if let Some(session) = current_session.as_mut() {
-                session.is_processing = false;
-                return Ok(());
-            }
-        }
-
-        {
-            let mut processing_session = self.processing_manual_session.lock();
-            if let Some(session) = processing_session.as_mut() {
-                session.session.is_processing = false;
-            }
-        }
-
-        Ok(())
     }
 }

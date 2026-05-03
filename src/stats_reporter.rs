@@ -6,7 +6,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::config::read_app_config;
 use crate::transcription_stats::TranscriptionStats;
 
 const STATS_INTERVAL_SECS: u64 = 10;
@@ -15,6 +14,7 @@ const STATS_INTERVAL_SECS: u64 = 10;
 pub struct StatsReporter {
     transcription_stats: Arc<Mutex<TranscriptionStats>>,
     running: Arc<AtomicBool>,
+    log_stats_enabled: bool,
 }
 
 impl StatsReporter {
@@ -22,21 +22,19 @@ impl StatsReporter {
     pub fn new(
         transcription_stats: Arc<Mutex<TranscriptionStats>>,
         running: Arc<AtomicBool>,
+        log_stats_enabled: bool,
     ) -> Self {
         Self {
             transcription_stats,
             running,
+            log_stats_enabled,
         }
     }
 
     /// Start periodic reporting with specified interval
     pub fn start_periodic_reporting(&self) {
-        // Get configuration options
-        let app_config = read_app_config();
-        let log_stats_enabled = app_config.debug_config.log_stats_enabled;
-
         // Exit early if stats logging is not enabled
-        if !log_stats_enabled {
+        if !self.log_stats_enabled {
             println!("Stats reporting disabled - no statistics will be logged");
             return;
         }
@@ -92,12 +90,8 @@ impl StatsReporter {
 
     /// Print current statistics on demand
     pub fn print_stats(&self) {
-        // Get configuration options
-        let app_config = read_app_config();
-        let log_stats_enabled = app_config.debug_config.log_stats_enabled;
-
         // Exit early if stats logging is not enabled
-        if !log_stats_enabled {
+        if !self.log_stats_enabled {
             println!("Stats reporting disabled - no statistics will be logged on demand");
             return;
         }

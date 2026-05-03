@@ -214,20 +214,8 @@ impl SileroVad {
         // Silero model expects frames of exactly 512 samples (and internal slicing to 480)
         let frame_len = audio_frame.len().min(512);
 
-        if frame_len == audio_frame.len() {
-            // Only fill the portion of the buffer we'll use
-            for i in 0..frame_len {
-                self.frame_buffer[[0, i]] = audio_frame[i];
-            }
-        } else {
-            // We need to adjust the frame size
-            for i in 0..frame_len {
-                self.frame_buffer[[0, i]] = if i < audio_frame.len() {
-                    audio_frame[i]
-                } else {
-                    0.0
-                };
-            }
+        for (i, sample) in audio_frame.iter().take(frame_len).enumerate() {
+            self.frame_buffer[[0, i]] = *sample;
         }
 
         // Slice to the correct length

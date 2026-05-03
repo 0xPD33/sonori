@@ -24,7 +24,6 @@ pub struct BackendManager {
     status: Arc<RwLock<BackendStatus>>,
     command_tx: mpsc::UnboundedSender<BackendCommand>,
     command_rx: Option<mpsc::UnboundedReceiver<BackendCommand>>,
-    task_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl BackendManager {
@@ -41,19 +40,18 @@ impl BackendManager {
             status,
             command_tx,
             command_rx: Some(command_rx),
-            task_handle: None,
         }
     }
 
-    pub fn start(&mut self) {
+    pub fn start(&mut self) -> tokio::task::JoinHandle<()> {
         let rx = self.command_rx.take().expect("start called twice");
         let backend = self.backend.clone();
         let backend_ready = self.backend_ready.clone();
         let status = self.status.clone();
 
-        self.task_handle = Some(tokio::spawn(async move {
+        tokio::spawn(async move {
             Self::run_command_loop(rx, backend, backend_ready, status).await;
-        }));
+        })
     }
 
     pub fn command_sender(&self) -> mpsc::UnboundedSender<BackendCommand> {
@@ -89,8 +87,7 @@ impl BackendManager {
                             BackendType::Parakeet => "Parakeet".to_string(),
                         };
                         s.model_name = model_name.clone();
-                        s.state =
-                            BackendStatusState::Loading("Resolving model...".to_string());
+                        s.state = BackendStatusState::Loading("Resolving model...".to_string());
                         prev
                     };
 
@@ -136,8 +133,7 @@ impl BackendManager {
 
                     {
                         let mut s = status.write();
-                        s.state =
-                            BackendStatusState::Loading("Loading backend...".to_string());
+                        s.state = BackendStatusState::Loading("Loading backend...".to_string());
                     }
 
                     match create_backend(backend_config.backend, &model_path, &backend_config).await
@@ -158,8 +154,7 @@ impl BackendManager {
                             let mut s = status.write();
                             s.backend_name = prev_backend_name;
                             s.model_name = prev_model_name;
-                            s.state =
-                                BackendStatusState::Error(format!("Reload failed: {}", e));
+                            s.state = BackendStatusState::Error(format!("Reload failed: {}", e));
                             s.error_time = Some(std::time::Instant::now());
 
                             eprintln!("BackendManager: Backend reload failed: {}", e);

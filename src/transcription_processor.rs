@@ -5,7 +5,7 @@ use std::time::Instant;
 use tokio::sync::{broadcast, mpsc};
 
 use crate::backend::TranscriptionBackend;
-use crate::config::read_app_config;
+use crate::config::{AppConfig, EnhancementConfig};
 use crate::post_processor;
 use crate::silero_audio_processor::{AudioSegment, SileroVad, VadConfig, VadState};
 use crate::transcription_stats::TranscriptionStats;
@@ -139,6 +139,7 @@ pub struct TranscriptionProcessor {
     backend: Arc<Mutex<Option<Arc<TranscriptionBackend>>>>,
     backend_ready: Arc<AtomicBool>,
     language: String,
+    app_config: Arc<AppConfig>,
     running: Arc<AtomicBool>,
     transcription_done_tx: mpsc::UnboundedSender<()>,
     transcription_stats: Arc<Mutex<TranscriptionStats>>,
@@ -152,6 +153,7 @@ impl TranscriptionProcessor {
         backend: Arc<Mutex<Option<Arc<TranscriptionBackend>>>>,
         backend_ready: Arc<AtomicBool>,
         language: String,
+        app_config: Arc<AppConfig>,
         running: Arc<AtomicBool>,
         transcription_done_tx: mpsc::UnboundedSender<()>,
         transcription_stats: Arc<Mutex<TranscriptionStats>>,
@@ -162,6 +164,7 @@ impl TranscriptionProcessor {
             backend,
             backend_ready,
             language,
+            app_config,
             running,
             transcription_done_tx,
             transcription_stats,
@@ -177,11 +180,11 @@ impl TranscriptionProcessor {
         backend: &Arc<Mutex<Option<Arc<TranscriptionBackend>>>>,
         segment: &AudioSegment,
         language: &str,
+        app_config: &AppConfig,
         stats: &Arc<Mutex<TranscriptionStats>>,
         audio_visualization_data: &Arc<RwLock<AudioVisualizationData>>,
         initial_prompt: Option<&str>,
     ) -> String {
-        let mut app_config = read_app_config();
         let log_stats_enabled = app_config.debug_config.log_stats_enabled;
 
         // Set processing state to transcribing
@@ -226,9 +229,9 @@ impl TranscriptionProcessor {
             return "[backend not available]".to_string();
         };
 
-        // Apply initial prompt for whisper.cpp backend (if provided)
-        if let Some(prompt) = initial_prompt {
-            app_config.whisper_cpp_options.initial_prompt = Some(prompt.to_string());
+        let mut whisper_cpp_options = app_config.whisper_cpp_options.clone();
+        if let Some(prompt) = initial_prompt.filter(|prompt| !prompt.is_empty()) {
+            whisper_cpp_options.initial_prompt = Some(prompt.to_string());
         }
         let inference_start = Instant::now();
 
@@ -246,7 +249,7 @@ impl TranscriptionProcessor {
                     &segment.samples,
                     language,
                     &app_config.common_transcription_options,
-                    &app_config.whisper_cpp_options,
+                    &whisper_cpp_options,
                     segment.sample_rate,
                 )
             }
@@ -258,15 +261,14 @@ impl TranscriptionProcessor {
                     &app_config.moonshine_options,
                     segment.sample_rate,
                 ),
-            crate::backend::TranscriptionBackend::Parakeet(parakeet_backend) => {
-                parakeet_backend.transcribe(
+            crate::backend::TranscriptionBackend::Parakeet(parakeet_backend) => parakeet_backend
+                .transcribe(
                     &segment.samples,
                     language,
                     &app_config.common_transcription_options,
                     &app_config.parakeet_options,
                     segment.sample_rate,
-                )
-            }
+                ),
         };
 
         let result = match result {
@@ -328,6 +330,7 @@ impl TranscriptionProcessor {
         segment: AudioSegment,
         backend: Arc<Mutex<Option<Arc<TranscriptionBackend>>>>,
         language: String,
+        app_config: Arc<AppConfig>,
         stats: Arc<Mutex<TranscriptionStats>>,
         audio_visualization_data: Arc<RwLock<AudioVisualizationData>>,
         transcript_tx: broadcast::Sender<crate::real_time_transcriber::TranscriptionMessage>,
@@ -349,13 +352,18 @@ impl TranscriptionProcessor {
                     &backend,
                     &segment,
                     &language,
+                    &app_config,
                     &stats,
                     &audio_visualization_data,
                 );
 
                 // Apply LFM enhancement if magic mode is enabled
                 if !transcription.is_empty() && magic_mode_enabled.load(Ordering::Relaxed) {
-                    transcription = Self::enhance_transcription(&transcription, &enhancement_model);
+                    transcription = Self::enhance_transcription(
+                        &transcription,
+                        &app_config.enhancement_config,
+                        &enhancement_model,
+                    );
                 }
 
                 if transcription.is_empty() {
@@ -372,6 +380,7 @@ impl TranscriptionProcessor {
                     &backend,
                     &segment,
                     &language,
+                    &app_config,
                     &stats,
                     &audio_visualization_data,
                     None,
@@ -416,6 +425,7 @@ impl TranscriptionProcessor {
         let backend = self.backend.clone();
         let backend_ready = self.backend_ready.clone();
         let language = self.language.clone();
+        let app_config = self.app_config.clone();
         let running = self.running.clone();
         let transcription_done_tx = self.transcription_done_tx.clone();
         let transcription_stats = self.transcription_stats.clone();
@@ -423,7 +433,6 @@ impl TranscriptionProcessor {
         let magic_mode_enabled = self.magic_mode_enabled.clone();
         let enhancement_model = self.enhancement_model.clone();
 
-        let app_config = read_app_config();
         let log_stats_enabled = app_config.debug_config.log_stats_enabled;
 
         // Spawn a dedicated task for transcription
@@ -465,6 +474,7 @@ impl TranscriptionProcessor {
                             segment,
                             backend.clone(),
                             language.clone(),
+                            app_config.clone(),
                             transcription_stats.clone(),
                             audio_visualization_data.clone(),
                             transcript_tx.clone(),
@@ -487,17 +497,19 @@ impl TranscriptionProcessor {
                             }
                             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                         }
-                        tokio::spawn(Self::process_segment(
+                        Self::process_segment(
                             segment,
                             backend.clone(),
                             language.clone(),
+                            app_config.clone(),
                             transcription_stats.clone(),
                             audio_visualization_data.clone(),
                             transcript_tx.clone(),
                             magic_mode_enabled.clone(),
                             enhancement_model.clone(),
                             log_stats_enabled,
-                        ));
+                        )
+                        .await;
                     }
                     None => {
                         // Channel closed
@@ -516,10 +528,10 @@ impl TranscriptionProcessor {
         backend: &Arc<Mutex<Option<Arc<TranscriptionBackend>>>>,
         segment: &AudioSegment,
         language: &str,
+        app_config: &AppConfig,
         stats: &Arc<Mutex<TranscriptionStats>>,
         audio_visualization_data: &Arc<RwLock<AudioVisualizationData>>,
     ) -> String {
-        let app_config = read_app_config();
         let start_time = Instant::now();
         let duration = segment.end_time - segment.start_time;
 
@@ -534,6 +546,7 @@ impl TranscriptionProcessor {
                 backend,
                 segment,
                 language,
+                app_config,
                 stats,
                 audio_visualization_data,
                 None,
@@ -552,8 +565,7 @@ impl TranscriptionProcessor {
             let backend_max = backend
                 .lock()
                 .as_ref()
-                .map(|b| b.capabilities().max_audio_duration)
-                .flatten();
+                .and_then(|b| b.capabilities().max_audio_duration);
             match backend_max {
                 Some(max) => max as f64,
                 None => app_config.manual_mode_config.chunk_duration_seconds as f64,
@@ -565,6 +577,7 @@ impl TranscriptionProcessor {
                 backend,
                 segment,
                 language,
+                app_config,
                 stats,
                 audio_visualization_data,
             );
@@ -575,6 +588,7 @@ impl TranscriptionProcessor {
             backend,
             segment,
             language,
+            app_config,
             stats,
             audio_visualization_data,
             None,
@@ -596,16 +610,15 @@ impl TranscriptionProcessor {
         backend: &Arc<Mutex<Option<Arc<TranscriptionBackend>>>>,
         segment: &AudioSegment,
         language: &str,
+        app_config: &AppConfig,
         stats: &Arc<Mutex<TranscriptionStats>>,
         audio_visualization_data: &Arc<RwLock<AudioVisualizationData>>,
     ) -> String {
-        let app_config = read_app_config();
         let sample_rate = segment.sample_rate;
         let max_chunk_seconds = backend
             .lock()
             .as_ref()
-            .map(|b| b.capabilities().max_audio_duration)
-            .flatten()
+            .and_then(|b| b.capabilities().max_audio_duration)
             .unwrap_or(app_config.manual_mode_config.chunk_duration_seconds);
         let max_chunk_samples = (max_chunk_seconds as f64 * sample_rate as f64).round() as usize;
         let total_len = segment.samples.len();
@@ -673,6 +686,7 @@ impl TranscriptionProcessor {
                 backend,
                 &chunk_segment,
                 language,
+                app_config,
                 stats,
                 audio_visualization_data,
                 prompt.as_deref(),
@@ -762,13 +776,9 @@ impl TranscriptionProcessor {
     /// Lazily loads the model if not already loaded
     fn enhance_transcription(
         transcription: &str,
+        enhancement_config: &EnhancementConfig,
         enhancement_model: &Arc<Mutex<Option<Box<dyn crate::enhancement::EnhancementModel>>>>,
     ) -> String {
-        use crate::config::read_app_config;
-
-        let config = read_app_config();
-        let enhancement_config = &config.enhancement_config;
-
         // Try to get or load the enhancement model
         let mut model_guard = enhancement_model.lock();
 
@@ -854,5 +864,35 @@ impl TranscriptionProcessor {
         } else {
             transcription.to_string()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TranscriptionProcessor;
+
+    #[test]
+    fn build_vad_guided_chunks_prefers_latest_pause_within_limit() {
+        let sample_rate = 10;
+        let ranges =
+            TranscriptionProcessor::build_vad_guided_chunks(100, 40, &[25, 35, 70], sample_rate);
+
+        assert_eq!(ranges, vec![(0, 35), (35, 70), (70, 100)]);
+    }
+
+    #[test]
+    fn build_vad_guided_chunks_falls_back_to_max_size_without_pause() {
+        let sample_rate = 10;
+        let ranges = TranscriptionProcessor::build_vad_guided_chunks(105, 40, &[], sample_rate);
+
+        assert_eq!(ranges, vec![(0, 40), (40, 80), (80, 105)]);
+    }
+
+    #[test]
+    fn build_vad_guided_chunks_merges_tiny_trailing_chunk() {
+        let sample_rate = 10;
+        let ranges = TranscriptionProcessor::build_vad_guided_chunks(85, 40, &[], sample_rate);
+
+        assert_eq!(ranges, vec![(0, 40), (40, 85)]);
     }
 }

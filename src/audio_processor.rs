@@ -487,11 +487,6 @@ impl AudioProcessor {
         Ok(())
     }
 
-    /// Get the current size of the manual audio buffer
-    pub fn get_manual_buffer_size(&self) -> usize {
-        self.manual_audio_buffer.lock().len()
-    }
-
     /// Clear the manual audio buffer
     pub fn clear_manual_buffer(&self) {
         // Use mem::take() to reuse buffer capacity (avoids reallocation)
@@ -537,11 +532,6 @@ impl AudioProcessor {
     /// Get the current session ID
     pub fn get_session_id(&self) -> Option<String> {
         self.current_session_id.read().clone()
-    }
-
-    /// Get a reference to the current session ID (for cloning into async tasks)
-    pub fn get_session_id_ref(&self) -> Arc<RwLock<Option<String>>> {
-        self.current_session_id.clone()
     }
 
     /// Gets the count of audio samples received from the channel
