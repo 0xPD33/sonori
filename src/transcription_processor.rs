@@ -850,7 +850,10 @@ impl TranscriptionProcessor {
 
         // Now we have the model loaded, enhance the transcription
         if let Some(ref model) = *model_guard {
-            let system_prompt = enhancement_config.system_prompt.as_deref();
+            let system_prompt = enhancement_config
+                .system_prompt
+                .as_deref()
+                .or(Some(crate::config::DEFAULT_ENHANCEMENT_SYSTEM_PROMPT));
             match model.enhance(transcription, system_prompt) {
                 Ok(enhanced) => {
                     println!("Transcription enhanced successfully");

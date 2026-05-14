@@ -4,7 +4,6 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-use crate::config::read_app_config;
 use crate::transcription_stats::TranscriptionStats;
 use parking_lot::Mutex;
 
@@ -14,16 +13,22 @@ pub struct AudioCapture {
     pa: Option<pa::PortAudio>,
     input_settings: Option<pa::InputStreamSettings<f32>>,
     samples_sent: Arc<AtomicUsize>,
+    buffer_size: usize,
 }
 
 impl AudioCapture {
     /// Creates a new AudioCapture instance
     pub fn new() -> Self {
+        Self::with_buffer_size(crate::config::AudioProcessorConfig::default().buffer_size)
+    }
+
+    pub fn with_buffer_size(buffer_size: usize) -> Self {
         Self {
             pa_stream: None,
             pa: None,
             input_settings: None,
             samples_sent: Arc::new(AtomicUsize::new(0)),
+            buffer_size,
         }
     }
 
@@ -33,8 +38,6 @@ impl AudioCapture {
             return Ok(()); // Already initialized
         }
 
-        let config = read_app_config();
-
         let pa = pa::PortAudio::new()
             .map_err(|e| anyhow::anyhow!("Failed to initialize PortAudio: {}", e))?;
 
@@ -42,10 +45,13 @@ impl AudioCapture {
             .default_input_stream_params::<f32>(1)
             .map_err(|e| anyhow::anyhow!("Failed to get default input stream parameters: {}", e))?;
 
+        let frames_per_buffer = u32::try_from(self.buffer_size)
+            .map_err(|_| anyhow::anyhow!("Audio buffer size too large: {}", self.buffer_size))?;
+
         let input_settings = pa::InputStreamSettings::new(
             input_params,
             crate::config::SAMPLE_RATE as f64,
-            config.audio_processor_config.buffer_size as u32,
+            frames_per_buffer,
         );
 
         self.pa = Some(pa);

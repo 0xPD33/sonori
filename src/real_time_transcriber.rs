@@ -294,14 +294,16 @@ impl RealTimeTranscriber {
         let backend = Arc::new(Mutex::new(None));
         let transcription_stats = Arc::new(Mutex::new(TranscriptionStats::new()));
 
-        let audio_visualization_data =
-            Arc::new(RwLock::new(AudioVisualizationData::with_capacity(1024)));
+        let audio_buffer_size = app_config.audio_processor_config.buffer_size;
+        let audio_visualization_data = Arc::new(RwLock::new(
+            AudioVisualizationData::with_capacity(audio_buffer_size),
+        ));
 
         let audio_processor = match SileroVad::new(
             (
                 app_config.vad_config.clone(),
                 app_config.realtime_mode_config.clone(),
-                app_config.audio_processor_config.buffer_size,
+                audio_buffer_size,
                 crate::config::SAMPLE_RATE,
             )
                 .into(),
@@ -417,7 +419,9 @@ impl RealTimeTranscriber {
         let app_config = Arc::new(app_config);
 
         Ok(Self {
-            audio_capture: Arc::new(Mutex::new(AudioCapture::new())),
+            audio_capture: Arc::new(Mutex::new(AudioCapture::with_buffer_size(
+                audio_buffer_size,
+            ))),
             tx,
             rx: Some(rx),
             transcript_tx,
