@@ -22,6 +22,14 @@ pub struct TextRenderer {
     _surface_format: wgpu::TextureFormat,
     _cache_ref: Cache,
     viewport: Viewport,
+    cached_layout: Option<CachedTextLayout>,
+}
+
+struct CachedTextLayout {
+    text: String,
+    font_size: f32,
+    buffer_width: f32,
+    color: [u8; 4],
 }
 
 impl TextRenderer {
@@ -36,7 +44,7 @@ impl TextRenderer {
         let mut font_system = FontSystem::new();
         let cache = SwashCache::new();
 
-        // Add system fonts - this is critical for text to appear
+        // Load system fonts so SansSerif resolves the same way as the rest of the UI.
         font_system.db_mut().load_system_fonts();
 
         // Create a cache for the TextAtlas
@@ -74,6 +82,7 @@ impl TextRenderer {
             _surface_format: surface_format,
             _cache_ref: cache_ref,
             viewport,
+            cached_layout: None,
         }
     }
 
@@ -96,6 +105,7 @@ impl TextRenderer {
                 height: size.height,
             },
         );
+        self.cached_layout = None;
     }
 
     /// Measure the rendered width of text at a given scale (single line, no wrapping)
@@ -103,6 +113,7 @@ impl TextRenderer {
         if text.is_empty() {
             return 0.0;
         }
+        self.cached_layout = None;
         self.buffer.lines.clear();
         let font_size = 10.0 * scale;
         let metrics = Metrics::new(font_size, font_size * 1.1);
@@ -140,36 +151,51 @@ impl TextRenderer {
             return;
         }
 
-        // Clear the buffer for new text
-        self.buffer.lines.clear();
-
         let font_size = 10.0 * scale; // Reduced from 12.0 to 10.0 for smaller text
         let metrics = Metrics::new(font_size, font_size * 1.1);
-        self.buffer.set_metrics(&mut self.font_system, metrics);
 
-        let text_color = Color::rgba(
+        let text_color_rgba = [
             (color[0] * 255.0) as u8,
             (color[1] * 255.0) as u8,
             (color[2] * 255.0) as u8,
             (color[3] * 255.0) as u8,
+        ];
+        let text_color = Color::rgba(
+            text_color_rgba[0],
+            text_color_rgba[1],
+            text_color_rgba[2],
+            text_color_rgba[3],
         );
 
         // Set the buffer width to match the text area width for proper wrapping
         // But allow unlimited height for scrolling
-        self.buffer.set_size(
-            &mut self.font_system,
-            Some(area_width as f32 - (LEFT_MARGIN + RIGHT_MARGIN)),
-            None,
-        );
+        let buffer_width = area_width as f32 - (LEFT_MARGIN + RIGHT_MARGIN);
+        let needs_layout = self.cached_layout.as_ref().is_none_or(|cached| {
+            cached.text != text
+                || cached.font_size != font_size
+                || cached.buffer_width != buffer_width
+                || cached.color != text_color_rgba
+        });
 
-        self.buffer.set_text(
-            &mut self.font_system,
-            text,
-            &Attrs::new().family(Family::SansSerif).color(text_color),
-            Shaping::Advanced,
-        );
-
-        self.buffer.shape_until_scroll(&mut self.font_system, true);
+        if needs_layout {
+            self.buffer.lines.clear();
+            self.buffer.set_metrics(&mut self.font_system, metrics);
+            self.buffer
+                .set_size(&mut self.font_system, Some(buffer_width), None);
+            self.buffer.set_text(
+                &mut self.font_system,
+                text,
+                &Attrs::new().family(Family::SansSerif).color(text_color),
+                Shaping::Advanced,
+            );
+            self.buffer.shape_until_scroll(&mut self.font_system, true);
+            self.cached_layout = Some(CachedTextLayout {
+                text: text.to_string(),
+                font_size,
+                buffer_width,
+                color: text_color_rgba,
+            });
+        }
 
         self.viewport.update(
             &self.queue,

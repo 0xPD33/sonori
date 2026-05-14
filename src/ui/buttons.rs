@@ -760,6 +760,14 @@ impl ButtonManager {
         }
     }
 
+    fn ordered_button_keys(&self, include_close: bool) -> Vec<ButtonType> {
+        Self::get_button_types(self.transcription_mode, self.enhancement_enabled)
+            .into_iter()
+            .filter(|&bt| include_close || bt != ButtonType::Close)
+            .filter(|bt| self.buttons.contains_key(bt))
+            .collect()
+    }
+
     /// Helper function to load a single texture and assign it to the corresponding button
     fn load_single_texture(
         &mut self,
@@ -1009,26 +1017,31 @@ impl ButtonManager {
         let y = position.y;
 
         // Find which button (if any) contains the mouse position
-        let current_hover = self
-            .buttons
-            .iter()
-            .find(|(_, button)| button.contains_point(x, y))
-            .map(|(&button_type, _)| {
-                // Handle special case for pause/play button state detection
-                if button_type == ButtonType::Pause {
-                    if let Some(recording) = &self.recording {
-                        if recording.load(Ordering::Relaxed) {
+        let current_hover =
+            self.ordered_button_keys(true)
+                .into_iter()
+                .rev()
+                .find_map(|button_type| {
+                    let button = self.buttons.get(&button_type)?;
+                    if !button.contains_point(x, y) {
+                        return None;
+                    }
+
+                    Some(if button_type == ButtonType::Pause {
+                        if self
+                            .recording
+                            .as_ref()
+                            .map(|recording| recording.load(Ordering::Relaxed))
+                            .unwrap_or(false)
+                        {
                             ButtonType::Pause
                         } else {
                             ButtonType::Play
                         }
                     } else {
-                        ButtonType::Pause
-                    }
-                } else {
-                    button_type
-                }
-            });
+                        button_type
+                    })
+                });
 
         // Only update states if there's an actual change to avoid unnecessary updates
         if current_hover != self.active_button {
@@ -1066,8 +1079,11 @@ impl ButtonManager {
         match state {
             ElementState::Pressed => {
                 // Find and set pressed state for any button containing the point
-                for (_, button) in self.buttons.iter_mut() {
-                    if button.contains_point(x, y) {
+                for button_type in self.ordered_button_keys(true).into_iter().rev() {
+                    if let Some(button) = self.buttons.get_mut(&button_type) {
+                        if !button.contains_point(x, y) {
+                            continue;
+                        }
                         button.set_state(ButtonState::Pressed);
                         break;
                     }
@@ -1075,18 +1091,24 @@ impl ButtonManager {
             }
             ElementState::Released => {
                 // Check for clicks - only register if mouse released on a pressed button
-                for (&button_type, button) in self.buttons.iter_mut() {
-                    if button.contains_point(x, y) && matches!(button.state, ButtonState::Pressed) {
-                        // Handle special case for pause/play button
+                for button_type in self.ordered_button_keys(true).into_iter().rev() {
+                    if let Some(button) = self.buttons.get_mut(&button_type) {
+                        if !button.contains_point(x, y)
+                            || !matches!(button.state, ButtonState::Pressed)
+                        {
+                            continue;
+                        }
+
                         result = Some(if button_type == ButtonType::Pause {
-                            if let Some(recording) = &self.recording {
-                                if recording.load(Ordering::Relaxed) {
-                                    ButtonType::Pause
-                                } else {
-                                    ButtonType::Play
-                                }
-                            } else {
+                            if self
+                                .recording
+                                .as_ref()
+                                .map(|recording| recording.load(Ordering::Relaxed))
+                                .unwrap_or(false)
+                            {
                                 ButtonType::Pause
+                            } else {
+                                ButtonType::Play
                             }
                         } else {
                             button_type
@@ -1164,8 +1186,10 @@ impl ButtonManager {
             self.update_animations();
 
             // Render all buttons
-            for button in self.buttons.values() {
-                button.render(view, encoder, queue, Some(self.transcription_mode));
+            for button_type in self.ordered_button_keys(true) {
+                if let Some(button) = self.buttons.get(&button_type) {
+                    button.render(view, encoder, queue, Some(self.transcription_mode));
+                }
             }
         }
     }

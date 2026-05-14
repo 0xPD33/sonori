@@ -60,7 +60,7 @@ impl EventHandler {
 
         match delta {
             MouseScrollDelta::LineDelta(_, y) => {
-                *target_scroll_offset = (*target_scroll_offset + y * line_scroll_speed)
+                *target_scroll_offset = (*target_scroll_offset - y * line_scroll_speed)
                     .max(0.0)
                     .min(max_scroll_offset);
             }
@@ -318,5 +318,63 @@ impl EventHandler {
 
         // Reset all button states
         button_manager.reset_hover_states();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn handler() -> EventHandler {
+        EventHandler::new(None, None, None, Arc::new(AtomicU8::new(0)))
+    }
+
+    #[test]
+    fn line_delta_scrolls_up_from_bottom_and_disables_auto_scroll() {
+        let mut handler = handler();
+        let mut target = 100.0;
+
+        handler.handle_scroll(
+            &mut target,
+            100.0,
+            MouseScrollDelta::LineDelta(0.0, 1.0),
+            20.0,
+        );
+
+        assert_eq!(target, 80.0);
+        assert!(!handler.auto_scroll);
+    }
+
+    #[test]
+    fn pixel_delta_scrolls_up_from_bottom_and_disables_auto_scroll() {
+        let mut handler = handler();
+        let mut target = 100.0;
+
+        handler.handle_scroll(
+            &mut target,
+            100.0,
+            MouseScrollDelta::PixelDelta(PhysicalPosition { x: 0.0, y: 20.0 }),
+            20.0,
+        );
+
+        assert_eq!(target, 85.0);
+        assert!(!handler.auto_scroll);
+    }
+
+    #[test]
+    fn scrolling_to_bottom_enables_auto_scroll() {
+        let mut handler = handler();
+        handler.auto_scroll = false;
+        let mut target = 80.0;
+
+        handler.handle_scroll(
+            &mut target,
+            100.0,
+            MouseScrollDelta::LineDelta(0.0, -1.0),
+            20.0,
+        );
+
+        assert_eq!(target, 100.0);
+        assert!(handler.auto_scroll);
     }
 }
