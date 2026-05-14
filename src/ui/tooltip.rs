@@ -524,10 +524,10 @@ impl Tooltip {
 
         use glyphon::{Color, TextArea, TextBounds};
 
-        let buffer = self
-            .cached_buffers
-            .get(&button_type)
-            .expect("Cached buffer not found");
+        let Some(buffer) = self.cached_buffers.get(&button_type) else {
+            eprintln!("Tooltip text buffer missing for {:?}", button_type);
+            return;
+        };
 
         let text_area = TextArea {
             buffer,
@@ -554,17 +554,18 @@ impl Tooltip {
         );
 
         // Prepare text
-        self.text_renderer
-            .prepare(
-                &self.device,
-                &self.queue,
-                &mut self.font_system,
-                &mut self.text_atlas,
-                &self.viewport,
-                [text_area],
-                &mut self.swash_cache,
-            )
-            .expect("Failed to prepare tooltip text");
+        if let Err(e) = self.text_renderer.prepare(
+            &self.device,
+            &self.queue,
+            &mut self.font_system,
+            &mut self.text_atlas,
+            &self.viewport,
+            [text_area],
+            &mut self.swash_cache,
+        ) {
+            eprintln!("Failed to prepare tooltip text: {}", e);
+            return;
+        }
 
         // Render text
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -582,9 +583,12 @@ impl Tooltip {
             occlusion_query_set: None,
         });
 
-        self.text_renderer
-            .render(&self.text_atlas, &self.viewport, &mut render_pass)
-            .expect("Failed to render tooltip text");
+        if let Err(e) =
+            self.text_renderer
+                .render(&self.text_atlas, &self.viewport, &mut render_pass)
+        {
+            eprintln!("Failed to render tooltip text: {}", e);
+        }
 
         drop(render_pass);
 

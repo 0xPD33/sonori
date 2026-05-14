@@ -51,26 +51,67 @@ impl Select {
         self.x + self.width - SELECT_BOX_WIDTH
     }
 
-    fn dropdown_height(&self) -> f32 {
+    pub fn dropdown_height(&self) -> f32 {
         self.options.len() as f32 * DROPDOWN_ITEM_HEIGHT
     }
 
-    pub fn handle_click(&mut self, click_x: f32, click_y: f32) -> bool {
-        let box_x = self.select_box_x();
+    pub fn is_expanded(&self) -> bool {
+        self.expanded
+    }
 
+    pub fn set_expanded(&mut self, expanded: bool) {
+        self.expanded = expanded;
+        if !expanded {
+            self.hovered_index = None;
+        }
+    }
+
+    pub fn has_changed(&self) -> bool {
+        self.changed
+    }
+
+    pub fn clear_changed(&mut self) {
+        self.changed = false;
+    }
+
+    pub fn hit_select_box(&self, click_x: f32, click_y: f32) -> bool {
+        let box_x = self.select_box_x();
+        click_x >= box_x
+            && click_x <= box_x + SELECT_BOX_WIDTH
+            && click_y >= self.y
+            && click_y <= self.y + self.height
+    }
+
+    pub fn dropdown_option_at(&self, click_x: f32, click_y: f32) -> Option<usize> {
+        let box_x = self.select_box_x();
+        let dropdown_y = self.y + self.height;
+        if click_x >= box_x
+            && click_x <= box_x + SELECT_BOX_WIDTH
+            && click_y >= dropdown_y
+            && click_y < dropdown_y + self.dropdown_height()
+        {
+            let index = ((click_y - dropdown_y) / DROPDOWN_ITEM_HEIGHT) as usize;
+            (index < self.options.len()).then_some(index)
+        } else {
+            None
+        }
+    }
+
+    pub fn choose_index(&mut self, index: usize) -> bool {
+        if index < self.options.len() && index != self.selected_index {
+            self.selected_index = index;
+            self.changed = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn handle_click(&mut self, click_x: f32, click_y: f32) -> bool {
         if self.expanded {
             // Check if click is on a dropdown item
-            let dropdown_y = self.y + self.height;
-            if click_x >= box_x
-                && click_x <= box_x + SELECT_BOX_WIDTH
-                && click_y >= dropdown_y
-                && click_y <= dropdown_y + self.dropdown_height()
-            {
-                let index = ((click_y - dropdown_y) / DROPDOWN_ITEM_HEIGHT) as usize;
-                if index < self.options.len() && index != self.selected_index {
-                    self.selected_index = index;
-                    self.changed = true;
-                }
+            if let Some(index) = self.dropdown_option_at(click_x, click_y) {
+                self.choose_index(index);
                 self.expanded = false;
                 return true;
             }
@@ -78,22 +119,14 @@ impl Select {
             // Click anywhere else closes the dropdown
             self.expanded = false;
             // Check if click was on the select box itself (toggle)
-            if click_x >= box_x
-                && click_x <= box_x + SELECT_BOX_WIDTH
-                && click_y >= self.y
-                && click_y <= self.y + self.height
-            {
+            if self.hit_select_box(click_x, click_y) {
                 return true;
             }
             return true; // Consume click to close dropdown
         }
 
         // Check if click is on the select box to expand
-        if click_x >= box_x
-            && click_x <= box_x + SELECT_BOX_WIDTH
-            && click_y >= self.y
-            && click_y <= self.y + self.height
-        {
+        if self.hit_select_box(click_x, click_y) {
             self.expanded = true;
             return true;
         }
@@ -146,15 +179,6 @@ impl Select {
             .unwrap_or("")
     }
 
-    /// Returns true if this select's open dropdown covers the given Y coordinate.
-    pub fn covers_y(&self, y: f32) -> bool {
-        if !self.expanded {
-            return false;
-        }
-        let dropdown_y = self.y + self.height;
-        y >= dropdown_y && y < dropdown_y + self.dropdown_height()
-    }
-
     pub fn render(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -164,7 +188,29 @@ impl Select {
         queue: &wgpu::Queue,
         window_width: u32,
         window_height: u32,
-        covered: bool,
+    ) {
+        self.render_at(
+            self.y,
+            encoder,
+            view,
+            widget_renderer,
+            text_items,
+            queue,
+            window_width,
+            window_height,
+        );
+    }
+
+    pub fn render_at(
+        &self,
+        y: f32,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        widget_renderer: &WidgetRenderer,
+        text_items: &mut Vec<TextItem>,
+        queue: &wgpu::Queue,
+        window_width: u32,
+        window_height: u32,
     ) {
         let box_x = self.select_box_x();
 
@@ -173,7 +219,7 @@ impl Select {
         text_items.push(TextItem {
             text: self.label.clone(),
             x: self.x + 4.0,
-            y: self.y + 4.0,
+            y: y + 4.0,
             scale: 1.0,
             color: [0.604, 0.604, 0.670, 1.0],
             max_width: label_width,
@@ -185,7 +231,7 @@ impl Select {
             view,
             queue,
             box_x,
-            self.y,
+            y,
             SELECT_BOX_WIDTH,
             self.height,
             4.0,
@@ -194,39 +240,38 @@ impl Select {
             window_height,
         );
 
-        if !covered {
-            // Collect selected option text item
-            if let Some(option) = self.options.get(self.selected_index) {
-                text_items.push(TextItem {
-                    text: option.label.clone(),
-                    x: box_x + 6.0,
-                    y: self.y + 4.0,
-                    scale: 1.0,
-                    color: [0.604, 0.604, 0.670, 1.0],
-                    max_width: SELECT_BOX_WIDTH - CHEVRON_WIDTH - 10.0,
-                });
-            }
-
-            // Collect chevron text item
-            let chevron = if self.expanded {
-                "\u{25B2}"
-            } else {
-                "\u{25BC}"
-            };
+        // Collect selected option text item. Dropdowns are rendered in a later overlay
+        // pass, so controls beneath them should remain stable instead of disappearing.
+        if let Some(option) = self.options.get(self.selected_index) {
             text_items.push(TextItem {
-                text: chevron.to_string(),
-                x: box_x + SELECT_BOX_WIDTH - CHEVRON_WIDTH - 4.0,
-                y: self.y + 4.0,
-                scale: 0.85,
-                color: [0.171, 0.171, 0.214, 0.7],
-                max_width: CHEVRON_WIDTH,
+                text: option.label.clone(),
+                x: box_x + 6.0,
+                y: y + 4.0,
+                scale: 1.0,
+                color: [0.604, 0.604, 0.670, 1.0],
+                max_width: SELECT_BOX_WIDTH - CHEVRON_WIDTH - 10.0,
             });
         }
+
+        // Collect chevron text item
+        let chevron = if self.expanded {
+            "\u{25B2}"
+        } else {
+            "\u{25BC}"
+        };
+        text_items.push(TextItem {
+            text: chevron.to_string(),
+            x: box_x + SELECT_BOX_WIDTH - CHEVRON_WIDTH - 4.0,
+            y: y + 4.0,
+            scale: 0.85,
+            color: [0.171, 0.171, 0.214, 0.7],
+            max_width: CHEVRON_WIDTH,
+        });
     }
 
-    /// Render the dropdown overlay separately, so it draws on top of all other widgets.
-    pub fn render_dropdown(
+    pub fn render_dropdown_at(
         &self,
+        y: f32,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         widget_renderer: &WidgetRenderer,
@@ -240,7 +285,7 @@ impl Select {
         }
 
         let box_x = self.select_box_x();
-        let dropdown_y = self.y + self.height;
+        let dropdown_y = y + self.height;
 
         // Draw dropdown background over the select box area
         widget_renderer.draw_rounded_rect(

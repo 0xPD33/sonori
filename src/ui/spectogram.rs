@@ -7,6 +7,7 @@ use winit::dpi::PhysicalSize;
 /// Configuration for spectrogram visualization parameters
 #[derive(Debug, Clone)]
 pub struct SpectrogramConfig {
+    pub skin: crate::config::SpectrogramSkin,
     pub fft_size: usize,
     pub animation_speed: f32,
     pub min_amplitude: f32,
@@ -22,11 +23,14 @@ pub struct SpectrogramConfig {
     pub next_bar_weight: f32,
     pub min_edge_factor: f32,
     pub edge_factor_range: f32,
+    pub bar_spacing_multiplier: f32,
+    pub bar_color: [f32; 4],
 }
 
 impl Default for SpectrogramConfig {
     fn default() -> Self {
         Self {
+            skin: crate::config::SpectrogramSkin::Bars,
             fft_size: 512,
             animation_speed: 0.85,
             min_amplitude: 0.025,
@@ -42,6 +46,8 @@ impl Default for SpectrogramConfig {
             next_bar_weight: 0.2,
             min_edge_factor: 0.75,
             edge_factor_range: 0.25,
+            bar_spacing_multiplier: 1.0,
+            bar_color: [1.0, 1.0, 1.0, 1.0],
         }
     }
 }
@@ -325,6 +331,16 @@ impl Spectrogram {
         self.update_instance_buffer();
     }
 
+    pub fn apply_ui_config(&mut self, ui_config: &crate::config::UiConfig) {
+        self.config.bar_color = ui_config.effective_spectrogram_color();
+        self.config.skin = ui_config.spectrogram_skin;
+        apply_skin_config(&mut self.config);
+        let new_template =
+            create_bar_instance_template(self.bar_data.len(), self.size.width, &self.config);
+        self.bar_instance_template = new_template;
+        self.update_instance_buffer();
+    }
+
     /// Processes audio samples and updates the target bar heights
     ///
     /// This is a key performance-critical function that converts audio samples
@@ -361,48 +377,34 @@ impl Spectrogram {
         let mut smoothed_data = std::mem::take(&mut self.target_bar_data);
         smoothed_data.resize(num_bars, 0.0);
 
-        // Process audio samples to calculate bar heights
-        if audio_samples.len() < num_bars {
-            // Optimize for fewer samples than bars
-            let step = audio_samples.len().max(1) / num_bars.max(1);
+        // Process audio samples to calculate bar heights. Each visual bar gets a
+        // small bucket of raw samples so skins can use peak/RMS dynamics without
+        // depending on one arbitrary sample.
+        for (i, value) in smoothed_data.iter_mut().enumerate().take(num_bars) {
+            let (start_idx, end_idx) = sample_range_for_bar(i, num_bars, audio_samples.len());
+            let stats = audio_bucket_stats(&audio_samples[start_idx..end_idx]);
 
-            for (i, value) in smoothed_data.iter_mut().enumerate().take(num_bars) {
-                let idx = (i * step).min(audio_samples.len().saturating_sub(1));
-                let sample = if idx < audio_samples.len() {
-                    audio_samples[idx].abs()
-                } else {
-                    0.0
-                };
-
-                // Apply a non-linear scaling (capped at MAX_BAR_HEIGHT)
-                *value =
-                    (sample * self.config.sample_amplification).min(self.config.max_bar_height);
-            }
-        } else {
-            // Optimize for more samples than bars
-            let samples_per_bar = audio_samples.len() / num_bars;
-
-            for (i, value) in smoothed_data.iter_mut().enumerate().take(num_bars) {
-                let start_idx = i * samples_per_bar;
-                let end_idx = ((i + 1) * samples_per_bar).min(audio_samples.len());
-                let segment_len = end_idx - start_idx;
-
-                if segment_len > 0 {
-                    // Use iterator for better optimization potential
-                    let sum: f32 = audio_samples[start_idx..end_idx]
-                        .iter()
-                        .map(|&x| x.abs())
-                        .sum();
-
-                    let avg = sum / segment_len as f32;
-
-                    // Apply non-linear scaling
-                    *value = (avg.sqrt() * self.config.scaled_amplification)
-                        .min(self.config.max_bar_height);
-                } else {
-                    *value = self.config.min_amplitude;
+            *value = match self.config.skin {
+                crate::config::SpectrogramSkin::Waveform => {
+                    let sign = if stats.signed_peak >= 0.0 { 1.0 } else { -1.0 };
+                    let envelope = stats.rms * 0.70 + stats.peak_abs * 0.30;
+                    let shaped = (envelope * self.config.sample_amplification).sqrt()
+                        * self.config.scaled_amplification;
+                    (sign * shaped).clamp(-self.config.max_bar_height, self.config.max_bar_height)
                 }
-            }
+                crate::config::SpectrogramSkin::Meter => {
+                    let envelope = stats.peak_abs * 0.78 + stats.rms * 0.22;
+                    (envelope.sqrt() * self.config.scaled_amplification)
+                        .min(self.config.max_bar_height)
+                        .max(self.config.min_amplitude)
+                }
+                crate::config::SpectrogramSkin::Bars => {
+                    let envelope = stats.avg_abs * 0.55 + stats.rms * 0.30 + stats.peak_abs * 0.15;
+                    (envelope.sqrt() * self.config.scaled_amplification)
+                        .min(self.config.max_bar_height)
+                        .max(self.config.min_amplitude)
+                }
+            };
         }
 
         // Apply smoothing without cloning the entire array
@@ -501,7 +503,11 @@ impl Spectrogram {
             }
 
             // Keep values in valid range
-            *bar = (*bar).clamp(self.config.min_amplitude, self.config.max_amplitude);
+            if self.config.skin == crate::config::SpectrogramSkin::Waveform {
+                *bar = (*bar).clamp(-self.config.max_amplitude, self.config.max_amplitude);
+            } else {
+                *bar = (*bar).clamp(self.config.min_amplitude, self.config.max_amplitude);
+            }
         }
 
         self.update_instance_buffer();
@@ -573,7 +579,8 @@ fn create_bar_instance_template(
     let bar_width = total_width / num_bars as f32;
 
     // Calculate spacing dynamically based on number of bars
-    let spacing_factor = (0.2 * (50.0 / num_bars as f32)).clamp(0.05, 0.2);
+    let spacing_factor =
+        (0.2 * (50.0 / num_bars as f32) * config.bar_spacing_multiplier).clamp(0.03, 0.70);
     let bar_spacing = bar_width * spacing_factor;
     let actual_bar_width = bar_width - bar_spacing;
 
@@ -616,17 +623,146 @@ fn fill_bar_instances(
     for (&amplitude, template) in bar_data.iter().zip(templates.iter()) {
         let adjusted_amplitude = amplitude * template.edge_factor;
 
-        let bar_height = (adjusted_amplitude * height as f32).max(2.0);
+        let bar_height = (adjusted_amplitude.abs() * height as f32).max(2.0);
 
-        let norm_y = (height as f32 - bar_height) / (2.0 * height as f32) * 2.0 - 1.0;
         let norm_height = bar_height / height as f32 * 2.0;
+        let norm_y = match config.skin {
+            crate::config::SpectrogramSkin::Bars => {
+                (height as f32 - bar_height) / (2.0 * height as f32) * 2.0 - 1.0
+            }
+            crate::config::SpectrogramSkin::Waveform => {
+                if adjusted_amplitude >= 0.0 {
+                    0.0
+                } else {
+                    -norm_height
+                }
+            }
+            crate::config::SpectrogramSkin::Meter => -1.0,
+        };
 
-        let color = [1.0, 1.0, 1.0, adjusted_amplitude.max(config.min_opacity)];
+        let color = [
+            config.bar_color[0],
+            config.bar_color[1],
+            config.bar_color[2],
+            adjusted_amplitude.abs().max(config.min_opacity) * config.bar_color[3],
+        ];
 
         instances.push(BarInstance {
             position: [template.norm_x, norm_y],
             size: [template.norm_width, norm_height],
             color,
         });
+    }
+}
+
+fn apply_skin_config(config: &mut SpectrogramConfig) {
+    match config.skin {
+        crate::config::SpectrogramSkin::Bars => {
+            config.animation_speed = 0.85;
+            config.min_amplitude = 0.025;
+            config.max_bar_height = 0.9;
+            config.sample_amplification = 1.1;
+            config.scaled_amplification = 1.5;
+            config.prev_bar_weight = 0.2;
+            config.current_bar_weight = 0.6;
+            config.next_bar_weight = 0.2;
+            config.min_edge_factor = 0.75;
+            config.edge_factor_range = 0.25;
+            config.bar_spacing_multiplier = 1.0;
+        }
+        crate::config::SpectrogramSkin::Waveform => {
+            config.animation_speed = 1.15;
+            config.min_amplitude = 0.0;
+            config.max_bar_height = 0.78;
+            config.sample_amplification = 1.9;
+            config.scaled_amplification = 1.08;
+            config.prev_bar_weight = 0.16;
+            config.current_bar_weight = 0.68;
+            config.next_bar_weight = 0.16;
+            config.min_edge_factor = 1.0;
+            config.edge_factor_range = 0.0;
+            config.bar_spacing_multiplier = 0.35;
+        }
+        crate::config::SpectrogramSkin::Meter => {
+            config.animation_speed = 1.4;
+            config.min_amplitude = 0.015;
+            config.max_bar_height = 0.95;
+            config.sample_amplification = 1.7;
+            config.scaled_amplification = 2.1;
+            config.prev_bar_weight = 0.08;
+            config.current_bar_weight = 0.84;
+            config.next_bar_weight = 0.08;
+            config.min_edge_factor = 0.95;
+            config.edge_factor_range = 0.05;
+            config.bar_spacing_multiplier = 3.0;
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct AudioBucketStats {
+    avg_abs: f32,
+    rms: f32,
+    peak_abs: f32,
+    signed_peak: f32,
+}
+
+fn sample_range_for_bar(index: usize, bar_count: usize, sample_count: usize) -> (usize, usize) {
+    if sample_count == 0 || bar_count == 0 {
+        return (0, 0);
+    }
+
+    let start = index * sample_count / bar_count;
+    let mut end = (index + 1) * sample_count / bar_count;
+    if end <= start {
+        end = start + 1;
+    }
+    (start.min(sample_count), end.min(sample_count))
+}
+
+fn audio_bucket_stats(samples: &[f32]) -> AudioBucketStats {
+    if samples.is_empty() {
+        return AudioBucketStats::default();
+    }
+
+    let mut sum_abs = 0.0;
+    let mut sum_sq = 0.0;
+    let mut signed_peak = 0.0f32;
+
+    for &sample in samples {
+        let abs = sample.abs();
+        sum_abs += abs;
+        sum_sq += sample * sample;
+        if abs > signed_peak.abs() {
+            signed_peak = sample;
+        }
+    }
+
+    let len = samples.len() as f32;
+    AudioBucketStats {
+        avg_abs: sum_abs / len,
+        rms: (sum_sq / len).sqrt(),
+        peak_abs: signed_peak.abs(),
+        signed_peak,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sample_range_for_bar_is_non_empty_for_sparse_samples() {
+        assert_eq!(sample_range_for_bar(0, 4, 2), (0, 1));
+        assert_eq!(sample_range_for_bar(3, 4, 2), (1, 2));
+    }
+
+    #[test]
+    fn audio_bucket_stats_keeps_dominant_signed_peak() {
+        let stats = audio_bucket_stats(&[-0.2, 0.1, 0.35, -0.25]);
+
+        assert_eq!(stats.signed_peak, 0.35);
+        assert_eq!(stats.peak_abs, 0.35);
+        assert!(stats.rms > stats.avg_abs * 0.9);
     }
 }

@@ -42,6 +42,7 @@ fn target_frame_duration(target_fps: u32) -> std::time::Duration {
 pub struct WindowState {
     pub window: Arc<dyn Window>,
     pub instance: wgpu::Instance,
+    pub adapter: wgpu::Adapter,
     pub surface: wgpu::Surface<'static>,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
@@ -108,6 +109,7 @@ impl WindowState {
         >,
         transcription_mode_ref: Arc<std::sync::atomic::AtomicU8>,
         display_config: &DisplayConfig,
+        ui_config: &UiConfig,
         window_width: u32,
         window_height: u32,
         spectrogram_width: u32,
@@ -280,9 +282,6 @@ impl WindowState {
             )))
         });
 
-        let (app_config, _) = crate::config::read_app_config_with_path();
-        let ui_config = app_config.ui_config;
-
         // Status bar height: ~18px scaled
         let status_bar_height = 20u32;
 
@@ -293,7 +292,7 @@ impl WindowState {
             &config,
             PhysicalSize::new(config.width, config.height),
             backend_status.clone(),
-            &ui_config,
+            ui_config,
         );
 
         // Create the scrollbar
@@ -332,16 +331,17 @@ impl WindowState {
             &Arc::new(device.clone()),
             &Arc::new(queue.clone()),
             config.format,
-            &ui_config,
+            ui_config,
         );
 
         // Calculate target frame duration from display config
         let target_frame_duration = target_frame_duration(display_config.target_fps);
-        let typewriter_enabled = ui_config.typewriter_effect;
+        let typewriter_enabled = ui_config.effective_typewriter_enabled();
 
         Self {
             window,
             instance,
+            adapter,
             surface,
             device,
             queue,
@@ -402,7 +402,7 @@ impl WindowState {
 
             // Typewriter effect
             typewriter: super::typewriter::TypewriterEffect::new(),
-            ui_config,
+            ui_config: ui_config.clone(),
             typewriter_enabled,
             last_processing_state: crate::ui::common::ProcessingState::Idle,
 
@@ -459,15 +459,20 @@ impl WindowState {
                 size,
                 self.config.format,
             );
+            let mut spectrogram = spectrogram;
+            spectrogram.apply_ui_config(&self.ui_config);
             self.spectrogram = Some(spectrogram);
         }
     }
 
     pub fn apply_runtime_config(&mut self, display_config: &DisplayConfig, ui_config: &UiConfig) {
         self.target_frame_duration = target_frame_duration(display_config.target_fps);
-        self.typewriter_enabled = ui_config.typewriter_effect;
+        self.typewriter_enabled = ui_config.effective_typewriter_enabled();
         self.status_bar.apply_ui_config(ui_config);
         self.timer_badge.apply_ui_config(ui_config);
+        if let Some(spectrogram) = &mut self.spectrogram {
+            spectrogram.apply_ui_config(ui_config);
+        }
         self.ui_config = ui_config.clone();
         self.window.request_redraw();
     }
@@ -609,6 +614,8 @@ impl WindowState {
                 size,
                 self.config.format,
             );
+            let mut spectrogram = spectrogram;
+            spectrogram.apply_ui_config(&self.ui_config);
             self.spectrogram = Some(spectrogram);
         }
 
@@ -793,9 +800,9 @@ impl WindowState {
             self.loading_animation
                 .get_processing_color(processing_state)
         } else if is_speaking {
-            self.ui_config.speaking_color
+            self.ui_config.effective_speaking_color()
         } else {
-            self.ui_config.idle_color
+            self.ui_config.effective_idle_color()
         };
 
         // Render loading animation if processing, otherwise render text
@@ -978,7 +985,6 @@ impl WindowState {
             window_size.height,
             &mut self.button_manager,
         );
-
         self.window.request_redraw();
     }
 

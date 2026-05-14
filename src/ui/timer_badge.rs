@@ -53,7 +53,7 @@ impl TimerBadge {
             fade_progress: 0.0,
             pulse_phase: 0.0,
             last_update: Instant::now(),
-            indicator_color: ui_config.recording_indicator_color,
+            indicator_color: ui_config.effective_recording_indicator_color(),
             show_indicator: ui_config.show_recording_indicator,
             font_system,
             swash_cache,
@@ -84,7 +84,7 @@ impl TimerBadge {
     }
 
     pub fn apply_ui_config(&mut self, ui_config: &crate::config::UiConfig) {
-        self.indicator_color = ui_config.recording_indicator_color;
+        self.indicator_color = ui_config.effective_recording_indicator_color();
         self.show_indicator = ui_config.show_recording_indicator;
     }
 
@@ -173,7 +173,10 @@ impl TimerBadge {
                 self.cached_time_str = time_str;
             }
 
-            let timer_buffer = self.cached_timer_buffer.as_ref().unwrap();
+            let Some(timer_buffer) = self.cached_timer_buffer.as_ref() else {
+                eprintln!("Timer badge buffer missing after cache update");
+                return;
+            };
 
             let text_width = timer_buffer
                 .layout_runs()
@@ -226,20 +229,24 @@ impl TimerBadge {
                     indicator_alpha,
                 );
 
-                text_areas.push(TextArea {
-                    buffer: self.cached_indicator_buffer.as_ref().unwrap(),
-                    left: content_x,
-                    top: text_y,
-                    scale: 1.0,
-                    bounds: TextBounds {
-                        left: content_x as i32,
-                        top: text_y as i32,
-                        right: (content_x + indicator_size + 20.0) as i32,
-                        bottom: (text_y + line_height) as i32,
-                    },
-                    default_color: indicator_color,
-                    custom_glyphs: &[],
-                });
+                if let Some(indicator_buffer) = self.cached_indicator_buffer.as_ref() {
+                    text_areas.push(TextArea {
+                        buffer: indicator_buffer,
+                        left: content_x,
+                        top: text_y,
+                        scale: 1.0,
+                        bounds: TextBounds {
+                            left: content_x as i32,
+                            top: text_y as i32,
+                            right: (content_x + indicator_size + 20.0) as i32,
+                            bottom: (text_y + line_height) as i32,
+                        },
+                        default_color: indicator_color,
+                        custom_glyphs: &[],
+                    });
+                } else {
+                    eprintln!("Timer badge indicator buffer missing after cache update");
+                }
             }
 
             text_areas.push(TextArea {
@@ -258,17 +265,18 @@ impl TimerBadge {
             });
 
             // Prepare and render text
-            self.text_renderer
-                .prepare(
-                    &self.device,
-                    queue,
-                    &mut self.font_system,
-                    &mut self.text_atlas,
-                    &self.viewport,
-                    text_areas,
-                    &mut self.swash_cache,
-                )
-                .expect("Failed to prepare timer text");
+            if let Err(e) = self.text_renderer.prepare(
+                &self.device,
+                queue,
+                &mut self.font_system,
+                &mut self.text_atlas,
+                &self.viewport,
+                text_areas,
+                &mut self.swash_cache,
+            ) {
+                eprintln!("Failed to prepare timer text: {}", e);
+                return;
+            }
 
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Timer Badge Render Pass"),
@@ -285,9 +293,12 @@ impl TimerBadge {
                 occlusion_query_set: None,
             });
 
-            self.text_renderer
-                .render(&self.text_atlas, &self.viewport, &mut render_pass)
-                .expect("Failed to render timer text");
+            if let Err(e) =
+                self.text_renderer
+                    .render(&self.text_atlas, &self.viewport, &mut render_pass)
+            {
+                eprintln!("Failed to render timer text: {}", e);
+            }
 
             drop(render_pass);
 

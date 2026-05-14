@@ -24,6 +24,7 @@ pub struct BatchTextRenderer {
     device: Arc<Device>,
     queue: Arc<Queue>,
     size: PhysicalSize<u32>,
+    buffers: Vec<Buffer>,
     _cache_ref: Cache,
 }
 
@@ -37,6 +38,7 @@ impl BatchTextRenderer {
         let mut font_system = FontSystem::new();
         let swash_cache = SwashCache::new();
 
+        // Keep settings/menu text on the same system font path as transcript text.
         font_system.db_mut().load_system_fonts();
 
         let cache_ref = Cache::new(&device);
@@ -54,6 +56,7 @@ impl BatchTextRenderer {
             device,
             queue,
             size,
+            buffers: Vec::new(),
             _cache_ref: cache_ref,
         }
     }
@@ -87,11 +90,14 @@ impl BatchTextRenderer {
             },
         );
 
-        let mut buffers: Vec<Buffer> = Vec::with_capacity(items.len());
+        while self.buffers.len() < items.len() {
+            self.buffers
+                .push(Buffer::new(&mut self.font_system, Metrics::new(10.0, 11.0)));
+        }
 
-        for item in items {
+        for (buffer, item) in self.buffers.iter_mut().zip(items.iter()) {
             let font_size = 10.0 * item.scale;
-            let mut buffer = Buffer::new(
+            buffer.set_metrics(
                 &mut self.font_system,
                 Metrics::new(font_size, font_size * 1.1),
             );
@@ -113,10 +119,9 @@ impl BatchTextRenderer {
             );
 
             buffer.shape_until_scroll(&mut self.font_system, true);
-            buffers.push(buffer);
         }
 
-        let text_areas: Vec<TextArea> = buffers
+        let text_areas: Vec<TextArea> = self.buffers[..items.len()]
             .iter()
             .zip(items.iter())
             .map(|(buffer, item)| {
@@ -144,41 +149,44 @@ impl BatchTextRenderer {
             })
             .collect();
 
-        if self
-            .renderer
-            .prepare(
-                &self.device,
-                &self.queue,
-                &mut self.font_system,
-                &mut self.atlas,
-                &self.viewport,
-                text_areas,
-                &mut self.swash_cache,
-            )
-            .is_ok()
-        {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Batch Text Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-
-            render_pass.set_scissor_rect(0, 0, self.size.width, self.size.height);
-
-            let _ = self
-                .renderer
-                .render(&self.atlas, &self.viewport, &mut render_pass);
+        if let Err(e) = self.renderer.prepare(
+            &self.device,
+            &self.queue,
+            &mut self.font_system,
+            &mut self.atlas,
+            &self.viewport,
+            text_areas,
+            &mut self.swash_cache,
+        ) {
+            eprintln!("Failed to prepare batched settings text: {}", e);
+            return;
         }
 
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Batch Text Render Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+
+        render_pass.set_scissor_rect(0, 0, self.size.width, self.size.height);
+
+        if let Err(e) = self
+            .renderer
+            .render(&self.atlas, &self.viewport, &mut render_pass)
+        {
+            eprintln!("Failed to render batched settings text: {}", e);
+        }
+
+        drop(render_pass);
         self.atlas.trim();
     }
 }

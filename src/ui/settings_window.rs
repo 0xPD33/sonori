@@ -23,6 +23,7 @@ impl SettingsWindow {
     pub fn new(
         window: Box<dyn Window>,
         instance: &wgpu::Instance,
+        adapter: &wgpu::Adapter,
         device: wgpu::Device,
         queue: wgpu::Queue,
         surface_format: wgpu::TextureFormat,
@@ -30,23 +31,16 @@ impl SettingsWindow {
         backend_command_tx: Option<
             tokio::sync::mpsc::UnboundedSender<crate::backend_manager::BackendCommand>,
         >,
-    ) -> Self {
+    ) -> Result<Self, String> {
         let window: Arc<dyn Window> = Arc::from(window);
 
         let surface = instance
             .create_surface(window.clone())
-            .expect("Failed to create GPU surface for settings window.");
+            .map_err(|e| format!("Failed to create GPU surface for settings window: {e}"))?;
 
         let size = window.outer_size();
 
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::default(),
-            compatible_surface: Some(&surface),
-            force_fallback_adapter: false,
-        }))
-        .expect("No suitable GPU adapter found.");
-
-        let surface_caps = surface.get_capabilities(&adapter);
+        let surface_caps = surface.get_capabilities(adapter);
 
         let alpha_mode = if surface_caps
             .alpha_modes
@@ -86,7 +80,7 @@ impl SettingsWindow {
         panel.animation_active = false;
         panel.populate_from_config(initial_config);
 
-        Self {
+        Ok(Self {
             window,
             surface,
             device,
@@ -95,7 +89,7 @@ impl SettingsWindow {
             panel,
             backend_command_tx,
             applied_config: None,
-        }
+        })
     }
 
     pub fn draw(&mut self) {
@@ -152,6 +146,10 @@ impl SettingsWindow {
 
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
+
+        if self.panel.needs_redraw() {
+            self.window.request_redraw();
+        }
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -197,13 +195,17 @@ impl SettingsWindow {
 
     fn apply_settings_changes(&mut self) {
         let (mut app_config, _) = crate::config::read_app_config_with_path();
+        let previous_config = app_config.clone();
         let (any_changed, needs_reload) = self.panel.apply_pending_changes(&mut app_config);
         if any_changed {
+            log_settings_changes(&previous_config, &app_config, needs_reload);
+
             if let Err(e) = crate::config::write_app_config(&app_config) {
                 eprintln!("Failed to write config: {}", e);
                 return;
             }
             self.panel.populate_from_config(&app_config);
+            self.panel.clear_pending_changes();
             self.applied_config = Some(app_config.clone());
             if needs_reload {
                 if let Some(tx) = &self.backend_command_tx {
@@ -214,5 +216,43 @@ impl SettingsWindow {
                 }
             }
         }
+    }
+}
+
+fn log_settings_changes(previous: &AppConfig, next: &AppConfig, needs_reload: bool) {
+    let mut changes = Vec::new();
+
+    if previous.backend_config.backend != next.backend_config.backend {
+        changes.push(format!(
+            "backend {} -> {}",
+            previous.backend_config.backend, next.backend_config.backend
+        ));
+    }
+    if previous.general_config.model != next.general_config.model {
+        changes.push(format!(
+            "model {} -> {}",
+            previous.general_config.model, next.general_config.model
+        ));
+    }
+    if previous.ui_config.typewriter_effect != next.ui_config.typewriter_effect {
+        changes.push(format!(
+            "typewriter {} -> {}",
+            previous.ui_config.typewriter_effect, next.ui_config.typewriter_effect
+        ));
+    }
+
+    if changes.is_empty() && !needs_reload {
+        return;
+    }
+
+    if changes.is_empty() {
+        println!("Applying settings changes: backend reload queued");
+    } else if needs_reload {
+        println!(
+            "Applying settings changes: {} (backend reload queued)",
+            changes.join(", ")
+        );
+    } else {
+        println!("Applying settings changes: {}", changes.join(", "));
     }
 }

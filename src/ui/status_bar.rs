@@ -159,7 +159,7 @@ impl StatusBar {
             recording_dot_renderer,
             recording_timer_renderer,
             status,
-            recording_indicator_color: ui_config.recording_indicator_color,
+            recording_indicator_color: ui_config.effective_recording_indicator_color(),
             show_recording_indicator: ui_config.show_recording_indicator,
             pulse_phase: 0.0,
             last_update: std::time::Instant::now(),
@@ -167,7 +167,7 @@ impl StatusBar {
     }
 
     pub fn apply_ui_config(&mut self, ui_config: &UiConfig) {
-        self.recording_indicator_color = ui_config.recording_indicator_color;
+        self.recording_indicator_color = ui_config.effective_recording_indicator_color();
         self.show_recording_indicator = ui_config.show_recording_indicator;
     }
 

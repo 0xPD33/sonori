@@ -87,6 +87,18 @@ impl Toggle {
         self.changed = true;
     }
 
+    pub fn has_changed(&self) -> bool {
+        self.changed
+    }
+
+    pub fn clear_changed(&mut self) {
+        self.changed = false;
+    }
+
+    pub fn is_animating(&self) -> bool {
+        self.animation_active
+    }
+
     pub fn take_changed(&mut self) -> Option<bool> {
         if self.changed {
             self.changed = false;
@@ -106,7 +118,8 @@ impl Toggle {
         window_width: u32,
         window_height: u32,
     ) {
-        self.render_ex(
+        self.render_at(
+            self.y,
             encoder,
             view,
             widget_renderer,
@@ -114,12 +127,12 @@ impl Toggle {
             queue,
             window_width,
             window_height,
-            false,
         );
     }
 
-    pub fn render_ex(
+    pub fn render_at(
         &self,
+        y: f32,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         widget_renderer: &WidgetRenderer,
@@ -127,22 +140,20 @@ impl Toggle {
         queue: &wgpu::Queue,
         window_width: u32,
         window_height: u32,
-        covered: bool,
     ) {
-        if !covered {
-            // Collect label text item
-            text_items.push(TextItem {
-                text: self.label.clone(),
-                x: self.x + 4.0,
-                y: self.y + 4.0,
-                scale: 1.0,
-                color: [0.604, 0.604, 0.670, 1.0],
-                max_width: self.width - TOGGLE_WIDTH - 8.0,
-            });
-        }
+        // Collect label text item. Overlay widgets draw above this row without
+        // mutating the row's own visual state.
+        text_items.push(TextItem {
+            text: self.label.clone(),
+            x: self.x + 4.0,
+            y: y + 4.0,
+            scale: 1.0,
+            color: [0.604, 0.604, 0.670, 1.0],
+            max_width: self.width - TOGGLE_WIDTH - 8.0,
+        });
 
         let toggle_x = self.x + self.width - TOGGLE_WIDTH;
-        let toggle_y = self.y + (self.height - TOGGLE_HEIGHT) / 2.0;
+        let toggle_y = y + (self.height - TOGGLE_HEIGHT) / 2.0;
 
         // Interpolate background color between off (gray) and on (accent green)
         let off_color: [f32; 4] = [0.064, 0.064, 0.083, 1.0];

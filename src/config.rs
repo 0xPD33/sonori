@@ -241,6 +241,12 @@ impl Default for PostProcessConfig {
 
 /// Configuration for transcription enhancement ("Magic Mode")
 /// Uses llama.cpp with GGUF models for GPU-accelerated inference
+pub const DEFAULT_ENHANCEMENT_SYSTEM_PROMPT: &str = "Rewrite the transcript into clean, natural text while preserving the speaker's meaning. Fix obvious transcription artifacts, punctuation, and casing. Do not add facts, explanations, or commentary.";
+
+fn default_enhancement_system_prompt() -> Option<String> {
+    Some(DEFAULT_ENHANCEMENT_SYSTEM_PROMPT.to_string())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct EnhancementConfig {
@@ -249,6 +255,7 @@ pub struct EnhancementConfig {
     /// Model identifier (HuggingFace format): "owner/repo/filename.gguf"
     pub model: Option<String>,
     /// Custom system prompt for the enhancement model
+    #[serde(default = "default_enhancement_system_prompt")]
     pub system_prompt: Option<String>,
     /// Maximum tokens to generate (default: 256)
     pub max_tokens: usize,
@@ -259,7 +266,7 @@ impl Default for EnhancementConfig {
         Self {
             enabled: false,
             model: None,
-            system_prompt: None,
+            system_prompt: default_enhancement_system_prompt(),
             max_tokens: 256,
         }
     }
@@ -403,10 +410,65 @@ impl Default for WindowBehaviorConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum VisualThemePreset {
+    #[default]
+    Focus,
+    Pulse,
+    Terminal,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum SpectrogramSkin {
+    #[default]
+    Bars,
+    Waveform,
+    Meter,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ResolvedVisualTheme {
+    pub speaking_color: [f32; 4],
+    pub idle_color: [f32; 4],
+    pub recording_indicator_color: [f32; 4],
+    pub typewriter_default: bool,
+}
+
+impl VisualThemePreset {
+    pub fn resolve(self) -> ResolvedVisualTheme {
+        match self {
+            VisualThemePreset::Focus => ResolvedVisualTheme {
+                speaking_color: [0.1, 0.9, 0.5, 1.0],
+                idle_color: [1.0, 0.85, 0.15, 1.0],
+                recording_indicator_color: [0.9, 0.2, 0.2, 1.0],
+                typewriter_default: false,
+            },
+            VisualThemePreset::Pulse => ResolvedVisualTheme {
+                speaking_color: [0.14, 0.95, 0.72, 1.0],
+                idle_color: [0.82, 0.88, 1.0, 1.0],
+                recording_indicator_color: [1.0, 0.18, 0.32, 1.0],
+                typewriter_default: false,
+            },
+            VisualThemePreset::Terminal => ResolvedVisualTheme {
+                speaking_color: [0.40, 1.0, 0.52, 1.0],
+                idle_color: [0.70, 0.95, 0.72, 1.0],
+                recording_indicator_color: [0.40, 1.0, 0.52, 1.0],
+                typewriter_default: true,
+            },
+        }
+    }
+}
+
 /// Configuration for UI appearance settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiConfig {
+    /// Curated visual theme preset
+    pub visual_theme: VisualThemePreset,
+
+    /// Spectrogram rendering skin
+    pub spectrogram_skin: SpectrogramSkin,
+
     /// Base font size for transcript text (default: 10.0)
     /// Actual rendered size is font_size * display_scale
     pub font_size: f32,
@@ -430,6 +492,8 @@ pub struct UiConfig {
 impl Default for UiConfig {
     fn default() -> Self {
         Self {
+            visual_theme: VisualThemePreset::Focus,
+            spectrogram_skin: SpectrogramSkin::Bars,
             font_size: 10.0,
             speaking_color: [0.1, 0.9, 0.5, 1.0], // Teal-green
             idle_color: [1.0, 0.85, 0.15, 1.0],   // Gold
@@ -437,6 +501,41 @@ impl Default for UiConfig {
             show_recording_indicator: true,
             typewriter_effect: false,
         }
+    }
+}
+
+impl UiConfig {
+    pub fn effective_speaking_color(&self) -> [f32; 4] {
+        match self.visual_theme {
+            VisualThemePreset::Focus => self.speaking_color,
+            _ => self.visual_theme.resolve().speaking_color,
+        }
+    }
+
+    pub fn effective_idle_color(&self) -> [f32; 4] {
+        match self.visual_theme {
+            VisualThemePreset::Focus => self.idle_color,
+            _ => self.visual_theme.resolve().idle_color,
+        }
+    }
+
+    pub fn effective_recording_indicator_color(&self) -> [f32; 4] {
+        match self.visual_theme {
+            VisualThemePreset::Focus => self.recording_indicator_color,
+            _ => self.visual_theme.resolve().recording_indicator_color,
+        }
+    }
+
+    pub fn effective_spectrogram_color(&self) -> [f32; 4] {
+        match self.visual_theme {
+            VisualThemePreset::Focus => [1.0, 1.0, 1.0, 1.0],
+            VisualThemePreset::Pulse => [0.18, 0.95, 0.72, 1.0],
+            VisualThemePreset::Terminal => [0.40, 1.0, 0.52, 1.0],
+        }
+    }
+
+    pub fn effective_typewriter_enabled(&self) -> bool {
+        self.typewriter_effect || self.visual_theme.resolve().typewriter_default
     }
 }
 
@@ -983,5 +1082,59 @@ fn merge_toml(base: &mut toml::Value, overlay: toml::Value) {
         (base_value, overlay_value) => {
             *base_value = overlay_value;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ui_theme_defaults_to_focus() {
+        let config = AppConfig::default();
+
+        assert_eq!(config.ui_config.visual_theme, VisualThemePreset::Focus);
+        assert_eq!(config.ui_config.spectrogram_skin, SpectrogramSkin::Bars);
+        assert_eq!(
+            config.ui_config.effective_speaking_color(),
+            VisualThemePreset::Focus.resolve().speaking_color
+        );
+    }
+
+    #[test]
+    fn focus_theme_respects_existing_custom_ui_colors() {
+        let mut config = AppConfig::default();
+        config.ui_config.visual_theme = VisualThemePreset::Focus;
+        config.ui_config.speaking_color = [0.2, 0.3, 0.4, 1.0];
+        config.ui_config.idle_color = [0.5, 0.6, 0.7, 1.0];
+        config.ui_config.recording_indicator_color = [0.8, 0.1, 0.2, 1.0];
+
+        assert_eq!(
+            config.ui_config.effective_speaking_color(),
+            [0.2, 0.3, 0.4, 1.0]
+        );
+        assert_eq!(
+            config.ui_config.effective_idle_color(),
+            [0.5, 0.6, 0.7, 1.0]
+        );
+        assert_eq!(
+            config.ui_config.effective_recording_indicator_color(),
+            [0.8, 0.1, 0.2, 1.0]
+        );
+    }
+
+    #[test]
+    fn missing_enhancement_prompt_uses_default() {
+        let toml = r#"
+[enhancement_config]
+enabled = true
+"#;
+
+        let (config, _) = build_config_with_defaults(toml).expect("config should parse");
+
+        assert_eq!(
+            config.enhancement_config.system_prompt.as_deref(),
+            Some(DEFAULT_ENHANCEMENT_SYSTEM_PROMPT)
+        );
     }
 }

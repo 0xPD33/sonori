@@ -160,18 +160,21 @@ impl WindowApp {
             // Must use layer-shell for the settings window too, because this winit
             // fork doesn't deliver pointer events to non-layer-shell windows.
             // No anchor = compositor centers the surface.
+            // Keep keyboard focus on the user's active app so recording shortcuts
+            // do not cause the compositor to dismiss the settings layer surface.
             let wayland_attrs = WindowAttributesWayland::default()
                 .with_layer_shell()
                 .with_layer(Layer::Overlay)
                 .with_exclusive_zone(-1)
-                .with_keyboard_interactivity(KeyboardInteractivity::OnDemand);
+                .with_keyboard_interactivity(KeyboardInteractivity::None);
             attrs = attrs.with_platform_attributes(Box::new(wayland_attrs));
         }
 
         // Get instance/device/queue/format from the main window to share GPU context
-        let (instance, device, queue, format) = match self.windows.values().next() {
+        let (instance, adapter, device, queue, format) = match self.windows.values().next() {
             Some(main_win) => (
                 &main_win.instance,
+                main_win.adapter.clone(),
                 main_win.device.clone(),
                 main_win.queue.clone(),
                 main_win.config.format,
@@ -181,15 +184,22 @@ impl WindowApp {
 
         match event_loop.create_window(attrs) {
             Ok(window) => {
-                let settings_win = SettingsWindow::new(
+                let settings_win = match SettingsWindow::new(
                     window,
                     instance,
+                    &adapter,
                     device,
                     queue,
                     format,
                     &self.config,
                     self.backend_command_tx.clone(),
-                );
+                ) {
+                    Ok(settings_win) => settings_win,
+                    Err(e) => {
+                        eprintln!("{}", e);
+                        return;
+                    }
+                };
                 let id = settings_win.window.id();
                 self.settings_window_id = Some(id);
                 self.settings_window = Some(settings_win);
@@ -706,6 +716,7 @@ impl ApplicationHandler for WindowApp {
                 self.manual_session_sender.clone(),
                 self.transcription_mode_ref.clone(),
                 &self.config.display_config,
+                &self.config.ui_config,
                 self.config.enhancement_config.enabled,
                 &backend_name,
                 &model_name,
@@ -744,7 +755,10 @@ impl ApplicationHandler for WindowApp {
             if let Some(sw) = &mut self.settings_window {
                 match event {
                     WindowEvent::CloseRequested => {
-                        close_settings = true;
+                        // Layer-shell compositors may emit CloseRequested when focus moves away
+                        // from the settings surface. Keep settings open unless the user closes it
+                        // explicitly with Escape or the in-window close button.
+                        sw.window.request_redraw();
                     }
                     WindowEvent::SurfaceResized(size) => {
                         sw.resize(size.width, size.height);
@@ -939,6 +953,7 @@ fn create_window(
     >,
     transcription_mode_ref: Arc<AtomicU8>,
     display_config: &crate::config::DisplayConfig,
+    ui_config: &crate::config::UiConfig,
     enhancement_enabled: bool,
     backend_name: &str,
     model_name: &str,
@@ -1034,6 +1049,7 @@ fn create_window(
         manual_session_sender,
         transcription_mode_ref,
         display_config,
+        ui_config,
         logical_width,
         logical_height,
         spectrogram_width,

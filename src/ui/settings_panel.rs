@@ -6,7 +6,9 @@ use winit::keyboard::{Key, NamedKey};
 use super::batch_text_renderer::{BatchTextRenderer, TextItem};
 use super::widgets::{Select, SelectOption, Slider, Toggle, WidgetRenderer};
 use crate::backend::BackendType;
-use crate::config::{AppConfig, ShortcutMode, VadSensitivity, WindowPosition};
+use crate::config::{
+    AppConfig, ShortcutMode, SpectrogramSkin, VadSensitivity, VisualThemePreset, WindowPosition,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsTab {
@@ -39,12 +41,36 @@ impl SettingsTab {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DropdownId {
+    Backend,
+    Model,
+    Language,
+    VadSensitivity,
+    ShortcutMode,
+    PasteShortcut,
+    Vsync,
+    VisualTheme,
+    SpectrogramSkin,
+    WindowPosition,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct SettingsTooltip {
+    text: &'static str,
+    row_y: f32,
+}
+
 pub struct SettingsPanel {
     pub is_open: bool,
     pub close_requested: bool,
     active_tab: SettingsTab,
     batch_text_renderer: BatchTextRenderer,
+    overlay_text_renderer: Option<BatchTextRenderer>,
     widget_renderer: WidgetRenderer,
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
+    surface_format: wgpu::TextureFormat,
 
     // Slide-in animation
     pub animation_progress: f32,
@@ -84,6 +110,8 @@ pub struct SettingsPanel {
     system_tray_toggle: Toggle,
 
     // Appearance tab widgets
+    visual_theme_select: Select,
+    spectrogram_skin_select: Select,
     window_position_select: Select,
     font_size_slider: Slider,
     recording_indicator_toggle: Toggle,
@@ -92,10 +120,10 @@ pub struct SettingsPanel {
     apply_requested: bool,
     has_pending_changes: bool,
 
-    // Tooltip state
-    hovered_tooltip: Option<&'static str>,
+    open_dropdown: Option<DropdownId>,
+    hovered_tooltip: Option<SettingsTooltip>,
+    tooltip_anchor_x: f32,
     hover_start: std::time::Instant,
-    tooltip_y: f32,
 
     window_width: u32,
     window_height: u32,
@@ -106,6 +134,7 @@ const WIDGET_X: f32 = 14.0;
 const ROW_HEIGHT: f32 = 26.0;
 const SPACING: f32 = 6.0;
 const APPLY_BUTTON_HEIGHT: f32 = 28.0;
+const TOOLTIP_DELAY_MS: u128 = 150;
 
 fn default_width(window_width: u32) -> f32 {
     window_width as f32 - 28.0
@@ -208,14 +237,12 @@ impl SettingsPanel {
         config: &wgpu::SurfaceConfiguration,
         size: PhysicalSize<u32>,
     ) -> Self {
-        let batch_text_renderer = BatchTextRenderer::new(
-            Arc::new(device.clone()),
-            Arc::new(queue.clone()),
-            size,
-            config.format,
-        );
+        let device = Arc::new(device.clone());
+        let queue = Arc::new(queue.clone());
+        let batch_text_renderer =
+            BatchTextRenderer::new(device.clone(), queue.clone(), size, config.format);
 
-        let widget_renderer = WidgetRenderer::new(device, config.format);
+        let widget_renderer = WidgetRenderer::new(&device, config.format);
 
         let w = default_width(size.width);
 
@@ -458,6 +485,50 @@ impl SettingsPanel {
         );
 
         // Appearance tab widgets
+        let visual_theme_select = Select::new(
+            "Visual theme",
+            vec![
+                SelectOption {
+                    label: "Focus".into(),
+                    value: "Focus".into(),
+                },
+                SelectOption {
+                    label: "Pulse".into(),
+                    value: "Pulse".into(),
+                },
+                SelectOption {
+                    label: "Terminal".into(),
+                    value: "Terminal".into(),
+                },
+            ],
+            0,
+            WIDGET_X,
+            CONTENT_Y,
+            w,
+            ROW_HEIGHT,
+        );
+        let spectrogram_skin_select = Select::new(
+            "Spectrogram skin",
+            vec![
+                SelectOption {
+                    label: "Bars".into(),
+                    value: "Bars".into(),
+                },
+                SelectOption {
+                    label: "Waveform".into(),
+                    value: "Waveform".into(),
+                },
+                SelectOption {
+                    label: "Meter".into(),
+                    value: "Meter".into(),
+                },
+            ],
+            0,
+            WIDGET_X,
+            CONTENT_Y + ROW_HEIGHT + SPACING,
+            w,
+            ROW_HEIGHT,
+        );
         let window_position_select = Select::new(
             "Window position",
             vec![
@@ -504,7 +575,7 @@ impl SettingsPanel {
             ],
             1,
             WIDGET_X,
-            CONTENT_Y,
+            CONTENT_Y + 2.0 * (ROW_HEIGHT + SPACING),
             w,
             ROW_HEIGHT,
         );
@@ -515,7 +586,7 @@ impl SettingsPanel {
             24.0,
             0.5,
             WIDGET_X,
-            CONTENT_Y + ROW_HEIGHT + SPACING,
+            CONTENT_Y + 3.0 * (ROW_HEIGHT + SPACING),
             w,
             ROW_HEIGHT,
         );
@@ -523,7 +594,7 @@ impl SettingsPanel {
             "Recording indicator",
             true,
             WIDGET_X,
-            CONTENT_Y + 2.0 * (ROW_HEIGHT + SPACING),
+            CONTENT_Y + 4.0 * (ROW_HEIGHT + SPACING),
             w,
             ROW_HEIGHT,
         );
@@ -533,7 +604,11 @@ impl SettingsPanel {
             close_requested: false,
             active_tab: SettingsTab::Backend,
             batch_text_renderer,
+            overlay_text_renderer: None,
             widget_renderer,
+            device,
+            queue,
+            surface_format: config.format,
 
             animation_progress: 0.0,
             animation_active: false,
@@ -565,6 +640,8 @@ impl SettingsPanel {
             target_fps_slider,
             system_tray_toggle,
 
+            visual_theme_select,
+            spectrogram_skin_select,
             window_position_select,
             font_size_slider,
             recording_indicator_toggle,
@@ -572,9 +649,10 @@ impl SettingsPanel {
             apply_requested: false,
             has_pending_changes: false,
 
+            open_dropdown: None,
             hovered_tooltip: None,
+            tooltip_anchor_x: 0.0,
             hover_start: std::time::Instant::now(),
-            tooltip_y: 0.0,
 
             window_width: size.width,
             window_height: size.height,
@@ -583,6 +661,9 @@ impl SettingsPanel {
 
     pub fn resize(&mut self, size: PhysicalSize<u32>) {
         self.batch_text_renderer.resize(size);
+        if let Some(renderer) = &mut self.overlay_text_renderer {
+            renderer.resize(size);
+        }
         self.window_width = size.width;
         self.window_height = size.height;
         self.recalculate_positions(size.width);
@@ -609,6 +690,285 @@ impl SettingsPanel {
 
     pub fn needs_redraw(&self) -> bool {
         self.animation_active
+            || self.english_only_toggle.is_animating()
+            || self.gpu_toggle.is_animating()
+            || self.sound_toggle.is_animating()
+            || self.auto_paste_toggle.is_animating()
+            || self.clear_on_session_toggle.is_animating()
+            || self.post_processing_toggle.is_animating()
+            || self.typewriter_toggle.is_animating()
+            || self.enhancement_toggle.is_animating()
+            || self.system_tray_toggle.is_animating()
+            || self.recording_indicator_toggle.is_animating()
+            || self
+                .hovered_tooltip
+                .is_some_and(|_| self.hover_start.elapsed().as_millis() < TOOLTIP_DELAY_MS)
+    }
+
+    fn content_y_offset(&self) -> f32 {
+        (1.0 - self.animation_progress.clamp(0.0, 1.0)) * 80.0
+    }
+
+    fn local_y(&self, y: f32) -> f32 {
+        y - self.content_y_offset()
+    }
+
+    fn select_ref(&self, id: DropdownId) -> &Select {
+        match id {
+            DropdownId::Backend => &self.backend_select,
+            DropdownId::Model => &self.model_select,
+            DropdownId::Language => &self.language_select,
+            DropdownId::VadSensitivity => &self.vad_sensitivity_select,
+            DropdownId::ShortcutMode => &self.shortcut_mode_select,
+            DropdownId::PasteShortcut => &self.paste_shortcut_select,
+            DropdownId::Vsync => &self.vsync_select,
+            DropdownId::VisualTheme => &self.visual_theme_select,
+            DropdownId::SpectrogramSkin => &self.spectrogram_skin_select,
+            DropdownId::WindowPosition => &self.window_position_select,
+        }
+    }
+
+    fn select_mut(&mut self, id: DropdownId) -> &mut Select {
+        match id {
+            DropdownId::Backend => &mut self.backend_select,
+            DropdownId::Model => &mut self.model_select,
+            DropdownId::Language => &mut self.language_select,
+            DropdownId::VadSensitivity => &mut self.vad_sensitivity_select,
+            DropdownId::ShortcutMode => &mut self.shortcut_mode_select,
+            DropdownId::PasteShortcut => &mut self.paste_shortcut_select,
+            DropdownId::Vsync => &mut self.vsync_select,
+            DropdownId::VisualTheme => &mut self.visual_theme_select,
+            DropdownId::SpectrogramSkin => &mut self.spectrogram_skin_select,
+            DropdownId::WindowPosition => &mut self.window_position_select,
+        }
+    }
+
+    fn active_select_box_at(&self, x: f32, y: f32) -> Option<DropdownId> {
+        match self.active_tab {
+            SettingsTab::Backend => {
+                if self.backend_select.hit_select_box(x, y) {
+                    Some(DropdownId::Backend)
+                } else if self.model_select.hit_select_box(x, y) {
+                    Some(DropdownId::Model)
+                } else if self.show_language_select && self.language_select.hit_select_box(x, y) {
+                    Some(DropdownId::Language)
+                } else {
+                    None
+                }
+            }
+            SettingsTab::Audio => self
+                .vad_sensitivity_select
+                .hit_select_box(x, y)
+                .then_some(DropdownId::VadSensitivity),
+            SettingsTab::Behavior => {
+                if self.shortcut_mode_select.hit_select_box(x, y) {
+                    Some(DropdownId::ShortcutMode)
+                } else if self.paste_shortcut_select.hit_select_box(x, y) {
+                    Some(DropdownId::PasteShortcut)
+                } else {
+                    None
+                }
+            }
+            SettingsTab::Display => self
+                .vsync_select
+                .hit_select_box(x, y)
+                .then_some(DropdownId::Vsync),
+            SettingsTab::Appearance => {
+                if self.visual_theme_select.hit_select_box(x, y) {
+                    Some(DropdownId::VisualTheme)
+                } else if self.spectrogram_skin_select.hit_select_box(x, y) {
+                    Some(DropdownId::SpectrogramSkin)
+                } else if self.window_position_select.hit_select_box(x, y) {
+                    Some(DropdownId::WindowPosition)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    fn open_only_dropdown(&mut self, id: DropdownId) {
+        self.close_all_dropdowns();
+        self.clear_tooltip();
+        self.select_mut(id).set_expanded(true);
+        self.open_dropdown = Some(id);
+    }
+
+    fn handle_select_click(&mut self, id: DropdownId, x: f32, y: f32) -> bool {
+        if self.open_dropdown == Some(id) && self.select_ref(id).is_expanded() {
+            if let Some(index) = self.select_ref(id).dropdown_option_at(x, y) {
+                self.select_mut(id).choose_index(index);
+                self.close_all_dropdowns();
+                return true;
+            }
+
+            self.close_all_dropdowns();
+            return true;
+        }
+
+        if self.select_ref(id).hit_select_box(x, y) {
+            self.open_only_dropdown(id);
+            return true;
+        }
+
+        false
+    }
+
+    fn refresh_backend_dependent_options(&mut self, window_width: u32) {
+        let backend = match self.backend_select.selected_index {
+            0 => BackendType::CTranslate2,
+            1 => BackendType::WhisperCpp,
+            2 => BackendType::Moonshine,
+            3 => BackendType::Parakeet,
+            _ => BackendType::CTranslate2,
+        };
+        let english_only = self.english_only_toggle.value;
+        self.show_english_toggle = backend_has_english_toggle(backend);
+        self.model_select.options = models_for_backend(backend, english_only);
+        self.model_select.selected_index = 0;
+        self.show_language_select = backend_has_language_select(backend, english_only);
+        if self.show_language_select {
+            self.language_select.options = languages_for_backend(backend);
+            self.language_select.selected_index = 0;
+        }
+        self.recalculate_positions(window_width);
+    }
+
+    fn widgets_have_pending_changes(&self) -> bool {
+        self.backend_select.has_changed()
+            || self.english_only_toggle.has_changed()
+            || self.model_select.has_changed()
+            || self.language_select.has_changed()
+            || self.gpu_toggle.has_changed()
+            || self.threads_slider.has_changed()
+            || self.vad_sensitivity_select.has_changed()
+            || self.sound_toggle.has_changed()
+            || self.volume_slider.has_changed()
+            || self.auto_paste_toggle.has_changed()
+            || self.clear_on_session_toggle.has_changed()
+            || self.post_processing_toggle.has_changed()
+            || self.typewriter_toggle.has_changed()
+            || self.shortcut_mode_select.has_changed()
+            || self.paste_shortcut_select.has_changed()
+            || self.enhancement_toggle.has_changed()
+            || self.vsync_select.has_changed()
+            || self.target_fps_slider.has_changed()
+            || self.system_tray_toggle.has_changed()
+            || self.visual_theme_select.has_changed()
+            || self.spectrogram_skin_select.has_changed()
+            || self.window_position_select.has_changed()
+            || self.font_size_slider.has_changed()
+            || self.recording_indicator_toggle.has_changed()
+    }
+
+    fn mark_pending_if_widget_changed(&mut self) {
+        if self.widgets_have_pending_changes() {
+            self.has_pending_changes = true;
+        }
+    }
+
+    fn clear_tooltip(&mut self) {
+        self.hovered_tooltip = None;
+    }
+
+    fn update_tooltip_hover(&mut self, x: f32, y: f32) {
+        let next_tooltip = if self.open_dropdown.is_some() {
+            None
+        } else {
+            self.tooltip_for_position(y)
+        };
+
+        if next_tooltip != self.hovered_tooltip {
+            self.hovered_tooltip = next_tooltip;
+            self.hover_start = std::time::Instant::now();
+        }
+        self.tooltip_anchor_x = x;
+    }
+
+    fn tooltip_for_position(&self, y: f32) -> Option<SettingsTooltip> {
+        let hit = |widget_y: f32| -> bool { y >= widget_y && y < widget_y + ROW_HEIGHT };
+
+        macro_rules! tip {
+            ($wy:expr, $text:expr) => {
+                if hit($wy) {
+                    return Some(SettingsTooltip {
+                        text: $text,
+                        row_y: $wy,
+                    });
+                }
+            };
+        }
+
+        match self.active_tab {
+            SettingsTab::Backend => {
+                tip!(self.backend_select.y, "Transcription engine");
+                if self.show_english_toggle {
+                    tip!(self.english_only_toggle.y, "English-only models are faster");
+                }
+                tip!(
+                    self.model_select.y,
+                    "Larger models are more accurate, but slower"
+                );
+                if self.show_language_select {
+                    tip!(self.language_select.y, "Language used for transcription");
+                }
+                tip!(self.gpu_toggle.y, "Use GPU when supported");
+                tip!(self.threads_slider.y, "CPU threads used for transcription");
+            }
+            SettingsTab::Audio => {
+                tip!(self.vad_sensitivity_select.y, "Voice detection sensitivity");
+                tip!(self.sound_toggle.y, "Play start and stop sounds");
+                tip!(self.volume_slider.y, "Sound feedback volume");
+            }
+            SettingsTab::Behavior => {
+                tip!(
+                    self.auto_paste_toggle.y,
+                    "Paste transcript into the focused app"
+                );
+                tip!(
+                    self.clear_on_session_toggle.y,
+                    "Clear old transcript on new recording"
+                );
+                tip!(
+                    self.post_processing_toggle.y,
+                    "Clean transcription artifacts"
+                );
+                tip!(
+                    self.typewriter_toggle.y,
+                    "Animate text character by character"
+                );
+                tip!(
+                    self.shortcut_mode_select.y,
+                    "Toggle records until stopped; push-to-talk holds"
+                );
+                tip!(self.paste_shortcut_select.y, "Shortcut sent when pasting");
+                tip!(
+                    self.enhancement_toggle.y,
+                    "Enhance transcripts with local AI"
+                );
+            }
+            SettingsTab::Display => {
+                tip!(self.vsync_select.y, "Sync frames to display refresh");
+                tip!(self.target_fps_slider.y, "Frame-rate cap when VSync is off");
+                tip!(self.system_tray_toggle.y, "Show a system tray icon");
+            }
+            SettingsTab::Appearance => {
+                tip!(self.visual_theme_select.y, "Curated overlay appearance");
+                tip!(self.spectrogram_skin_select.y, "Audio visualization style");
+                tip!(self.window_position_select.y, "Overlay position preset");
+                tip!(self.font_size_slider.y, "Transcription text size");
+                tip!(
+                    self.recording_indicator_toggle.y,
+                    "Show recording indicator"
+                );
+            }
+        }
+
+        None
+    }
+
+    fn buttons_y_for_tab(&self, tab: SettingsTab) -> f32 {
+        CONTENT_Y + (self.tab_row_count(tab) as f32) * (ROW_HEIGHT + SPACING) + 12.0
     }
 
     pub fn populate_from_config(&mut self, config: &AppConfig) {
@@ -688,6 +1048,16 @@ impl SettingsPanel {
             .set_value(config.window_behavior_config.show_in_system_tray);
 
         // Appearance
+        self.visual_theme_select.selected_index = match config.ui_config.visual_theme {
+            VisualThemePreset::Focus => 0,
+            VisualThemePreset::Pulse => 1,
+            VisualThemePreset::Terminal => 2,
+        };
+        self.spectrogram_skin_select.selected_index = match config.ui_config.spectrogram_skin {
+            SpectrogramSkin::Bars => 0,
+            SpectrogramSkin::Waveform => 1,
+            SpectrogramSkin::Meter => 2,
+        };
         self.window_position_select.selected_index = match config.display_config.window_position {
             WindowPosition::BottomLeft => 0,
             WindowPosition::BottomCenter => 1,
@@ -703,6 +1073,9 @@ impl SettingsPanel {
         self.font_size_slider.value = config.ui_config.font_size;
         self.recording_indicator_toggle
             .set_value(config.ui_config.show_recording_indicator);
+
+        self.clear_pending_changes();
+        self.close_all_dropdowns();
     }
 
     pub fn apply_pending_changes(&mut self, config: &mut AppConfig) -> (bool, bool) {
@@ -827,6 +1200,22 @@ impl SettingsPanel {
             any_changed = true;
         }
 
+        if let Some(idx) = self.visual_theme_select.take_changed() {
+            config.ui_config.visual_theme = match idx {
+                1 => VisualThemePreset::Pulse,
+                2 => VisualThemePreset::Terminal,
+                _ => VisualThemePreset::Focus,
+            };
+            any_changed = true;
+        }
+        if let Some(idx) = self.spectrogram_skin_select.take_changed() {
+            config.ui_config.spectrogram_skin = match idx {
+                1 => SpectrogramSkin::Waveform,
+                2 => SpectrogramSkin::Meter,
+                _ => SpectrogramSkin::Bars,
+            };
+            any_changed = true;
+        }
         if let Some(idx) = self.window_position_select.take_changed() {
             config.display_config.window_position = match idx {
                 0 => WindowPosition::BottomLeft,
@@ -863,6 +1252,39 @@ impl SettingsPanel {
         v
     }
 
+    pub fn clear_pending_changes(&mut self) {
+        self.has_pending_changes = false;
+        self.apply_requested = false;
+        self.clear_widget_change_flags();
+    }
+
+    fn clear_widget_change_flags(&mut self) {
+        self.backend_select.clear_changed();
+        self.english_only_toggle.clear_changed();
+        self.model_select.clear_changed();
+        self.language_select.clear_changed();
+        self.gpu_toggle.clear_changed();
+        self.threads_slider.clear_changed();
+        self.vad_sensitivity_select.clear_changed();
+        self.sound_toggle.clear_changed();
+        self.volume_slider.clear_changed();
+        self.auto_paste_toggle.clear_changed();
+        self.clear_on_session_toggle.clear_changed();
+        self.post_processing_toggle.clear_changed();
+        self.typewriter_toggle.clear_changed();
+        self.shortcut_mode_select.clear_changed();
+        self.paste_shortcut_select.clear_changed();
+        self.enhancement_toggle.clear_changed();
+        self.vsync_select.clear_changed();
+        self.target_fps_slider.clear_changed();
+        self.system_tray_toggle.clear_changed();
+        self.visual_theme_select.clear_changed();
+        self.spectrogram_skin_select.clear_changed();
+        self.window_position_select.clear_changed();
+        self.font_size_slider.clear_changed();
+        self.recording_indicator_toggle.clear_changed();
+    }
+
     fn tab_row_count(&self, tab: SettingsTab) -> usize {
         match tab {
             SettingsTab::Backend => {
@@ -878,7 +1300,7 @@ impl SettingsPanel {
             SettingsTab::Audio => 3,
             SettingsTab::Behavior => 7,
             SettingsTab::Display => 3,
-            SettingsTab::Appearance => 3,
+            SettingsTab::Appearance => 5,
         }
     }
 
@@ -997,6 +1419,16 @@ impl SettingsPanel {
 
         // Appearance tab
         y = CONTENT_Y;
+        self.visual_theme_select.x = x;
+        self.visual_theme_select.y = y;
+        self.visual_theme_select.width = w;
+        self.visual_theme_select.height = ROW_HEIGHT;
+        y += step;
+        self.spectrogram_skin_select.x = x;
+        self.spectrogram_skin_select.y = y;
+        self.spectrogram_skin_select.width = w;
+        self.spectrogram_skin_select.height = ROW_HEIGHT;
+        y += step;
         self.window_position_select.x = x;
         self.window_position_select.y = y;
         self.window_position_select.width = w;
@@ -1018,6 +1450,7 @@ impl SettingsPanel {
             return false;
         }
 
+        let y = self.local_y(y);
         let tab_bar_height = 24.0f32;
         let tab_bar_y = 8.0f32;
         let close_size = 24.0f32;
@@ -1030,6 +1463,7 @@ impl SettingsPanel {
             && y <= tab_bar_y + close_size
         {
             self.close_requested = true;
+            self.clear_tooltip();
             return true;
         }
 
@@ -1048,9 +1482,40 @@ impl SettingsPanel {
             }
         }
 
+        if let Some(open_id) = self.open_dropdown {
+            if self.select_ref(open_id).is_expanded() {
+                if let Some(index) = self.select_ref(open_id).dropdown_option_at(x, y) {
+                    let previous_index = self.select_ref(open_id).selected_index;
+                    self.select_mut(open_id).choose_index(index);
+                    if open_id == DropdownId::Backend
+                        && self.backend_select.selected_index != previous_index
+                    {
+                        self.refresh_backend_dependent_options(window_width);
+                    }
+                    self.close_all_dropdowns();
+                    self.mark_pending_if_widget_changed();
+                    return true;
+                }
+
+                if self.select_ref(open_id).hit_select_box(x, y) {
+                    self.close_all_dropdowns();
+                    return true;
+                }
+            }
+
+            if let Some(target_id) = self.active_select_box_at(x, y) {
+                if target_id != open_id {
+                    self.open_only_dropdown(target_id);
+                    return true;
+                }
+            }
+
+            self.close_all_dropdowns();
+            return true;
+        }
+
         // Check Apply and Reset buttons
-        let num_rows = self.tab_row_count(self.active_tab);
-        let buttons_y = CONTENT_Y + (num_rows as f32) * (ROW_HEIGHT + SPACING) + 12.0;
+        let buttons_y = self.buttons_y_for_tab(self.active_tab);
         let w = default_width(window_width);
         let btn_width = 80.0f32;
         let btn_gap = 8.0f32;
@@ -1062,11 +1527,12 @@ impl SettingsPanel {
         if y >= buttons_y && y <= buttons_y + APPLY_BUTTON_HEIGHT {
             if x >= reset_btn_x && x <= reset_btn_x + btn_width {
                 self.reset_tab_to_defaults();
+                self.clear_tooltip();
                 return true;
             }
             if x >= apply_btn_x && x <= apply_btn_x + btn_width {
                 self.apply_requested = true;
-                self.has_pending_changes = false;
+                self.clear_tooltip();
                 return true;
             }
         }
@@ -1076,28 +1542,11 @@ impl SettingsPanel {
         match self.active_tab {
             SettingsTab::Backend => {
                 let prev_idx = self.backend_select.selected_index;
-                if self.backend_select.handle_click(x, y) {
+                if self.handle_select_click(DropdownId::Backend, x, y) {
                     widget_clicked = true;
                     let new_idx = self.backend_select.selected_index;
                     if new_idx != prev_idx {
-                        let backend = match new_idx {
-                            0 => BackendType::CTranslate2,
-                            1 => BackendType::WhisperCpp,
-                            2 => BackendType::Moonshine,
-                            3 => BackendType::Parakeet,
-                            _ => BackendType::CTranslate2,
-                        };
-                        let english_only = self.english_only_toggle.value;
-                        self.show_english_toggle = backend_has_english_toggle(backend);
-                        self.model_select.options = models_for_backend(backend, english_only);
-                        self.model_select.selected_index = 0;
-                        self.show_language_select =
-                            backend_has_language_select(backend, english_only);
-                        if self.show_language_select {
-                            self.language_select.options = languages_for_backend(backend);
-                            self.language_select.selected_index = 0;
-                        }
-                        self.recalculate_positions(window_width);
+                        self.refresh_backend_dependent_options(window_width);
                     }
                 }
                 if !widget_clicked
@@ -1134,12 +1583,12 @@ impl SettingsPanel {
                     }
                     self.recalculate_positions(window_width);
                 }
-                if !widget_clicked && self.model_select.handle_click(x, y) {
+                if !widget_clicked && self.handle_select_click(DropdownId::Model, x, y) {
                     widget_clicked = true;
                 }
                 if !widget_clicked
                     && self.show_language_select
-                    && self.language_select.handle_click(x, y)
+                    && self.handle_select_click(DropdownId::Language, x, y)
                 {
                     widget_clicked = true;
                 }
@@ -1151,7 +1600,7 @@ impl SettingsPanel {
                 }
             }
             SettingsTab::Audio => {
-                if self.vad_sensitivity_select.handle_click(x, y) {
+                if self.handle_select_click(DropdownId::VadSensitivity, x, y) {
                     widget_clicked = true;
                 }
                 if !widget_clicked && self.sound_toggle.handle_click(x, y) {
@@ -1162,17 +1611,11 @@ impl SettingsPanel {
                 }
             }
             SettingsTab::Behavior => {
-                if self.shortcut_mode_select.handle_click(x, y) {
+                if self.handle_select_click(DropdownId::ShortcutMode, x, y) {
                     widget_clicked = true;
-                    if self.shortcut_mode_select.expanded {
-                        self.paste_shortcut_select.expanded = false;
-                    }
                 }
-                if !widget_clicked && self.paste_shortcut_select.handle_click(x, y) {
+                if !widget_clicked && self.handle_select_click(DropdownId::PasteShortcut, x, y) {
                     widget_clicked = true;
-                    if self.paste_shortcut_select.expanded {
-                        self.shortcut_mode_select.expanded = false;
-                    }
                 }
                 if !widget_clicked && self.auto_paste_toggle.handle_click(x, y) {
                     widget_clicked = true;
@@ -1191,7 +1634,13 @@ impl SettingsPanel {
                 }
             }
             SettingsTab::Appearance => {
-                if self.window_position_select.handle_click(x, y) {
+                if self.handle_select_click(DropdownId::VisualTheme, x, y) {
+                    widget_clicked = true;
+                }
+                if !widget_clicked && self.handle_select_click(DropdownId::SpectrogramSkin, x, y) {
+                    widget_clicked = true;
+                }
+                if !widget_clicked && self.handle_select_click(DropdownId::WindowPosition, x, y) {
                     widget_clicked = true;
                 }
                 if !widget_clicked && self.font_size_slider.handle_click(x, y) {
@@ -1202,7 +1651,7 @@ impl SettingsPanel {
                 }
             }
             SettingsTab::Display => {
-                if self.vsync_select.handle_click(x, y) {
+                if self.handle_select_click(DropdownId::Vsync, x, y) {
                     widget_clicked = true;
                 }
                 if !widget_clicked && self.target_fps_slider.handle_click(x, y) {
@@ -1215,13 +1664,14 @@ impl SettingsPanel {
         }
 
         if widget_clicked {
-            self.has_pending_changes = true;
+            self.mark_pending_if_widget_changed();
         }
 
         true
     }
 
     pub fn handle_mouse_move(&mut self, x: f32, y: f32) {
+        let y = self.local_y(y);
         match self.active_tab {
             SettingsTab::Backend => {
                 self.backend_select.handle_mouse_move(x, y);
@@ -1241,6 +1691,8 @@ impl SettingsPanel {
                 self.vsync_select.handle_mouse_move(x, y);
             }
             SettingsTab::Appearance => {
+                self.visual_theme_select.handle_mouse_move(x, y);
+                self.spectrogram_skin_select.handle_mouse_move(x, y);
                 self.window_position_select.handle_mouse_move(x, y);
             }
         }
@@ -1261,123 +1713,8 @@ impl SettingsPanel {
             }
             _ => {}
         }
-
-        // Tooltip: determine which row the mouse is over
-        let (new_tooltip, row_y) = self.tooltip_for_position(y);
-        if new_tooltip != self.hovered_tooltip {
-            self.hovered_tooltip = new_tooltip;
-            self.hover_start = std::time::Instant::now();
-            self.tooltip_y = row_y;
-        }
-    }
-
-    fn tooltip_for_position(&self, y: f32) -> (Option<&'static str>, f32) {
-        let hit = |widget_y: f32| -> bool { y >= widget_y && y < widget_y + ROW_HEIGHT };
-
-        macro_rules! tip {
-            ($wy:expr, $text:expr) => {
-                if hit($wy) {
-                    return (Some($text), $wy);
-                }
-            };
-        }
-
-        match self.active_tab {
-            SettingsTab::Backend => {
-                tip!(
-                    self.backend_select.y,
-                    "Transcription engine for speech recognition"
-                );
-                if self.show_english_toggle {
-                    tip!(
-                        self.english_only_toggle.y,
-                        "Use English-only models for faster transcription"
-                    );
-                }
-                tip!(
-                    self.model_select.y,
-                    "Whisper model size \u{2014} larger is more accurate but slower"
-                );
-                if self.show_language_select {
-                    tip!(self.language_select.y, "Language for transcription");
-                }
-                tip!(
-                    self.gpu_toggle.y,
-                    "Use GPU for faster transcription when available"
-                );
-                tip!(self.threads_slider.y, "CPU threads used for transcription");
-            }
-            SettingsTab::Audio => {
-                tip!(
-                    self.vad_sensitivity_select.y,
-                    "How sensitive voice detection is \u{2014} higher catches quieter speech"
-                );
-                tip!(
-                    self.sound_toggle.y,
-                    "Play sounds when recording starts and stops"
-                );
-                tip!(self.volume_slider.y, "Volume level for sound feedback");
-            }
-            SettingsTab::Behavior => {
-                tip!(
-                    self.auto_paste_toggle.y,
-                    "Automatically paste transcription into focused app"
-                );
-                tip!(
-                    self.clear_on_session_toggle.y,
-                    "Clear previous transcript when starting a new recording"
-                );
-                tip!(
-                    self.post_processing_toggle.y,
-                    "Clean up transcription output (remove artifacts)"
-                );
-                tip!(
-                    self.typewriter_toggle.y,
-                    "Animate text appearing character by character"
-                );
-                tip!(
-                    self.shortcut_mode_select.y,
-                    "Toggle: press to start/stop. Push to Talk: hold to record"
-                );
-                tip!(
-                    self.paste_shortcut_select.y,
-                    "Keyboard shortcut used for pasting transcription"
-                );
-                tip!(
-                    self.enhancement_toggle.y,
-                    "AI enhancement of transcriptions using a local LLM"
-                );
-            }
-            SettingsTab::Display => {
-                tip!(
-                    self.vsync_select.y,
-                    "Vertical sync \u{2014} reduces tearing but may add latency"
-                );
-                tip!(
-                    self.target_fps_slider.y,
-                    "Frame rate limit when VSync is disabled"
-                );
-                tip!(
-                    self.system_tray_toggle.y,
-                    "Show Sonori icon in the system tray"
-                );
-            }
-            SettingsTab::Appearance => {
-                tip!(
-                    self.window_position_select.y,
-                    "Position of the overlay on screen"
-                );
-                tip!(
-                    self.font_size_slider.y,
-                    "Text size for transcription display"
-                );
-                tip!(
-                    self.recording_indicator_toggle.y,
-                    "Show pulsing red dot while recording"
-                );
-            }
-        }
-        (None, 0.0)
+        self.update_tooltip_hover(x, y);
+        self.mark_pending_if_widget_changed();
     }
 
     pub fn handle_mouse_release(&mut self) {
@@ -1418,14 +1755,18 @@ impl SettingsPanel {
     }
 
     fn close_all_dropdowns(&mut self) {
-        self.backend_select.expanded = false;
-        self.model_select.expanded = false;
-        self.language_select.expanded = false;
-        self.vad_sensitivity_select.expanded = false;
-        self.shortcut_mode_select.expanded = false;
-        self.paste_shortcut_select.expanded = false;
-        self.vsync_select.expanded = false;
-        self.window_position_select.expanded = false;
+        self.backend_select.set_expanded(false);
+        self.model_select.set_expanded(false);
+        self.language_select.set_expanded(false);
+        self.vad_sensitivity_select.set_expanded(false);
+        self.shortcut_mode_select.set_expanded(false);
+        self.paste_shortcut_select.set_expanded(false);
+        self.vsync_select.set_expanded(false);
+        self.visual_theme_select.set_expanded(false);
+        self.spectrogram_skin_select.set_expanded(false);
+        self.window_position_select.set_expanded(false);
+        self.open_dropdown = None;
+        self.clear_tooltip();
     }
 
     fn reset_tab_to_defaults(&mut self) {
@@ -1529,6 +1870,19 @@ impl SettingsPanel {
                 self.system_tray_toggle.mark_changed();
             }
             SettingsTab::Appearance => {
+                self.visual_theme_select.selected_index = match defaults.ui_config.visual_theme {
+                    VisualThemePreset::Focus => 0,
+                    VisualThemePreset::Pulse => 1,
+                    VisualThemePreset::Terminal => 2,
+                };
+                self.visual_theme_select.mark_changed();
+                self.spectrogram_skin_select.selected_index =
+                    match defaults.ui_config.spectrogram_skin {
+                        SpectrogramSkin::Bars => 0,
+                        SpectrogramSkin::Waveform => 1,
+                        SpectrogramSkin::Meter => 2,
+                    };
+                self.spectrogram_skin_select.mark_changed();
                 self.window_position_select.selected_index =
                     match defaults.display_config.window_position {
                         WindowPosition::BottomLeft => 0,
@@ -1745,34 +2099,22 @@ impl SettingsPanel {
             window_height,
         );
 
-        // Render active tab's widgets with y_offset applied
+        // Render active tab's widgets with an animation offset. Widget layout state
+        // remains stable; only the frame-local paint position changes.
         let content_y_offset = y_offset;
+        let row_y = |y: f32| y + content_y_offset;
         match self.active_tab {
             SettingsTab::Backend => {
-                self.backend_select.y += content_y_offset;
-                self.english_only_toggle.y += content_y_offset;
-                self.model_select.y += content_y_offset;
-                self.language_select.y += content_y_offset;
-                self.gpu_toggle.y += content_y_offset;
-                self.threads_slider.y += content_y_offset;
-                let any_dropdown_covers = |y: f32| -> bool {
-                    self.backend_select.covers_y(y)
-                        || self.model_select.covers_y(y)
-                        || (self.show_language_select && self.language_select.covers_y(y))
-                };
-                let model_covered = self.backend_select.covers_y(self.model_select.y);
-                let language_covered = self.show_language_select
-                    && (self.backend_select.covers_y(self.language_select.y)
-                        || self.model_select.covers_y(self.language_select.y));
                 self.draw_row_bg(
                     encoder,
                     view,
                     queue,
-                    self.backend_select.y,
+                    row_y(self.backend_select.y),
                     window_width,
                     window_height,
                 );
-                self.backend_select.render(
+                self.backend_select.render_at(
+                    row_y(self.backend_select.y),
                     encoder,
                     view,
                     &self.widget_renderer,
@@ -1780,19 +2122,18 @@ impl SettingsPanel {
                     queue,
                     window_width,
                     window_height,
-                    false,
                 );
                 if self.show_english_toggle {
-                    let covered = any_dropdown_covers(self.english_only_toggle.y);
                     self.draw_row_bg(
                         encoder,
                         view,
                         queue,
-                        self.english_only_toggle.y,
+                        row_y(self.english_only_toggle.y),
                         window_width,
                         window_height,
                     );
-                    self.english_only_toggle.render_ex(
+                    self.english_only_toggle.render_at(
+                        row_y(self.english_only_toggle.y),
                         encoder,
                         view,
                         &self.widget_renderer,
@@ -1800,18 +2141,18 @@ impl SettingsPanel {
                         queue,
                         window_width,
                         window_height,
-                        covered,
                     );
                 }
                 self.draw_row_bg(
                     encoder,
                     view,
                     queue,
-                    self.model_select.y,
+                    row_y(self.model_select.y),
                     window_width,
                     window_height,
                 );
-                self.model_select.render(
+                self.model_select.render_at(
+                    row_y(self.model_select.y),
                     encoder,
                     view,
                     &self.widget_renderer,
@@ -1819,18 +2160,18 @@ impl SettingsPanel {
                     queue,
                     window_width,
                     window_height,
-                    model_covered,
                 );
                 if self.show_language_select {
                     self.draw_row_bg(
                         encoder,
                         view,
                         queue,
-                        self.language_select.y,
+                        row_y(self.language_select.y),
                         window_width,
                         window_height,
                     );
-                    self.language_select.render(
+                    self.language_select.render_at(
+                        row_y(self.language_select.y),
                         encoder,
                         view,
                         &self.widget_renderer,
@@ -1838,19 +2179,18 @@ impl SettingsPanel {
                         queue,
                         window_width,
                         window_height,
-                        language_covered,
                     );
                 }
-                let gpu_covered = any_dropdown_covers(self.gpu_toggle.y);
                 self.draw_row_bg(
                     encoder,
                     view,
                     queue,
-                    self.gpu_toggle.y,
+                    row_y(self.gpu_toggle.y),
                     window_width,
                     window_height,
                 );
-                self.gpu_toggle.render_ex(
+                self.gpu_toggle.render_at(
+                    row_y(self.gpu_toggle.y),
                     encoder,
                     view,
                     &self.widget_renderer,
@@ -1858,18 +2198,17 @@ impl SettingsPanel {
                     queue,
                     window_width,
                     window_height,
-                    gpu_covered,
                 );
-                let threads_covered = any_dropdown_covers(self.threads_slider.y);
                 self.draw_row_bg(
                     encoder,
                     view,
                     queue,
-                    self.threads_slider.y,
+                    row_y(self.threads_slider.y),
                     window_width,
                     window_height,
                 );
-                self.threads_slider.render_ex(
+                self.threads_slider.render_at(
+                    row_y(self.threads_slider.y),
                     encoder,
                     view,
                     &self.widget_renderer,
@@ -1877,28 +2216,19 @@ impl SettingsPanel {
                     queue,
                     window_width,
                     window_height,
-                    threads_covered,
                 );
-                self.backend_select.y -= content_y_offset;
-                self.english_only_toggle.y -= content_y_offset;
-                self.model_select.y -= content_y_offset;
-                self.language_select.y -= content_y_offset;
-                self.gpu_toggle.y -= content_y_offset;
-                self.threads_slider.y -= content_y_offset;
             }
             SettingsTab::Audio => {
-                self.vad_sensitivity_select.y += content_y_offset;
-                self.sound_toggle.y += content_y_offset;
-                self.volume_slider.y += content_y_offset;
                 self.draw_row_bg(
                     encoder,
                     view,
                     queue,
-                    self.vad_sensitivity_select.y,
+                    row_y(self.vad_sensitivity_select.y),
                     window_width,
                     window_height,
                 );
-                self.vad_sensitivity_select.render(
+                self.vad_sensitivity_select.render_at(
+                    row_y(self.vad_sensitivity_select.y),
                     encoder,
                     view,
                     &self.widget_renderer,
@@ -1906,18 +2236,17 @@ impl SettingsPanel {
                     queue,
                     window_width,
                     window_height,
-                    false,
                 );
-                let sound_covered = self.vad_sensitivity_select.covers_y(self.sound_toggle.y);
                 self.draw_row_bg(
                     encoder,
                     view,
                     queue,
-                    self.sound_toggle.y,
+                    row_y(self.sound_toggle.y),
                     window_width,
                     window_height,
                 );
-                self.sound_toggle.render_ex(
+                self.sound_toggle.render_at(
+                    row_y(self.sound_toggle.y),
                     encoder,
                     view,
                     &self.widget_renderer,
@@ -1925,18 +2254,17 @@ impl SettingsPanel {
                     queue,
                     window_width,
                     window_height,
-                    sound_covered,
                 );
-                let volume_covered = self.vad_sensitivity_select.covers_y(self.volume_slider.y);
                 self.draw_row_bg(
                     encoder,
                     view,
                     queue,
-                    self.volume_slider.y,
+                    row_y(self.volume_slider.y),
                     window_width,
                     window_height,
                 );
-                self.volume_slider.render_ex(
+                self.volume_slider.render_at(
+                    row_y(self.volume_slider.y),
                     encoder,
                     view,
                     &self.widget_renderer,
@@ -1944,35 +2272,19 @@ impl SettingsPanel {
                     queue,
                     window_width,
                     window_height,
-                    volume_covered,
                 );
-                self.vad_sensitivity_select.y -= content_y_offset;
-                self.sound_toggle.y -= content_y_offset;
-                self.volume_slider.y -= content_y_offset;
             }
             SettingsTab::Behavior => {
-                self.auto_paste_toggle.y += content_y_offset;
-                self.clear_on_session_toggle.y += content_y_offset;
-                self.post_processing_toggle.y += content_y_offset;
-                self.typewriter_toggle.y += content_y_offset;
-                self.shortcut_mode_select.y += content_y_offset;
-                self.paste_shortcut_select.y += content_y_offset;
-                self.enhancement_toggle.y += content_y_offset;
-                let any_behavior_dropdown_covers = |y: f32| -> bool {
-                    self.shortcut_mode_select.covers_y(y) || self.paste_shortcut_select.covers_y(y)
-                };
-                let paste_covered = self
-                    .shortcut_mode_select
-                    .covers_y(self.paste_shortcut_select.y);
                 self.draw_row_bg(
                     encoder,
                     view,
                     queue,
-                    self.auto_paste_toggle.y,
+                    row_y(self.auto_paste_toggle.y),
                     window_width,
                     window_height,
                 );
-                self.auto_paste_toggle.render(
+                self.auto_paste_toggle.render_at(
+                    row_y(self.auto_paste_toggle.y),
                     encoder,
                     view,
                     &self.widget_renderer,
@@ -1985,11 +2297,12 @@ impl SettingsPanel {
                     encoder,
                     view,
                     queue,
-                    self.clear_on_session_toggle.y,
+                    row_y(self.clear_on_session_toggle.y),
                     window_width,
                     window_height,
                 );
-                self.clear_on_session_toggle.render(
+                self.clear_on_session_toggle.render_at(
+                    row_y(self.clear_on_session_toggle.y),
                     encoder,
                     view,
                     &self.widget_renderer,
@@ -2002,11 +2315,12 @@ impl SettingsPanel {
                     encoder,
                     view,
                     queue,
-                    self.post_processing_toggle.y,
+                    row_y(self.post_processing_toggle.y),
                     window_width,
                     window_height,
                 );
-                self.post_processing_toggle.render(
+                self.post_processing_toggle.render_at(
+                    row_y(self.post_processing_toggle.y),
                     encoder,
                     view,
                     &self.widget_renderer,
@@ -2019,11 +2333,12 @@ impl SettingsPanel {
                     encoder,
                     view,
                     queue,
-                    self.typewriter_toggle.y,
+                    row_y(self.typewriter_toggle.y),
                     window_width,
                     window_height,
                 );
-                self.typewriter_toggle.render(
+                self.typewriter_toggle.render_at(
+                    row_y(self.typewriter_toggle.y),
                     encoder,
                     view,
                     &self.widget_renderer,
@@ -2036,11 +2351,12 @@ impl SettingsPanel {
                     encoder,
                     view,
                     queue,
-                    self.shortcut_mode_select.y,
+                    row_y(self.shortcut_mode_select.y),
                     window_width,
                     window_height,
                 );
-                self.shortcut_mode_select.render(
+                self.shortcut_mode_select.render_at(
+                    row_y(self.shortcut_mode_select.y),
                     encoder,
                     view,
                     &self.widget_renderer,
@@ -2048,17 +2364,17 @@ impl SettingsPanel {
                     queue,
                     window_width,
                     window_height,
-                    false,
                 );
                 self.draw_row_bg(
                     encoder,
                     view,
                     queue,
-                    self.paste_shortcut_select.y,
+                    row_y(self.paste_shortcut_select.y),
                     window_width,
                     window_height,
                 );
-                self.paste_shortcut_select.render(
+                self.paste_shortcut_select.render_at(
+                    row_y(self.paste_shortcut_select.y),
                     encoder,
                     view,
                     &self.widget_renderer,
@@ -2066,18 +2382,17 @@ impl SettingsPanel {
                     queue,
                     window_width,
                     window_height,
-                    paste_covered,
                 );
-                let enhancement_covered = any_behavior_dropdown_covers(self.enhancement_toggle.y);
                 self.draw_row_bg(
                     encoder,
                     view,
                     queue,
-                    self.enhancement_toggle.y,
+                    row_y(self.enhancement_toggle.y),
                     window_width,
                     window_height,
                 );
-                self.enhancement_toggle.render_ex(
+                self.enhancement_toggle.render_at(
+                    row_y(self.enhancement_toggle.y),
                     encoder,
                     view,
                     &self.widget_renderer,
@@ -2085,29 +2400,19 @@ impl SettingsPanel {
                     queue,
                     window_width,
                     window_height,
-                    enhancement_covered,
                 );
-                self.auto_paste_toggle.y -= content_y_offset;
-                self.clear_on_session_toggle.y -= content_y_offset;
-                self.post_processing_toggle.y -= content_y_offset;
-                self.typewriter_toggle.y -= content_y_offset;
-                self.shortcut_mode_select.y -= content_y_offset;
-                self.paste_shortcut_select.y -= content_y_offset;
-                self.enhancement_toggle.y -= content_y_offset;
             }
             SettingsTab::Display => {
-                self.vsync_select.y += content_y_offset;
-                self.target_fps_slider.y += content_y_offset;
-                self.system_tray_toggle.y += content_y_offset;
                 self.draw_row_bg(
                     encoder,
                     view,
                     queue,
-                    self.vsync_select.y,
+                    row_y(self.vsync_select.y),
                     window_width,
                     window_height,
                 );
-                self.vsync_select.render(
+                self.vsync_select.render_at(
+                    row_y(self.vsync_select.y),
                     encoder,
                     view,
                     &self.widget_renderer,
@@ -2115,18 +2420,17 @@ impl SettingsPanel {
                     queue,
                     window_width,
                     window_height,
-                    false,
                 );
-                let fps_covered = self.vsync_select.covers_y(self.target_fps_slider.y);
                 self.draw_row_bg(
                     encoder,
                     view,
                     queue,
-                    self.target_fps_slider.y,
+                    row_y(self.target_fps_slider.y),
                     window_width,
                     window_height,
                 );
-                self.target_fps_slider.render_ex(
+                self.target_fps_slider.render_at(
+                    row_y(self.target_fps_slider.y),
                     encoder,
                     view,
                     &self.widget_renderer,
@@ -2134,18 +2438,17 @@ impl SettingsPanel {
                     queue,
                     window_width,
                     window_height,
-                    fps_covered,
                 );
-                let tray_covered = self.vsync_select.covers_y(self.system_tray_toggle.y);
                 self.draw_row_bg(
                     encoder,
                     view,
                     queue,
-                    self.system_tray_toggle.y,
+                    row_y(self.system_tray_toggle.y),
                     window_width,
                     window_height,
                 );
-                self.system_tray_toggle.render_ex(
+                self.system_tray_toggle.render_at(
+                    row_y(self.system_tray_toggle.y),
                     encoder,
                     view,
                     &self.widget_renderer,
@@ -2153,25 +2456,19 @@ impl SettingsPanel {
                     queue,
                     window_width,
                     window_height,
-                    tray_covered,
                 );
-                self.vsync_select.y -= content_y_offset;
-                self.target_fps_slider.y -= content_y_offset;
-                self.system_tray_toggle.y -= content_y_offset;
             }
             SettingsTab::Appearance => {
-                self.window_position_select.y += content_y_offset;
-                self.font_size_slider.y += content_y_offset;
-                self.recording_indicator_toggle.y += content_y_offset;
                 self.draw_row_bg(
                     encoder,
                     view,
                     queue,
-                    self.window_position_select.y,
+                    row_y(self.visual_theme_select.y),
                     window_width,
                     window_height,
                 );
-                self.window_position_select.render(
+                self.visual_theme_select.render_at(
+                    row_y(self.visual_theme_select.y),
                     encoder,
                     view,
                     &self.widget_renderer,
@@ -2179,20 +2476,17 @@ impl SettingsPanel {
                     queue,
                     window_width,
                     window_height,
-                    false,
                 );
-                let font_covered = self
-                    .window_position_select
-                    .covers_y(self.font_size_slider.y);
                 self.draw_row_bg(
                     encoder,
                     view,
                     queue,
-                    self.font_size_slider.y,
+                    row_y(self.spectrogram_skin_select.y),
                     window_width,
                     window_height,
                 );
-                self.font_size_slider.render_ex(
+                self.spectrogram_skin_select.render_at(
+                    row_y(self.spectrogram_skin_select.y),
                     encoder,
                     view,
                     &self.widget_renderer,
@@ -2200,20 +2494,17 @@ impl SettingsPanel {
                     queue,
                     window_width,
                     window_height,
-                    font_covered,
                 );
-                let indicator_covered = self
-                    .window_position_select
-                    .covers_y(self.recording_indicator_toggle.y);
                 self.draw_row_bg(
                     encoder,
                     view,
                     queue,
-                    self.recording_indicator_toggle.y,
+                    row_y(self.window_position_select.y),
                     window_width,
                     window_height,
                 );
-                self.recording_indicator_toggle.render_ex(
+                self.window_position_select.render_at(
+                    row_y(self.window_position_select.y),
                     encoder,
                     view,
                     &self.widget_renderer,
@@ -2221,19 +2512,49 @@ impl SettingsPanel {
                     queue,
                     window_width,
                     window_height,
-                    indicator_covered,
                 );
-                self.window_position_select.y -= content_y_offset;
-                self.font_size_slider.y -= content_y_offset;
-                self.recording_indicator_toggle.y -= content_y_offset;
+                self.draw_row_bg(
+                    encoder,
+                    view,
+                    queue,
+                    row_y(self.font_size_slider.y),
+                    window_width,
+                    window_height,
+                );
+                self.font_size_slider.render_at(
+                    row_y(self.font_size_slider.y),
+                    encoder,
+                    view,
+                    &self.widget_renderer,
+                    &mut text_items,
+                    queue,
+                    window_width,
+                    window_height,
+                );
+                self.draw_row_bg(
+                    encoder,
+                    view,
+                    queue,
+                    row_y(self.recording_indicator_toggle.y),
+                    window_width,
+                    window_height,
+                );
+                self.recording_indicator_toggle.render_at(
+                    row_y(self.recording_indicator_toggle.y),
+                    encoder,
+                    view,
+                    &self.widget_renderer,
+                    &mut text_items,
+                    queue,
+                    window_width,
+                    window_height,
+                );
             }
         }
 
         // Apply and Reset buttons
         {
-            let num_rows = self.tab_row_count(self.active_tab);
-            let buttons_y =
-                CONTENT_Y + (num_rows as f32) * (ROW_HEIGHT + SPACING) + 12.0 + content_y_offset;
+            let buttons_y = self.buttons_y_for_tab(self.active_tab) + content_y_offset;
             let w = default_width(window_width);
             let btn_width = 80.0f32;
             let btn_gap = 8.0f32;
@@ -2312,126 +2633,64 @@ impl SettingsPanel {
         // Flush all batched widget rects (row bgs, controls)
         self.widget_renderer
             .flush(encoder, view, window_width, window_height);
+        self.batch_text_renderer
+            .render_batch(encoder, view, &text_items);
 
-        // Render any open dropdown ON TOP of all other widgets
-        // Dropdown text items are appended to text_items so everything is rendered in one batch
-        match self.active_tab {
-            SettingsTab::Backend => {
-                self.backend_select.y += content_y_offset;
-                self.model_select.y += content_y_offset;
-                self.language_select.y += content_y_offset;
-                self.backend_select.render_dropdown(
-                    encoder,
-                    view,
-                    &self.widget_renderer,
-                    &mut text_items,
-                    queue,
-                    window_width,
-                    window_height,
-                );
-                self.model_select.render_dropdown(
-                    encoder,
-                    view,
-                    &self.widget_renderer,
-                    &mut text_items,
-                    queue,
-                    window_width,
-                    window_height,
-                );
-                if self.show_language_select {
-                    self.language_select.render_dropdown(
-                        encoder,
-                        view,
-                        &self.widget_renderer,
-                        &mut text_items,
-                        queue,
-                        window_width,
-                        window_height,
-                    );
-                }
-                self.backend_select.y -= content_y_offset;
-                self.model_select.y -= content_y_offset;
-                self.language_select.y -= content_y_offset;
-            }
-            SettingsTab::Audio => {
-                self.vad_sensitivity_select.y += content_y_offset;
-                self.vad_sensitivity_select.render_dropdown(
-                    encoder,
-                    view,
-                    &self.widget_renderer,
-                    &mut text_items,
-                    queue,
-                    window_width,
-                    window_height,
-                );
-                self.vad_sensitivity_select.y -= content_y_offset;
-            }
-            SettingsTab::Behavior => {
-                self.shortcut_mode_select.y += content_y_offset;
-                self.paste_shortcut_select.y += content_y_offset;
-                self.shortcut_mode_select.render_dropdown(
-                    encoder,
-                    view,
-                    &self.widget_renderer,
-                    &mut text_items,
-                    queue,
-                    window_width,
-                    window_height,
-                );
-                self.paste_shortcut_select.render_dropdown(
-                    encoder,
-                    view,
-                    &self.widget_renderer,
-                    &mut text_items,
-                    queue,
-                    window_width,
-                    window_height,
-                );
-                self.shortcut_mode_select.y -= content_y_offset;
-                self.paste_shortcut_select.y -= content_y_offset;
-            }
-            SettingsTab::Display => {
-                self.vsync_select.y += content_y_offset;
-                self.vsync_select.render_dropdown(
-                    encoder,
-                    view,
-                    &self.widget_renderer,
-                    &mut text_items,
-                    queue,
-                    window_width,
-                    window_height,
-                );
-                self.vsync_select.y -= content_y_offset;
-            }
-            SettingsTab::Appearance => {
-                self.window_position_select.y += content_y_offset;
-                self.window_position_select.render_dropdown(
-                    encoder,
-                    view,
-                    &self.widget_renderer,
-                    &mut text_items,
-                    queue,
-                    window_width,
-                    window_height,
-                );
-                self.window_position_select.y -= content_y_offset;
-            }
+        let mut overlay_text_items: Vec<TextItem> = Vec::new();
+
+        // Render one open dropdown on top of all rows. The panel owns the open
+        // menu, so sibling selects cannot accidentally stack or fight for input.
+        if let Some(dropdown_id) = self.open_dropdown {
+            let select = self.select_ref(dropdown_id);
+            select.render_dropdown_at(
+                row_y(select.y),
+                encoder,
+                view,
+                &self.widget_renderer,
+                &mut overlay_text_items,
+                queue,
+                window_width,
+                window_height,
+            );
         }
 
-        // Render tooltip background rect before text flush (so it's behind tooltip text but on top of dropdown rects)
-        if let Some(tip_text) = self.hovered_tooltip {
-            if self.hover_start.elapsed().as_millis() >= 150 {
-                let padding = 6.0f32;
-                let font_size = 11.0f32;
-                let char_w = font_size * 0.6;
-                let tip_w = tip_text.len() as f32 * char_w + padding * 2.0;
-                let tip_h = font_size + padding * 2.0;
-                let w = default_width(window_width);
-                let tip_x = (WIDGET_X + w / 2.0 - tip_w / 2.0)
-                    .max(2.0)
-                    .min(window_width as f32 - tip_w - 2.0);
-                let tip_y =
-                    (self.tooltip_y + ROW_HEIGHT + 4.0).min(window_height as f32 - tip_h - 2.0);
+        if self.open_dropdown.is_none()
+            && self.hover_start.elapsed().as_millis() >= TOOLTIP_DELAY_MS
+        {
+            if let Some(tooltip) = self.hovered_tooltip {
+                let padding_x = 8.0f32;
+                let padding_y = 5.0f32;
+                let font_size = 10.5f32;
+                let char_width = font_size * 0.58;
+                let raw_text_width = tooltip.text.chars().count() as f32 * char_width;
+                let max_tip_width = (window_width as f32 - 8.0).max(1.0);
+                let min_tip_width = 80.0f32.min(max_tip_width);
+                let tip_width = (raw_text_width + padding_x * 2.0)
+                    .max(min_tip_width)
+                    .min(max_tip_width);
+                let text_width = (tip_width - padding_x * 2.0).max(1.0);
+                let line_count = (raw_text_width / text_width).ceil().max(1.0);
+                let tip_height = line_count * font_size * 1.2 + padding_y * 2.0;
+
+                let right_x = self.tooltip_anchor_x + 12.0;
+                let tip_x = if right_x + tip_width <= window_width as f32 - 4.0 {
+                    right_x
+                } else {
+                    (self.tooltip_anchor_x - tip_width - 12.0).max(4.0)
+                };
+
+                let row_screen_y = row_y(tooltip.row_y);
+                let below_y = row_screen_y + ROW_HEIGHT + 6.0;
+                let above_y = row_screen_y - tip_height - 6.0;
+                let top_limit = tab_bar_y + 28.0;
+                let bottom_limit = window_height as f32 - 4.0;
+                let tip_y = if below_y + tip_height <= bottom_limit {
+                    below_y
+                } else if above_y >= top_limit {
+                    above_y
+                } else {
+                    (bottom_limit - tip_height).max(top_limit)
+                };
 
                 self.widget_renderer.draw_rounded_rect(
                     encoder,
@@ -2439,29 +2698,55 @@ impl SettingsPanel {
                     queue,
                     tip_x,
                     tip_y,
-                    tip_w,
-                    tip_h,
+                    tip_width,
+                    tip_height,
+                    5.0,
+                    [0.190, 0.190, 0.230, 0.98],
+                    window_width,
+                    window_height,
+                );
+                self.widget_renderer.draw_rounded_rect(
+                    encoder,
+                    view,
+                    queue,
+                    tip_x + 1.0,
+                    tip_y + 1.0,
+                    (tip_width - 2.0).max(1.0),
+                    (tip_height - 2.0).max(1.0),
                     4.0,
-                    [0.12, 0.12, 0.16, 0.95],
+                    [0.062, 0.062, 0.085, 0.98],
                     window_width,
                     window_height,
                 );
 
-                text_items.push(TextItem {
-                    text: tip_text.to_string(),
-                    x: tip_x + padding,
-                    y: tip_y + padding,
-                    scale: font_size / 14.0,
-                    color: [0.8, 0.8, 0.85, 1.0],
-                    max_width: tip_w - padding * 2.0,
+                overlay_text_items.push(TextItem {
+                    text: tooltip.text.to_string(),
+                    x: tip_x + padding_x,
+                    y: tip_y + padding_y - 0.5,
+                    scale: font_size / 10.0,
+                    color: [0.880, 0.880, 0.920, 1.0],
+                    max_width: text_width,
                 });
             }
         }
 
-        // Flush all rects (dropdowns + tooltip bg), then render ALL text in a single batch
+        // Flush overlay rects, then render only overlay text. Base row text was
+        // already rendered before dropdowns so it cannot bleed through menus.
         self.widget_renderer
             .flush(encoder, view, window_width, window_height);
-        self.batch_text_renderer
-            .render_batch(encoder, view, &text_items);
+        if !overlay_text_items.is_empty() {
+            if self.overlay_text_renderer.is_none() {
+                self.overlay_text_renderer = Some(BatchTextRenderer::new(
+                    self.device.clone(),
+                    self.queue.clone(),
+                    PhysicalSize::new(window_width, window_height),
+                    self.surface_format,
+                ));
+            }
+
+            if let Some(renderer) = &mut self.overlay_text_renderer {
+                renderer.render_batch(encoder, view, &overlay_text_items);
+            }
+        }
     }
 }
