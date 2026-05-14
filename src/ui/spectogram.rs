@@ -54,6 +54,7 @@ impl Default for SpectrogramConfig {
 
 // Legacy constants for backward compatibility (will be removed in future)
 const FFT_SIZE: usize = 512;
+const METER_BOTTOM_PADDING_PX: f32 = 3.0;
 
 pub struct Spectrogram {
     // Configuration
@@ -623,7 +624,13 @@ fn fill_bar_instances(
     for (&amplitude, template) in bar_data.iter().zip(templates.iter()) {
         let adjusted_amplitude = amplitude * template.edge_factor;
 
-        let bar_height = (adjusted_amplitude.abs() * height as f32).max(2.0);
+        let available_height = match config.skin {
+            crate::config::SpectrogramSkin::Meter => {
+                (height as f32 - METER_BOTTOM_PADDING_PX).max(1.0)
+            }
+            _ => height as f32,
+        };
+        let bar_height = (adjusted_amplitude.abs() * available_height).max(2.0);
 
         let norm_height = bar_height / height as f32 * 2.0;
         let norm_y = match config.skin {
@@ -637,7 +644,9 @@ fn fill_bar_instances(
                     -norm_height
                 }
             }
-            crate::config::SpectrogramSkin::Meter => -1.0,
+            crate::config::SpectrogramSkin::Meter => {
+                -1.0 + (METER_BOTTOM_PADDING_PX / height as f32 * 2.0)
+            }
         };
 
         let color = [
@@ -764,5 +773,29 @@ mod tests {
         assert_eq!(stats.signed_peak, 0.35);
         assert_eq!(stats.peak_abs, 0.35);
         assert!(stats.rms > stats.avg_abs * 0.9);
+    }
+
+    #[test]
+    fn meter_skin_keeps_idle_line_inside_container() {
+        let mut config = SpectrogramConfig {
+            skin: crate::config::SpectrogramSkin::Meter,
+            ..Default::default()
+        };
+        apply_skin_config(&mut config);
+
+        let templates = create_bar_instance_template(4, 100, &config);
+        let mut instances = Vec::new();
+        fill_bar_instances(
+            &[0.0, 0.0, 0.0, 0.0],
+            &templates,
+            40,
+            &config,
+            &mut instances,
+        );
+
+        for instance in instances {
+            assert!(instance.position[1] > -1.0);
+            assert!(instance.position[1] + instance.size[1] <= 1.0);
+        }
     }
 }
