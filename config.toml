@@ -14,7 +14,7 @@ transcription_mode = "manual"          # "realtime" or "manual"
 # =============================================================================
 
 [backend_config]
-backend = "whisper_cpp"                # Options: ctranslate2, whisper_cpp, moonshine
+backend = "whisper_cpp"                # Options: whisper_cpp, ctranslate2, moonshine, parakeet, nemotron
 threads = 4                            # CPU threads (default: min(num_cpus, 4))
 gpu_enabled = true                     # GPU acceleration (CUDA/Metal/Vulkan)
 quantization_level = "medium"          # Precision: high, medium, low
@@ -77,6 +77,10 @@ max_tokens = 0
 [moonshine_options]
 enable_cache = false
 
+[nemotron_options]
+language = "en-US"                     # Locale for lang-ID prompt, or "auto" to detect
+                                       # (e.g. en-US, en-GB, de-DE, fr-FR, es-ES, ja-JP, zh-CN, ...)
+
 # =============================================================================
 # POST-PROCESSING
 # =============================================================================
@@ -96,8 +100,8 @@ normalize_whitespace = true
 [enhancement_config]
 enabled = false                        # Enable magic mode
 # model = "owner/repo/filename.gguf"   # HuggingFace GGUF model path
-# max_tokens = 256                     # Maximum tokens to generate
-# system_prompt = ""                   # Custom system prompt
+system_prompt = "Rewrite the transcript into clean, natural text while preserving the speaker's meaning. Fix obvious transcription artifacts, punctuation, and casing. Do not add facts, explanations, or commentary."
+max_tokens = 256                       # Maximum tokens to generate
 
 # =============================================================================
 # SYSTEM INTEGRATION
@@ -107,6 +111,7 @@ enabled = false                        # Enable magic mode
 enable_xdg_portal = true
 enable_global_shortcuts = true
 manual_toggle_accelerator = "<Super>backslash"
+shortcut_mode = "Toggle"               # Toggle or PushToTalk
 paste_shortcut = "ctrl_shift_v"        # ctrl_shift_v (terminals) or ctrl_v (apps)
 
 # =============================================================================
@@ -122,8 +127,15 @@ window_position = "BottomCenter"       # BottomCenter, TopCenter, MiddleCenter, 
 [window_behavior_config]
 show_in_system_tray = true
 
-[ui]
-typewriter_effect = false                # Animate text reveal in manual mode
+[ui_config]
+visual_theme = "Focus"                  # Focus, Pulse, Terminal
+spectrogram_skin = "Bars"               # Bars, Waveform, Meter
+font_size = 10.0
+speaking_color = [0.1, 0.9, 0.5, 1.0]
+idle_color = [1.0, 0.85, 0.15, 1.0]
+recording_indicator_color = [0.9, 0.2, 0.2, 1.0]
+show_recording_indicator = true
+typewriter_effect = false               # Animate text reveal in manual mode
 
 # =============================================================================
 # DEBUGGING
@@ -134,3 +146,4 @@ typewriter_effect = false                # Animate text reveal in manual mode
 log_stats_enabled = false
 save_manual_audio_debug = false
 recording_dir = "recordings"
+save_transcript_history = false

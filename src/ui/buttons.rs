@@ -7,7 +7,7 @@ use winit::{
     event::{ElementState, MouseButton},
 };
 
-use crate::real_time_transcriber::TranscriptionMode;
+use speechcore::TranscriptionMode;
 
 use super::button_texture::ButtonTexture;
 
@@ -84,7 +84,7 @@ pub struct ButtonManager {
     _gap: u32,
     active_button: Option<ButtonType>,
     recording: Option<Arc<AtomicBool>>,
-    transcription_mode: crate::real_time_transcriber::TranscriptionMode,
+    transcription_mode: speechcore::TranscriptionMode,
     enhancement_enabled: bool, // Config: whether MagicMode feature is available (shows button)
     magic_mode_active: bool, // Runtime: whether MagicMode is currently toggled on (affects opacity)
     // Texture cache
@@ -521,7 +521,7 @@ impl Button {
         view: &wgpu::TextureView,
         encoder: &mut wgpu::CommandEncoder,
         queue: &wgpu::Queue,
-        transcription_mode: Option<crate::real_time_transcriber::TranscriptionMode>,
+        transcription_mode: Option<speechcore::TranscriptionMode>,
     ) {
         // Update rotation buffer if needed
         if self.button_type == ButtonType::Close
@@ -530,8 +530,8 @@ impl Button {
         {
             let mode_value = if self.button_type == ButtonType::ModeToggle {
                 transcription_mode.map(|mode| match mode {
-                    crate::real_time_transcriber::TranscriptionMode::RealTime => 0.0,
-                    crate::real_time_transcriber::TranscriptionMode::Manual => 1.0,
+                    speechcore::TranscriptionMode::RealTime => 0.0,
+                    speechcore::TranscriptionMode::Manual => 1.0,
                 })
             } else {
                 None
@@ -1491,7 +1491,7 @@ impl ButtonManager {
             // In manual mode, check current transcription mode to determine behavior
             let current_mode = self.transcription_mode;
 
-            if current_mode == crate::real_time_transcriber::TranscriptionMode::Manual {
+            if current_mode == speechcore::TranscriptionMode::Manual {
                 if is_recording {
                     // We're recording in manual mode, show the accept button (to finish recording)
                     if let Some(texture) = &self.accept_texture {

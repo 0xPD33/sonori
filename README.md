@@ -25,6 +25,7 @@ Real-time or on-demand transcription, entirely on your device.
 ### Core
 - **Local AI Processing** - All transcription happens on your device, no cloud services required
 - **Multi-Backend Support** - Choose between CTranslate2, Whisper.cpp, Moonshine, or Parakeet TDT backends
+- **Shared STT Runtime** - Speech capture, VAD, model downloads, and backend inference are provided by the reusable `speechcore` crate
 - **Dual Transcription Modes** - Real-time continuous transcription or manual on-demand sessions
 - **Voice Activity Detection** - Uses Silero VAD for accurate speech detection
 - **Automatic Model Download** - Models are downloaded automatically on first run
@@ -37,7 +38,7 @@ Real-time or on-demand transcription, entirely on your device.
 - **Typewriter Effect** - Character-by-character text reveal animation when transcription completes
 
 ### Optional Features
-- **GPU Acceleration** - Vulkan-based rendering; ONNX Runtime GPU acceleration for Moonshine and Parakeet TDT backends
+- **GPU Acceleration** - Vulkan-based rendering; Whisper.cpp Vulkan acceleration; ONNX Runtime GPU acceleration for Moonshine and Parakeet TDT backends
 - **Global Shortcuts** - System-wide hotkeys via XDG Desktop Portal (e.g., Super+\ to toggle recording)
 - **Auto-Paste** - Automatic text injection via XDG Desktop Portal, with wtype/dotool fallback for compositors without portal support
 - **Sound Feedback** - Audio cues for recording state changes
@@ -274,7 +275,7 @@ binds {
 
 ## Configuration
 
-Sonori uses `config.toml` for configuration. Defaults work well for most users.
+Sonori uses `config.toml` for configuration. Defaults work well for most users. New configs default to the Whisper.cpp backend; existing user configs keep their selected backend.
 
 **Quick Setup:** Choose a preset from the [Configuration Guide](./CONFIGURATION.md):
 - **Fast & Lightweight** - Good for older computers
@@ -306,12 +307,12 @@ Required for UI rendering and optional GPU-accelerated transcription.
 
 ### XDG Desktop Portal Features
 
-**Global Shortcuts** (`global_shortcuts_enabled`):
+**Global Shortcuts** (`enable_global_shortcuts` in `[portal_config]`):
 - Requires KDE Plasma 6+ or GNOME 45+
 - Accept permission dialog on first run
 - Check portal is running: `systemctl --user status xdg-desktop-portal`
 
-**Auto-Paste** (`portal_input_enabled`):
+**Auto-Paste** (`enable_xdg_portal` in `[portal_config]`):
 - Uses XDG RemoteDesktop portal for keyboard injection (KDE Plasma)
 - Falls back to `wtype` when portal is unavailable (sway, Hyprland, niri, river, labwc, COSMIC)
 - Falls back to `dotool` if wtype also fails (works on all compositors via uinput — requires `input` group membership)
@@ -323,11 +324,11 @@ Required for UI rendering and optional GPU-accelerated transcription.
 ```bash
 # NixOS
 nix-shell model-conversion/shell.nix
-ct2-transformers-converter --model your-model --output_dir ~/.cache/whisper/your-model --copy_files preprocessor_config.json tokenizer.json
+ct2-transformers-converter --model your-model --output_dir ~/.cache/speechcore/models/your-model-ct2 --copy_files preprocessor_config.json tokenizer.json
 
 # Other distros
 pip install -U ctranslate2 huggingface_hub torch transformers
-ct2-transformers-converter --model your-model --output_dir ~/.cache/whisper/your-model --copy_files preprocessor_config.json tokenizer.json
+ct2-transformers-converter --model your-model --output_dir ~/.cache/speechcore/models/your-model-ct2 --copy_files preprocessor_config.json tokenizer.json
 ```
 
 **30-second truncation:** Whisper's 30-second window with 448 token limit can truncate dense speech. Solutions:
@@ -337,12 +338,12 @@ ct2-transformers-converter --model your-model --output_dir ~/.cache/whisper/your
 
 **Moonshine model layout:** Moonshine uses ONNX merged models (auto-downloaded) and expects a model name like `tiny` or `base`. If you see decoder input errors, set `[moonshine_options].enable_cache = false` and retry.
 
-**Parakeet model layout:** Parakeet uses INT8 split ONNX models via sherpa-onnx (auto-downloaded from HuggingFace). Models are stored in `~/.cache/sonori/models/parakeet-tdt-v3-int8/` (v3, multilingual) or `parakeet-tdt-v2-int8/` (v2, English-only).
+**Parakeet model layout:** Parakeet uses INT8 split ONNX models via sherpa-onnx (auto-downloaded from HuggingFace). STT models are stored under `~/.cache/speechcore/models/` by default.
 
 ## Known Issues
 
 - Not all Wayland compositors supported (tested primarily on KDE Plasma/KWin)
-- Transcription accuracy depends on Whisper model quality
+- Transcription accuracy depends on backend and model quality
 - CPU usage can be high when idle (buffer size related)
 
 ## Contributing

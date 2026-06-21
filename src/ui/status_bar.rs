@@ -4,9 +4,9 @@ use parking_lot::RwLock;
 use wgpu::{self, util::DeviceExt};
 use winit::dpi::PhysicalSize;
 
-use super::common::{BackendStatus, BackendStatusState};
 use super::text_renderer::TextRenderer;
 use crate::config::UiConfig;
+use speechcore::{BackendStatus, BackendStatusState};
 
 const ERROR_FADE_DURATION_SECS: f64 = 10.0;
 

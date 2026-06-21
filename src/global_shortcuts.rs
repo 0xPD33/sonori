@@ -9,7 +9,7 @@ use tokio::time::{sleep, Duration};
 use zbus::zvariant::OwnedValue;
 
 use sonori::config::ShortcutMode;
-use sonori::real_time_transcriber::{ManualSessionCommand, TranscriptionMode};
+use speechcore::{ManualSessionCommand, TranscriptionMode};
 
 /// Manages global shortcuts through the XDG Desktop Portal.
 ///

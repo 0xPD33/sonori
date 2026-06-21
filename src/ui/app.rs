@@ -16,13 +16,13 @@ use winit::{
 
 use winit::platform::wayland::{Anchor, KeyboardInteractivity, Layer, WindowAttributesWayland};
 
-use super::common::{AudioVisualizationData, BackendStatus};
 use super::settings_window::SettingsWindow;
 use super::window::WindowState;
 
 // Constants from window.rs
 use super::window::MARGIN;
 use crate::config::{AppConfig, CustomWindowPosition, DisplayConfig, WindowPosition};
+use speechcore::{AudioVisualizationData, BackendStatus};
 
 const DRAG_DEBUG_ENV: &str = "SONORI_DRAG_DEBUG";
 const DRAG_RAW_MOTION_SCALE: f64 = 1.25;
@@ -46,7 +46,7 @@ pub fn run() {
         config: app_config,
         manual_session_sender: None,
         transcription_mode_ref: Arc::new(AtomicU8::new(
-            crate::real_time_transcriber::TranscriptionMode::RealTime.as_u8(),
+            speechcore::TranscriptionMode::RealTime.as_u8(),
         )),
         tray_update_tx: None,
         tray_command_rx: None,
@@ -67,16 +67,12 @@ pub fn run_with_audio_data(
     recording: Arc<AtomicBool>,
     magic_mode_enabled: Arc<AtomicBool>,
     config: AppConfig,
-    manual_session_sender: Option<
-        tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>,
-    >,
+    manual_session_sender: Option<tokio::sync::mpsc::Sender<speechcore::ManualSessionCommand>>,
     transcription_mode_ref: Arc<AtomicU8>,
     tray_update_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::system_tray::TrayUpdate>>,
     tray_command_rx: Option<tokio::sync::mpsc::UnboundedReceiver<crate::system_tray::TrayCommand>>,
     backend_status: Option<Arc<RwLock<BackendStatus>>>,
-    backend_command_tx: Option<
-        tokio::sync::mpsc::UnboundedSender<crate::backend_manager::BackendCommand>,
-    >,
+    backend_command_tx: Option<tokio::sync::mpsc::UnboundedSender<speechcore::BackendCommand>>,
 ) {
     let event_loop = EventLoop::new()
         .expect("Failed to create event loop. Ensure a display server (Wayland/X11) is available.");
@@ -112,15 +108,13 @@ pub struct WindowApp {
     pub magic_mode_enabled: Option<Arc<AtomicBool>>,
     pub current_modifiers: Modifiers,
     pub config: AppConfig,
-    pub manual_session_sender:
-        Option<tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>>,
+    pub manual_session_sender: Option<tokio::sync::mpsc::Sender<speechcore::ManualSessionCommand>>,
     pub transcription_mode_ref: Arc<AtomicU8>,
     pub tray_update_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::system_tray::TrayUpdate>>,
     pub tray_command_rx:
         Option<tokio::sync::mpsc::UnboundedReceiver<crate::system_tray::TrayCommand>>,
     pub backend_status: Option<Arc<RwLock<BackendStatus>>>,
-    pub backend_command_tx:
-        Option<tokio::sync::mpsc::UnboundedSender<crate::backend_manager::BackendCommand>>,
+    pub backend_command_tx: Option<tokio::sync::mpsc::UnboundedSender<speechcore::BackendCommand>>,
     pub settings_window: Option<SettingsWindow>,
     pub settings_window_id: Option<WindowId>,
     window_drag: Option<WindowDragState>,
@@ -535,6 +529,21 @@ fn preset_window_position(
     clamp_window_position(LogicalPosition::new(x, y), monitor_size, window_size)
 }
 
+fn wayland_anchor_for_position(position: WindowPosition) -> Anchor {
+    match position {
+        WindowPosition::BottomLeft => Anchor::BOTTOM | Anchor::LEFT,
+        WindowPosition::BottomCenter => Anchor::BOTTOM,
+        WindowPosition::BottomRight => Anchor::BOTTOM | Anchor::RIGHT,
+        WindowPosition::TopLeft => Anchor::TOP | Anchor::LEFT,
+        WindowPosition::TopCenter => Anchor::TOP,
+        WindowPosition::TopRight => Anchor::TOP | Anchor::RIGHT,
+        WindowPosition::MiddleLeft => Anchor::LEFT,
+        WindowPosition::MiddleCenter => Anchor::empty(),
+        WindowPosition::MiddleRight => Anchor::RIGHT,
+        WindowPosition::Custom => Anchor::TOP | Anchor::LEFT,
+    }
+}
+
 fn clamp_window_position(
     position: LogicalPosition<i32>,
     monitor_size: LogicalSize<u32>,
@@ -694,10 +703,11 @@ impl ApplicationHandler for WindowApp {
             };
             let window_attributes = window_attributes.clone();
             let backend_name = match self.config.backend_config.backend {
-                crate::backend::BackendType::CTranslate2 => "CTranslate2",
-                crate::backend::BackendType::WhisperCpp => "WhisperCpp",
-                crate::backend::BackendType::Moonshine => "Moonshine",
-                crate::backend::BackendType::Parakeet => "Parakeet",
+                speechcore::BackendType::CTranslate2 => "CTranslate2",
+                speechcore::BackendType::WhisperCpp => "WhisperCpp",
+                speechcore::BackendType::Moonshine => "Moonshine",
+                speechcore::BackendType::Parakeet => "Parakeet",
+                speechcore::BackendType::Nemotron => "Nemotron",
             }
             .to_string();
             let model_name = self.config.general_config.model.clone();
@@ -710,7 +720,7 @@ impl ApplicationHandler for WindowApp {
                 self.running.clone(),
                 self.recording.clone(),
                 self.magic_mode_enabled.clone(),
-                crate::real_time_transcriber::TranscriptionMode::from_u8(
+                speechcore::TranscriptionMode::from_u8(
                     self.transcription_mode_ref.load(Ordering::Relaxed),
                 ),
                 self.manual_session_sender.clone(),
@@ -834,10 +844,10 @@ impl ApplicationHandler for WindowApp {
                     // Tab - Toggle manual session (temporary, works when window focused)
                     // TODO: Once global shortcut (Super+Tab) works unfocused, remove this
                     if key_code == KeyCode::Tab {
-                        let current_mode = crate::real_time_transcriber::TranscriptionMode::from_u8(
+                        let current_mode = speechcore::TranscriptionMode::from_u8(
                             self.transcription_mode_ref.load(Ordering::Relaxed),
                         );
-                        if current_mode == crate::real_time_transcriber::TranscriptionMode::Manual {
+                        if current_mode == speechcore::TranscriptionMode::Manual {
                             window.toggle_manual_session();
                         }
                     }
@@ -947,10 +957,8 @@ fn create_window(
     running: Option<Arc<AtomicBool>>,
     recording: Option<Arc<AtomicBool>>,
     magic_mode_enabled: Option<Arc<AtomicBool>>,
-    transcription_mode: crate::real_time_transcriber::TranscriptionMode,
-    manual_session_sender: Option<
-        tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>,
-    >,
+    transcription_mode: speechcore::TranscriptionMode,
+    manual_session_sender: Option<tokio::sync::mpsc::Sender<speechcore::ManualSessionCommand>>,
     transcription_mode_ref: Arc<AtomicU8>,
     display_config: &crate::config::DisplayConfig,
     ui_config: &crate::config::UiConfig,
@@ -958,9 +966,7 @@ fn create_window(
     backend_name: &str,
     model_name: &str,
     backend_status: Option<Arc<RwLock<BackendStatus>>>,
-    backend_command_tx: Option<
-        tokio::sync::mpsc::UnboundedSender<crate::backend_manager::BackendCommand>,
-    >,
+    backend_command_tx: Option<tokio::sync::mpsc::UnboundedSender<speechcore::BackendCommand>>,
 ) -> WindowState {
     // Get monitor dimensions from video mode
     let monitor_size = monitor_mode.size();
@@ -1007,7 +1013,7 @@ fn create_window(
     if ev.is_wayland() {
         // For Wayland, create platform-specific attributes using WindowAttributesWayland
         // Get anchor from display configuration
-        let anchor = display_config.window_position.to_wayland_anchor();
+        let anchor = wayland_anchor_for_position(display_config.window_position);
         let (top_margin, right_margin, bottom_margin, left_margin) = layer_shell_margin(
             display_config,
             logical_monitor_size,

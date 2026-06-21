@@ -2,8 +2,8 @@
 
 ## Project Structure & Module Organization
 - `src/main.rs` bootstraps the overlay, while `src/lib.rs` exposes shared systems used by both CLI and UI paths.
-- **Audio/Transcription Pipeline**: `src/audio_capture.rs`, `src/transcription_processor.rs`, `src/silero_audio_processor.rs`, and `src/download.rs` handle audio IO, inference orchestration, and model management.
-- **Backend System**: `src/backend/` directory contains multi-backend abstraction (traits, factory, CTranslate2 implementation, Whisper.cpp implementation) for unified interface to different transcription engines.
+- **Speech Runtime**: reusable STT infrastructure lives in the sibling `../speechcore` crate. Sonori imports `speechcore` for audio capture, VAD, transcription orchestration, backend abstraction, model downloads, transcript streams, and stats.
+- **Sonori App Layer**: app-local code owns the overlay UI, CLI/IPC entrypoints, config conversion, portal integration, system tray, sound playback, transcript history, and Magic Mode enhancement.
 - **Sound System**: `src/sound_player.rs` (CPAL-based playback) and `src/sound_generator.rs` (tone synthesis) handle audio feedback for UI state transitions.
 - **System Integration**: `src/portal_input.rs`, `src/portal_tokens.rs`, `src/global_shortcuts.rs`, and `src/system_tray.rs` handle XDG Portal integration and system tray presence.
 - **UI Components**: `src/ui/` directory contains rendering pipeline, text rendering, spectrogram visualization, and button system; `src/ui/*.wgsl` contains custom GPU shaders.
@@ -22,23 +22,24 @@
 - `nix develop` drops you into a shell with all dependencies aligned with CI expectations.
 - `cargo build --release` produces the optimized binary in `target/release/sonori`.
 - `cargo run -- --cli` launches in headless mode; omit `--cli` for GUI overlay.
-- `cargo build --features` (future) for backend-specific builds (once feature flags are added).
+- Backend feature builds can be checked with commands like `cargo check --no-default-features --features backend-whisper-cpp`.
 
 ### GPU & Backend-Specific Builds
-- **Whisper.cpp with Vulkan**: Requires `shaderc` and `vulkan-headers` for shader compilation
-- **Whisper.cpp with OpenBLAS**: Requires `libopenblas-dev` or equivalent
-- **CTranslate2 with CUDA**: Requires CUDA toolkit (not currently tested/documented)
+- Sonori forwards backend features to `speechcore`: `backend-whisper-cpp`, `backend-ctranslate2`, `backend-moonshine`, and `backend-parakeet`.
+- **Whisper.cpp with Vulkan**: Requires `shaderc` and `vulkan-headers` for shader compilation.
+- **Whisper.cpp with OpenBLAS**: Requires `libopenblas-dev` or equivalent.
+- **CTranslate2 with CUDA**: Requires CUDA toolkit (not currently tested/documented).
 
 - `cargo fmt --all` and `cargo clippy --all-targets --all-features` enforce formatting and linting before review.
 
 ## Coding Style & Naming Conventions
 - Follow `rustfmt` defaults (4-space indent, trailing commas) and keep modules, files, and functions snake_case; types stay in UpperCamelCase.
-- Prefer explicit `use crate::...` imports for clarity; consolidate shared aliases in `src/prelude.rs`.
+- Prefer explicit app-local imports for Sonori systems and direct `speechcore::...` imports for shared STT types.
 - When adding shaders or UI assets, match existing names (`text_window.wgsl`, `spectogram.rs`) and keep asset filenames lowercase with dashes only when necessary.
 
 ## Testing Guidelines
 - Co-locate unit tests inside modules under `#[cfg(test)]`; integration tests belong in `tests/` should you add broader coverage.
-- Run `cargo test --all` before pushing; add targeted runs (e.g., `cargo test silero_audio_processor`) when touching audio or GPU pipelines.
+- Run `cargo test --all` before pushing. When touching shared STT behavior, also run focused checks in `../speechcore`.
 - Document any manual verification (overlay renders on Wayland, transcripts stream to `transcription_stats.log`) in your PR notes.
 
 ## Commit & Pull Request Guidelines

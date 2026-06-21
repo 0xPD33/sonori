@@ -4,7 +4,12 @@ This document provides a comprehensive overview of the Sonori real-time speech t
 
 ## System Overview
 
-Sonori is a high-performance, real-time speech transcription application built in Rust. It provides a transparent overlay displaying live transcriptions using multiple AI backends (CTranslate2, Whisper.cpp, with GPU acceleration support), with GPU-accelerated rendering and Wayland layer shell integration for seamless system integration on Linux.
+Sonori is a high-performance, real-time speech transcription application built in Rust. It provides a transparent overlay displaying live transcriptions using multiple local AI backends through the shared `speechcore` crate, with GPU-accelerated rendering and Wayland layer shell integration for seamless system integration on Linux.
+
+The repository is split into two layers:
+
+- **Sonori app (`flashscribe`)**: overlay UI, CLI/IPC, app configuration, portal integration, system tray, sound feedback, transcript history, and Magic Mode enhancement.
+- **Shared STT runtime (`../speechcore`)**: audio capture, VAD, transcription orchestration, backend abstraction, model provisioning, transcript/status streams, and performance stats.
 
 ## Core Architecture
 
@@ -15,22 +20,23 @@ The application follows a **modular, multi-threaded pipeline architecture** with
 ```
 Audio Input → VAD Processing → Speech Transcription (Multi-Backend) → Post-Processing → GPU Rendering → System Integration
      ↓            ↓                 ↓                                    ↓                ↓              ↓
-PortAudio → Silero VAD → Backend Abstraction (CT2/WhisperCpp) → Text Cleanup → WGPU UI → Wayland/XDG Portal
-                               ↓                                ↓                ↓
-                          GPU Acceleration                    Sound Feedback   System Tray
-                        (CUDA/Vulkan)                      (CPAL)          (StatusNotifierItem)
+speechcore capture → speechcore VAD → speechcore backend abstraction → Text Cleanup → WGPU UI → Wayland/XDG Portal
+                                      ↓                              ↓                ↓
+                      CT2 / Whisper.cpp / Moonshine / Parakeet     Sound Feedback   System Tray
+                       (CUDA / Vulkan / ONNX Runtime)              (CPAL)          (StatusNotifierItem)
 ```
 
 ### Primary Components
 
-1. **Audio Capture Layer** - PortAudio-based real-time audio input with CPAL fallback
-2. **Voice Activity Detection** - Silero VAD with ONNX Runtime inference
+1. **Audio Capture Layer** - PortAudio-based real-time audio input provided by `speechcore`
+2. **Voice Activity Detection** - Silero VAD with ONNX Runtime inference provided by `speechcore`
 3. **Multi-Backend Transcription** - Unified backend abstraction supporting:
    - CTranslate2 (CUDA/CPU)
    - Whisper.cpp (Vulkan/OpenBLAS/CPU, default)
-   - Parakeet (planned)
+   - Moonshine ONNX
+   - Parakeet ONNX
    - Supporting both real-time streaming and manual batch modes
-4. **Text Post-Processing** - Configurable text cleanup and normalization pipeline for transcription output
+4. **Text Post-Processing** - Configurable text cleanup and normalization pipeline from `speechcore`
 5. **Custom GPU UI** - WGPU-based rendering with custom WGSL shaders, including mode-specific button layouts
 6. **Sound Feedback System** - CPAL-based audio playback for state transitions (record start/stop, session complete, etc.)
 7. **System Integration** - Wayland layer shell for transparent overlays, system tray (StatusNotifierItem), and optional XDG Desktop Portal for global shortcuts and input injection
@@ -42,33 +48,29 @@ Sonori supports two transcription modes configurable via `transcription_mode` in
 - **RealTime Mode**: Continuous streaming transcription with low-latency VAD-triggered segments.
 - **Manual Mode** (default): On-demand session-based transcription where audio is accumulated in a buffer until the user stops the session, then processed as a batch. Supports configurable max duration, auto-restart, and clearing on new sessions.
 
-Modes can be toggled at runtime via UI button or CLI flags (`--mode manual`). The audio processor branches logic based on the current mode, using atomic state flags for thread-safe switching.
+Modes can be toggled at runtime via UI button or CLI flags (`--mode manual`). `speechcore::RealTimeTranscriber` owns the mode-aware audio and transcription pipeline, while Sonori owns UI, IPC, and system integration around it.
 
 ## Module Architecture
 
 ### Core Coordination
 
-- **`real_time_transcriber.rs`** - Main application coordinator implementing the Facade pattern, managing transcription modes and manual session state. Manages backend readiness synchronization via `Arc<AtomicBool>` flag that gates transcription processing until backend initialization completes.
 - **`main.rs`** - Entry point with CLI/GUI mode selection, Tokio runtime setup, and mode-specific initialization
-- **`config.rs`** - TOML-based hierarchical configuration management, including mode-specific settings like [manual_mode_config], [portal_config], [backend_config], [display_config], [window_behavior_config], and [sound_config]. Includes `ManualModeConfig.chunk_duration_seconds` (default 29.0s for edge case avoidance) and `DebugConfig.recording_dir` fields.
-- **`download.rs`** - Automatic model downloading and conversion from Hugging Face; supports CTranslate2 and Whisper.cpp model formats
-- **`backend/mod.rs`** - Backend abstraction layer with trait definitions, `BackendType` enum, and `QuantizationLevel` mapping
-- **`backend/factory.rs`** - Factory pattern for backend instantiation based on config
-- **`backend/ctranslate2.rs`** - CTranslate2 backend implementation (CUDA/CPU with INT8/FLOAT16 quantization)
-- **`backend/whisper_cpp.rs`** - Whisper.cpp backend implementation (Vulkan/OpenBLAS/CPU with q8_0/q5_1 quantization)
-- **`backend/traits.rs`** - Shared backend trait definitions and error handling
+- **`config.rs`** - TOML-based Sonori configuration and conversion into `speechcore::SpeechConfig`. Sonori defaults to the Whisper.cpp backend for new configs.
+- **`lib.rs`** - App library surface for Sonori modules; shared STT APIs are imported directly from `speechcore`.
+- **`../speechcore/src/real_time_transcriber.rs`** - Main transcription coordinator managing audio capture, modes, backend readiness, and transcript/status streams.
+- **`../speechcore/src/download.rs`** - Automatic model downloading and conversion from Hugging Face; supports CTranslate2, Whisper.cpp, Moonshine, Parakeet, and Silero VAD model assets.
+- **`../speechcore/src/backend/`** - Backend abstraction, factory, and concrete backend implementations.
 
 ### Audio Processing Pipeline
 
-- **`audio_capture.rs`** - PortAudio stream management and callback handling
-- **`audio_processor.rs`** - Audio processing coordinator with circular buffer management; handles both real-time VAD-triggered processing and manual mode audio accumulation in a dedicated buffer. Audio segments tagged with `is_manual` flag for explicit mode identification.
-- **`silero_audio_processor.rs`** - VAD implementation using ONNX Runtime (used in real-time mode)
-- **`transcribe.rs`** - Whisper model integration with CTranslate2 optimization
-- **`transcription_processor.rs`** - Async transcription task management and queuing; supports larger batch segments for manual mode with optional chunking for long audio. Waits for `backend_ready` flag (10-second timeout) before processing segments, implements automatic chunking for segments ≥ 29 seconds with configurable overlap.
+- **`../speechcore/src/audio_capture.rs`** - PortAudio stream management and callback handling
+- **`../speechcore/src/audio_processor.rs`** - Audio processing coordinator with circular buffer management; handles both real-time VAD-triggered processing and manual mode audio accumulation.
+- **`../speechcore/src/silero_audio_processor.rs`** - VAD implementation using ONNX Runtime
+- **`../speechcore/src/transcription_processor.rs`** - Async transcription task management and queuing; supports manual-mode chunking with configurable overlap.
 
 ### Text Post-Processing Pipeline
 
-- **`post_processor.rs`** - Text cleanup and normalization for transcription output
+- **`../speechcore/src/post_processor.rs`** - Text cleanup and normalization for transcription output
   - Removes leading/trailing dashes and artifacts
   - Normalizes whitespace and character encoding
   - Configurable cleaning rules via `[post_process_config]`
@@ -118,14 +120,15 @@ Modes can be toggled at runtime via UI button or CLI flags (`--mode manual`). Th
 - **`global_shortcuts.rs`** - Global shortcut registration via XDG Desktop Portal (e.g., Super+backslash to toggle manual sessions); handles accelerator normalization and signal management
 - **`system_tray.rs`** - Full StatusNotifierItem D-Bus integration with context menu, status indicators, and command support (window control, recording toggle, session management, mode switching, quit)
 - **`copy.rs`** - Wayland clipboard operations using wl-copy
-- **`stats_reporter.rs`** - Performance monitoring and telemetry collection
-- **`transcription_stats.rs`** - Transcription quality metrics and analysis
+- **`transcript_writer.rs`** - Optional transcript history persistence
+- **`../speechcore/src/stats_reporter.rs`** - Performance monitoring and telemetry collection
+- **`../speechcore/src/transcription_stats.rs`** - Transcription quality metrics and analysis
 
 ## Backend System Architecture
 
 ### Multi-Backend Abstraction
 
-Sonori uses an enum-based dispatch pattern for zero-cost abstraction across multiple transcription backends:
+`speechcore` uses an enum-based dispatch pattern for zero-cost abstraction across multiple transcription backends. Sonori configures this through `speechcore::BackendConfig`.
 
 #### Backend Types
 - **CTranslate2** - Fast CPU/GPU inference using CTranslate2 optimization of Whisper models
@@ -140,10 +143,14 @@ Sonori uses an enum-based dispatch pattern for zero-cost abstraction across mult
   - Model format: Single .bin GGML file
   - Max segment: No hard limit - adaptive segmentation based on audio length
 
-- **Parakeet** (planned) - NVIDIA Parakeet RNNT models for improved accuracy
-  - GPU: CUDA/GPU support via ONNX Runtime
-  - Quantization: INT8, full precision
-  - Model format: ONNX model files
+- **Moonshine** - ONNX encoder/decoder backend optimized for low latency
+  - GPU: Optional ONNX Runtime execution providers
+  - Model format: ONNX model directory with tokenizer assets
+
+- **Parakeet** - NVIDIA Parakeet TDT ONNX models
+  - GPU: Optional ONNX Runtime execution providers
+  - Quantization: INT8 model assets
+  - Model format: Split ONNX model directory
 
 #### Quantization Level Mapping
 The unified `QuantizationLevel` enum maps to backend-specific implementations:
@@ -152,7 +159,7 @@ The unified `QuantizationLevel` enum maps to backend-specific implementations:
 - **Low** - Compact (CT2: INT8, WhisperCpp: q5_1)
 
 #### Backend Factory Pattern
-The factory (`backend/factory.rs`) instantiates the correct backend based on config:
+The factory (`../speechcore/src/backend/factory.rs`) instantiates the correct backend based on config:
 1. Read `backend_config.backend` from config.toml
 2. Load appropriate model file(s)
 3. Initialize with thread count, GPU settings, and quantization
@@ -166,24 +173,27 @@ Unified `BackendConfig` structure provides:
 - `quantization_level`: Model precision trade-off
 
 Backend-specific options are maintained in separate config structs:
-- `ct2_options`: beam_size, patience, repetition_penalty
-- `whisper_cpp_options`: beam_size, patience, temperature, thresholds, etc.
+- `common_transcription_options`: beam_size and patience shared by compatible backends
+- `ctranslate2_options`: repetition penalty
+- `whisper_cpp_options`: temperature, context handling, max token limit, and prompt handling
+- `moonshine_options`: decoder cache toggle
+- `parakeet_options`: reserved for Parakeet-specific settings
 
 ### Model Management
 
 #### Automatic Download & Conversion
-`download.rs` handles backend-specific model acquisition:
+`../speechcore/src/download.rs` handles backend-specific model acquisition. The default STT cache is `~/.cache/speechcore/models` and can be overridden with `SPEECHCORE_MODEL_DIR`.
 
 **CTranslate2**:
 - Downloads HuggingFace Whisper models
 - Converts using `ct2-transformers-converter` (requires Python/PyTorch)
-- Stores in `~/.cache/sonori/models/{model}-ct2/`
+- Stores in `~/.cache/speechcore/models/{model}-ct2/`
 - Supports model aliases for distilled variants
 
 **Whisper.cpp**:
 - Downloads pre-quantized GGML models from Hugging Face
 - Automatic quantization level selection
-- Stores in `~/.cache/sonori/models/ggml-{model}{quantization}.bin`
+- Stores in `~/.cache/speechcore/models/ggml-{model}{quantization}.bin`
 - Validates file integrity before use
 
 #### Model Name Resolution

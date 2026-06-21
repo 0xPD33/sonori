@@ -14,7 +14,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
 
-use crate::real_time_transcriber::{ManualSessionCommand, TranscriptionMode};
+use speechcore::{ManualSessionCommand, TranscriptionMode};
 
 /// IPC command sent from CLI client to running instance
 #[derive(Debug, Clone, Serialize, Deserialize)]

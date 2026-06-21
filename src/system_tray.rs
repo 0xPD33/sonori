@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use zbus::{connection, interface, Connection};
 
-use crate::real_time_transcriber::TranscriptionMode;
+use speechcore::TranscriptionMode;
 
 /// Commands that the system tray can send to the main application
 #[derive(Debug, Clone)]

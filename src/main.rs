@@ -1,15 +1,17 @@
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 // Use library modules (the binary should not redeclare modules)
 use sonori::config::{read_app_config_with_path, AppConfig};
 use sonori::copy;
-use sonori::download;
 use sonori::ipc::{self, IpcCommand};
 use sonori::portal_input;
-use sonori::real_time_transcriber::{RealTimeTranscriber, TranscriptionMode};
 use sonori::sound_player::SoundPlayer;
 use sonori::system_tray;
 use sonori::ui;
+use speechcore::{
+    init_all_models, FeedbackSink, RealTimeTranscriber, SpeechConfig, TranscriptionMode,
+};
 
 // Binary-specific modules (not in library)
 mod global_shortcuts;
@@ -18,6 +20,7 @@ use ashpd::register_host_app;
 use ashpd::AppID;
 use clap::{Parser, Subcommand, ValueEnum};
 use std::time::Duration;
+use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Clone, ValueEnum)]
 enum TranscriptionModeArg {
@@ -47,7 +50,7 @@ enum Command {
 
 #[derive(Parser)]
 #[command(name = "sonori")]
-#[command(about = "Real-time speech transcription with Whisper")]
+#[command(about = "Real-time speech transcription")]
 #[command(version)]
 struct Args {
     /// Subcommand to control a running Sonori instance
@@ -72,6 +75,8 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    init_tracing();
+
     let args = Args::parse();
 
     // Handle IPC subcommands (control running instance)
@@ -124,14 +129,17 @@ async fn main() -> anyhow::Result<()> {
     println!("Transcription mode: {:?}", transcription_mode);
 
     println!("Initializing models...");
-    let (whisper_model_path, _silero_model_path) = download::init_all_models(
+    let (transcription_model_path, _silero_model_path) = init_all_models(
         Some(&app_config.general_config.model),
         app_config.backend_config.backend,
         &app_config.backend_config.quantization_level,
     )
     .await?;
 
-    println!("Whisper model ready at: {:?}", whisper_model_path);
+    println!(
+        "Transcription model ready at: {:?}",
+        transcription_model_path
+    );
 
     // Initialize sound player
     let sound_player = match SoundPlayer::new(&app_config.sound_config) {
@@ -145,8 +153,20 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+    let feedback_sink = sound_player.map(|player| player as std::sync::Arc<dyn FeedbackSink>);
+    let magic_mode_enabled = Arc::new(AtomicBool::new(false));
+    let magic_mode_enhancer = if app_config.enhancement_config.enabled {
+        Some(Arc::new(sonori::enhancement::MagicModeEnhancer::new(
+            app_config.enhancement_config.clone(),
+            magic_mode_enabled.clone(),
+        )))
+    } else {
+        None
+    };
+
+    let speech_config: SpeechConfig = app_config.clone().into();
     let mut transcriber =
-        RealTimeTranscriber::new(whisper_model_path, app_config.clone(), sound_player)?;
+        RealTimeTranscriber::new(transcription_model_path, speech_config, feedback_sink)?;
 
     transcriber.start()?;
 
@@ -164,7 +184,13 @@ async fn main() -> anyhow::Result<()> {
         run_cli_mode(transcriber, transcription_mode).await?;
     } else {
         // GUI mode - existing behavior
-        run_gui_mode(transcriber, app_config).await?;
+        run_gui_mode(
+            transcriber,
+            app_config,
+            magic_mode_enabled,
+            magic_mode_enhancer,
+        )
+        .await?;
     }
 
     Ok(())
@@ -204,6 +230,9 @@ async fn run_realtime_cli(mut transcriber: RealTimeTranscriber) -> anyhow::Resul
     loop {
         tokio::select! {
             Ok(message) = transcript_rx.recv() => {
+                if !message.is_final {
+                    continue; // CLI prints committed text only
+                }
                 // Clear the current line and print the new transcription
                 print!("\r{:100}\r", ""); // Clear line with spaces
                 current_line.push(' ');
@@ -283,6 +312,9 @@ async fn run_manual_cli(mut transcriber: RealTimeTranscriber) -> anyhow::Result<
     loop {
         tokio::select! {
             Ok(message) = transcript_rx.recv() => {
+                if !message.is_final {
+                    continue; // CLI prints committed text only
+                }
                 current_transcript.push(' ');
                 current_transcript.push_str(&message.text);
 
@@ -408,6 +440,8 @@ async fn run_manual_cli(mut transcriber: RealTimeTranscriber) -> anyhow::Result<
 async fn run_gui_mode(
     transcriber: RealTimeTranscriber,
     app_config: AppConfig,
+    magic_mode_enabled: Arc<AtomicBool>,
+    magic_mode_enhancer: Option<Arc<sonori::enhancement::MagicModeEnhancer>>,
 ) -> anyhow::Result<()> {
     // Set up shutdown channels and monitoring task
     let (_shutdown_tx, shutdown_rx) = tokio::sync::mpsc::channel::<()>(2);
@@ -474,14 +508,47 @@ async fn run_gui_mode(
 
             // Discard transcriptions from old sessions
             if message.session_id != current_session_id {
-                println!(
-                    "Discarding stale transcription from session {:?} (current: {:?})",
-                    message.session_id, current_session_id
-                );
+                if message.is_final {
+                    println!(
+                        "Discarding stale transcription from session {:?} (current: {:?})",
+                        message.session_id, current_session_id
+                    );
+                }
                 continue;
             }
 
-            let transcription = message.text;
+            // Interim streaming hypotheses: show as a live preview only — no
+            // history append, enhancement, file save, or clipboard paste. The
+            // final message for this utterance commits and supersedes it.
+            if !message.is_final {
+                let preview = {
+                    let history = transcript_history.read();
+                    if history.is_empty() {
+                        message.text
+                    } else {
+                        format!("{} {}", history, message.text)
+                    }
+                };
+                audio_visualization_data_for_thread.write().transcript = preview;
+                continue;
+            }
+
+            let mut transcription = message.text;
+            if let Some(enhancer) = &magic_mode_enhancer {
+                let raw_transcription = transcription.clone();
+                let enhancer = Arc::clone(enhancer);
+                match tokio::task::spawn_blocking(move || enhancer.enhance(&raw_transcription))
+                    .await
+                {
+                    Ok(Ok(enhanced)) => {
+                        if !enhanced.trim().is_empty() {
+                            transcription = enhanced;
+                        }
+                    }
+                    Ok(Err(e)) => eprintln!("Magic Mode enhancement failed: {e}"),
+                    Err(e) => eprintln!("Magic Mode enhancement worker failed: {e}"),
+                }
+            }
 
             // Check if this is the first segment before updating history
             let history_len_before = transcript_history.read().len();
@@ -624,7 +691,6 @@ async fn run_gui_mode(
 
     let running = transcriber.get_running();
     let recording = transcriber.get_recording();
-    let magic_mode_enabled = transcriber.get_magic_mode_enabled();
     let manual_session_sender = transcriber.get_manual_session_sender();
     let transcription_mode_ref = transcriber.get_transcription_mode_ref();
     let backend_status = transcriber.get_backend_status();
@@ -712,6 +778,12 @@ async fn run_gui_mode(
     transcriber.shutdown().await?;
 
     Ok(())
+}
+
+fn init_tracing() {
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("speechcore=info"));
+    let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
 }
 
 /// Handle IPC subcommands by sending them to the running Sonori instance

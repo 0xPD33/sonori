@@ -4,10 +4,8 @@ version = "0.9.0"
 edition = "2021"
 
 [dependencies]
-portaudio = "0.8.0"
+speechcore = { git = "https://github.com/0xPD33/speechcore", branch = "main", default-features = false, features = ["runtime"] }
 cpal = "0.16"
-ct2rs = { version = "0.9.6", features = ["whisper"] }
-ndarray = "0.16.1"
 serde_json = "1.0"
 reqwest = { version = "0.12.14", features = ["stream", "json"] }
 tokio = { version = "1.43.0", features = ["full"] }
@@ -17,9 +15,8 @@ serde = { version = "1.0.218", features = ["derive"] }
 toml = "0.9.8"
 parking_lot = "0.12.1"
 clap = { version = "4.5.21", features = ["derive"] }
-winit = { version = "0.30.5", git = "https://github.com/SergioRibera/winit", branch = "layer_shell" }
+winit = { version = "0.30.5", git = "https://github.com/SergioRibera/winit", rev = "ea675fba8f0eedaf3c474a8176b553eecf1fb65a" }
 wgpu = "25.0.2"
-smithay-client-toolkit = "0.20.0"
 pollster = "0.4.0"
 rustfft = "6.1.0"
 bytemuck = { version = "1.18.0", features = ["derive"] }
@@ -27,27 +24,33 @@ glyphon = "0.9.0"
 ashpd = { version = "0.12", default-features = false, features = ["tokio"] }
 zbus = "5.0"
 xkbcommon = { version = "0.7", features = ["wayland"] }
-ort = { version = "2.0.0-rc.10", features = ["ndarray"] }
 image = "0.25.5"
 chrono = "0.4.35"
 num_cpus = "1.16"
-whisper-rs = { version = "0.15.1", features = ["openblas", "vulkan"] }
-hound = "3.5"
-tokenizers = "0.22"
-llama-cpp-2 = { version = "0.1.131", features = ["vulkan"] }  # Shares ggml with whisper-rs
+llama-cpp-2 = { version = "0.1.131", features = ["vulkan"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [features]
-default = []
+default = [
+    "backend-ctranslate2",
+    "backend-moonshine",
+    "backend-parakeet",
+    "backend-nemotron",
+    "backend-whisper-cpp",
+]
 # Enable runtime CPU feature detection
-std = ["std_detect"]
+std = ["std_detect", "speechcore/std"]
 std_detect = []
 # Backends
-backend-moonshine = []
-backend-parakeet = []
+backend-ctranslate2 = ["speechcore/backend-ctranslate2"]
+backend-moonshine = ["speechcore/backend-moonshine"]
+backend-parakeet = ["speechcore/backend-parakeet"]
+backend-nemotron = ["speechcore/backend-nemotron"]
+backend-whisper-cpp = ["speechcore/backend-whisper-cpp"]
 # ORT execution providers
-ort-cpu = [] 
-ort-cuda = ["ort/cuda"]
-ort-tensorrt = ["ort/tensorrt"]
+ort-cpu = ["speechcore/ort-cpu"]
+ort-cuda = ["speechcore/ort-cuda"]
+ort-tensorrt = ["speechcore/ort-tensorrt"]
 
 
 [package.metadata.release]

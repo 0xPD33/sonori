@@ -1,7 +1,5 @@
-use crate::backend::BackendConfig;
-use crate::silero_audio_processor::VadConfig as SileroVadConfig;
-use ct2rs::WhisperOptions;
 use serde::{Deserialize, Serialize};
+use speechcore::{BackendConfig, BackendType};
 
 /// Audio sample rate in Hz - hardcoded to 16000 (required by Silero VAD)
 pub const SAMPLE_RATE: usize = 16000;
@@ -123,7 +121,7 @@ pub struct ManualModeConfig {
     /// EXPERIMENTAL: Disable chunking for manual mode transcription (default: false)
     /// When enabled, processes entire recording as single segment (no chunk limit)
     /// Note: May consume more memory for very long recordings
-    /// Note: Whisper model was trained on 30-second chunks, very long audio may have issues
+    /// Note: some transcription models are trained on short chunks, so very long audio may have issues
     pub disable_chunking: bool,
 }
 
@@ -588,7 +586,7 @@ impl DisplayConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
     /// General core configuration
@@ -624,6 +622,9 @@ pub struct AppConfig {
     /// Parakeet TDT-specific options
     pub parakeet_options: ParakeetOptions,
 
+    /// Nemotron 3.5 ASR-specific options
+    pub nemotron_options: NemotronOptions,
+
     /// XDG Desktop Portal configuration
     pub portal_config: PortalConfig,
 
@@ -655,6 +656,119 @@ pub struct AppConfig {
     /// Deprecated legacy field - use backend_config instead
     #[serde(skip_serializing_if = "Option::is_none")]
     pub device: Option<String>,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        let backend_config = BackendConfig {
+            backend: BackendType::WhisperCpp,
+            ..BackendConfig::default()
+        };
+
+        Self {
+            general_config: GeneralConfig::default(),
+            backend_config,
+            audio_processor_config: AudioProcessorConfig::default(),
+            realtime_mode_config: RealtimeModeConfig::default(),
+            manual_mode_config: ManualModeConfig::default(),
+            vad_config: VadConfigSerde::default(),
+            common_transcription_options: CommonTranscriptionOptions::default(),
+            ctranslate2_options: CT2Options::default(),
+            whisper_cpp_options: WhisperCppOptions::default(),
+            moonshine_options: MoonshineOptions::default(),
+            parakeet_options: ParakeetOptions::default(),
+            nemotron_options: NemotronOptions::default(),
+            portal_config: PortalConfig::default(),
+            display_config: DisplayConfig::default(),
+            window_behavior_config: WindowBehaviorConfig::default(),
+            sound_config: SoundConfig::default(),
+            debug_config: DebugConfig::default(),
+            post_process_config: PostProcessConfig::default(),
+            enhancement_config: EnhancementConfig::default(),
+            ui_config: UiConfig::default(),
+            compute_type: None,
+            device: None,
+        }
+    }
+}
+
+impl From<AppConfig> for speechcore::SpeechConfig {
+    fn from(config: AppConfig) -> Self {
+        Self {
+            general_config: speechcore::config::GeneralConfig {
+                model: config.general_config.model,
+                language: config.general_config.language,
+                transcription_mode: config.general_config.transcription_mode,
+            },
+            backend_config: config.backend_config,
+            audio_processor_config: speechcore::config::AudioProcessorConfig {
+                buffer_size: config.audio_processor_config.buffer_size,
+            },
+            realtime_mode_config: speechcore::config::RealtimeModeConfig {
+                max_buffer_duration_sec: config.realtime_mode_config.max_buffer_duration_sec,
+                max_segment_count: config.realtime_mode_config.max_segment_count,
+            },
+            manual_mode_config: speechcore::config::ManualModeConfig {
+                max_recording_duration_secs: config.manual_mode_config.max_recording_duration_secs,
+                clear_on_new_session: config.manual_mode_config.clear_on_new_session,
+                chunk_duration_seconds: config.manual_mode_config.chunk_duration_seconds,
+                enable_chunk_overlap: config.manual_mode_config.enable_chunk_overlap,
+                chunk_overlap_seconds: config.manual_mode_config.chunk_overlap_seconds,
+                disable_chunking: config.manual_mode_config.disable_chunking,
+            },
+            vad_config: speechcore::config::VadConfigSerde {
+                sensitivity: config.vad_config.sensitivity.into(),
+                hangbefore_frames: config.vad_config.hangbefore_frames,
+                hangover_frames: config.vad_config.hangover_frames,
+                silence_tolerance_frames: config.vad_config.silence_tolerance_frames,
+                speech_prob_smoothing: config.vad_config.speech_prob_smoothing,
+            },
+            common_transcription_options: speechcore::config::CommonTranscriptionOptions {
+                beam_size: config.common_transcription_options.beam_size,
+                patience: config.common_transcription_options.patience,
+            },
+            ctranslate2_options: speechcore::config::CT2Options {
+                repetition_penalty: config.ctranslate2_options.repetition_penalty,
+            },
+            whisper_cpp_options: speechcore::config::WhisperCppOptions {
+                temperature: config.whisper_cpp_options.temperature,
+                suppress_blank: config.whisper_cpp_options.suppress_blank,
+                no_context: config.whisper_cpp_options.no_context,
+                max_tokens: config.whisper_cpp_options.max_tokens,
+                initial_prompt: config.whisper_cpp_options.initial_prompt,
+            },
+            moonshine_options: speechcore::config::MoonshineOptions {
+                enable_cache: config.moonshine_options.enable_cache,
+            },
+            parakeet_options: speechcore::config::ParakeetOptions::default(),
+            nemotron_options: speechcore::config::NemotronOptions {
+                language: config.nemotron_options.language,
+            },
+            debug_config: speechcore::config::DebugConfig {
+                log_stats_enabled: config.debug_config.log_stats_enabled,
+                save_manual_audio_debug: config.debug_config.save_manual_audio_debug,
+                recording_dir: config.debug_config.recording_dir,
+            },
+            post_process_config: speechcore::config::PostProcessConfig {
+                enabled: config.post_process_config.enabled,
+                remove_leading_dashes: config.post_process_config.remove_leading_dashes,
+                remove_trailing_dashes: config.post_process_config.remove_trailing_dashes,
+                normalize_whitespace: config.post_process_config.normalize_whitespace,
+            },
+            compute_type: config.compute_type,
+            device: config.device,
+        }
+    }
+}
+
+impl From<VadSensitivity> for speechcore::config::VadSensitivity {
+    fn from(sensitivity: VadSensitivity) -> Self {
+        match sensitivity {
+            VadSensitivity::Low => Self::Low,
+            VadSensitivity::Medium => Self::Medium,
+            VadSensitivity::High => Self::High,
+        }
+    }
 }
 
 /// Common transcription options shared across all backends
@@ -735,6 +849,23 @@ pub struct MoonshineOptions {
 #[serde(default)]
 pub struct ParakeetOptions {}
 
+/// Nemotron 3.5 ASR-specific options
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NemotronOptions {
+    /// Target language locale for the lang-ID prompt (e.g. "en-US", "de-DE",
+    /// or "auto" for built-in language detection).
+    pub language: String,
+}
+
+impl Default for NemotronOptions {
+    fn default() -> Self {
+        Self {
+            language: "en-US".to_string(),
+        }
+    }
+}
+
 /// Configuration for Voice Activity Detection
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -766,56 +897,6 @@ impl Default for VadConfigSerde {
     }
 }
 
-impl SileroVadConfig {
-    pub fn from_config(
-        vad_config: &VadConfigSerde,
-        realtime_config: &RealtimeModeConfig,
-        _buffer_size: usize,
-        sample_rate: usize,
-    ) -> Self {
-        Self {
-            threshold: vad_config.sensitivity.threshold(),
-            frame_size: 512,
-            sample_rate,
-            hangbefore_frames: vad_config.hangbefore_frames,
-            hangover_frames: vad_config.hangover_frames,
-            hop_samples: (sample_rate as f32 * 0.01) as usize, // 10ms hop calculated from sample_rate
-            max_buffer_duration: (realtime_config.max_buffer_duration_sec * sample_rate as f32)
-                as usize,
-            max_segment_count: realtime_config.max_segment_count,
-            silence_tolerance_frames: vad_config.silence_tolerance_frames,
-            speech_end_threshold: vad_config.sensitivity.speech_end_threshold(),
-            speech_prob_smoothing: vad_config.speech_prob_smoothing,
-        }
-    }
-}
-
-impl From<(VadConfigSerde, RealtimeModeConfig, usize, usize)> for SileroVadConfig {
-    fn from(
-        (config, realtime_config, _buffer_size, sample_rate): (
-            VadConfigSerde,
-            RealtimeModeConfig,
-            usize,
-            usize,
-        ),
-    ) -> Self {
-        Self {
-            threshold: config.sensitivity.threshold(),
-            frame_size: 512,
-            sample_rate,
-            hangbefore_frames: config.hangbefore_frames,
-            hangover_frames: config.hangover_frames,
-            hop_samples: (sample_rate as f32 * 0.01) as usize, // 10ms hop calculated from sample_rate
-            max_buffer_duration: (realtime_config.max_buffer_duration_sec * sample_rate as f32)
-                as usize,
-            max_segment_count: realtime_config.max_segment_count,
-            silence_tolerance_frames: config.silence_tolerance_frames,
-            speech_end_threshold: config.sensitivity.speech_end_threshold(),
-            speech_prob_smoothing: config.speech_prob_smoothing,
-        }
-    }
-}
-
 impl AppConfig {
     /// Migrate legacy compute_type/device fields to new backend_config
     pub fn migrate_legacy_config(&mut self) {
@@ -829,10 +910,20 @@ impl AppConfig {
                     compute_type, device
                 );
 
-                self.backend_config =
-                    crate::backend::ctranslate2::migrate_legacy_config(compute_type, device, None);
-                self.compute_type = None;
-                self.device = None;
+                #[cfg(feature = "backend-ctranslate2")]
+                {
+                    self.backend_config =
+                        speechcore::migrate_legacy_ctranslate2_config(compute_type, device, None);
+                    self.compute_type = None;
+                    self.device = None;
+                }
+
+                #[cfg(not(feature = "backend-ctranslate2"))]
+                {
+                    println!(
+                        "Skipping legacy CTranslate2 config migration because backend-ctranslate2 is disabled"
+                    );
+                }
             }
         }
 
@@ -847,21 +938,6 @@ impl AppConfig {
         // Bring legacy configs up to current default temperature if they were using the old default
         if (self.whisper_cpp_options.temperature - 0.0).abs() < f32::EPSILON {
             self.whisper_cpp_options.temperature = 0.2;
-        }
-    }
-}
-
-impl CT2Options {
-    /// Convert to ct2rs::WhisperOptions, combining with common options
-    pub fn to_whisper_options(
-        &self,
-        common_options: &CommonTranscriptionOptions,
-    ) -> WhisperOptions {
-        WhisperOptions {
-            beam_size: common_options.beam_size,
-            patience: common_options.patience,
-            repetition_penalty: self.repetition_penalty,
-            ..Default::default()
         }
     }
 }
@@ -1099,6 +1175,13 @@ mod tests {
             config.ui_config.effective_speaking_color(),
             VisualThemePreset::Focus.resolve().speaking_color
         );
+    }
+
+    #[test]
+    fn default_backend_is_whisper_cpp() {
+        let config = AppConfig::default();
+
+        assert_eq!(config.backend_config.backend, BackendType::WhisperCpp);
     }
 
     #[test]

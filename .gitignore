@@ -7,6 +7,9 @@
 **/*.rs.bk
 *.pdb
 
+# nix build output
+/result
+
 # logs
 *.log
 

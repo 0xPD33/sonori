@@ -11,7 +11,6 @@ use winit::{
 
 use super::button_panel::ButtonPanel;
 use super::buttons::ButtonManager;
-use super::common::{AudioVisualizationData, BackendStatus};
 use super::event_handler::EventHandler;
 use super::layout_manager::LayoutManager;
 use super::loading_animation::LoadingAnimation;
@@ -26,6 +25,7 @@ use super::timer_badge::TimerBadge;
 use super::tooltip::Tooltip;
 use crate::config::{DisplayConfig, UiConfig};
 use parking_lot::RwLock;
+use speechcore::{AudioVisualizationData, BackendStatus, BackendStatusState, ProcessingState};
 
 pub const SPECTROGRAM_WIDTH: u32 = 240; // Width of the spectrogram
 pub const SPECTROGRAM_HEIGHT: u32 = 80; // Height of the spectrogram
@@ -37,6 +37,49 @@ pub const LEFT_MARGIN: f32 = 4.0; // Left margin for text area
 
 fn target_frame_duration(target_fps: u32) -> std::time::Duration {
     std::time::Duration::from_secs_f64(1.0 / target_fps.max(1) as f64)
+}
+
+fn present_mode_for(
+    display_config: &DisplayConfig,
+    available_modes: &[wgpu::PresentMode],
+) -> wgpu::PresentMode {
+    let preferred = match display_config.vsync_mode.as_str() {
+        "Enabled" => wgpu::PresentMode::Fifo,
+        "Adaptive" => wgpu::PresentMode::FifoRelaxed,
+        "Disabled" => wgpu::PresentMode::Immediate,
+        "Mailbox" => wgpu::PresentMode::Mailbox,
+        "Auto" => {
+            return available_modes
+                .first()
+                .copied()
+                .unwrap_or(wgpu::PresentMode::Fifo);
+        }
+        _ => {
+            return available_modes
+                .first()
+                .copied()
+                .unwrap_or(wgpu::PresentMode::Fifo);
+        }
+    };
+
+    if available_modes.contains(&preferred) {
+        preferred
+    } else if available_modes.contains(&wgpu::PresentMode::Fifo) {
+        println!(
+            "Warning: Preferred vsync mode '{}' not available, falling back to Fifo",
+            display_config.vsync_mode
+        );
+        wgpu::PresentMode::Fifo
+    } else {
+        println!(
+            "Warning: Preferred vsync mode '{}' not available, using first available mode",
+            display_config.vsync_mode
+        );
+        available_modes
+            .first()
+            .copied()
+            .unwrap_or(wgpu::PresentMode::Fifo)
+    }
 }
 
 pub struct WindowState {
@@ -63,13 +106,12 @@ pub struct WindowState {
     pub event_handler: EventHandler,
     pub loading_animation: LoadingAnimation,
     pub timer_badge: TimerBadge,
-    pub backend_command_tx:
-        Option<tokio::sync::mpsc::UnboundedSender<crate::backend_manager::BackendCommand>>,
+    pub backend_command_tx: Option<tokio::sync::mpsc::UnboundedSender<speechcore::BackendCommand>>,
     pub running: Option<Arc<AtomicBool>>,
     pub recording: Option<Arc<AtomicBool>>,
     pub magic_mode_enabled: Option<Arc<AtomicBool>>,
     transcription_mode_ref: Arc<std::sync::atomic::AtomicU8>,
-    last_known_mode: crate::real_time_transcriber::TranscriptionMode,
+    last_known_mode: speechcore::TranscriptionMode,
     // Dynamic sizing
     pub fixed_window_width: u32,
     pub fixed_window_height: u32,
@@ -91,7 +133,7 @@ pub struct WindowState {
     typewriter: super::typewriter::TypewriterEffect,
     ui_config: UiConfig,
     typewriter_enabled: bool,
-    last_processing_state: crate::ui::common::ProcessingState,
+    last_processing_state: ProcessingState,
     // Reusable buffers to avoid per-frame allocations
     silence_buffer: Vec<f32>,
     frame_samples: Vec<f32>,
@@ -103,10 +145,8 @@ impl WindowState {
         running: Option<Arc<AtomicBool>>,
         recording: Option<Arc<AtomicBool>>,
         magic_mode_enabled: Option<Arc<AtomicBool>>,
-        transcription_mode: crate::real_time_transcriber::TranscriptionMode,
-        manual_session_sender: Option<
-            tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>,
-        >,
+        transcription_mode: speechcore::TranscriptionMode,
+        manual_session_sender: Option<tokio::sync::mpsc::Sender<speechcore::ManualSessionCommand>>,
         transcription_mode_ref: Arc<std::sync::atomic::AtomicU8>,
         display_config: &DisplayConfig,
         ui_config: &UiConfig,
@@ -120,9 +160,7 @@ impl WindowState {
         backend_name: &str,
         model_name: &str,
         external_backend_status: Option<Arc<RwLock<BackendStatus>>>,
-        backend_command_tx: Option<
-            tokio::sync::mpsc::UnboundedSender<crate::backend_manager::BackendCommand>,
-        >,
+        backend_command_tx: Option<tokio::sync::mpsc::UnboundedSender<speechcore::BackendCommand>>,
     ) -> Self {
         let window: Arc<dyn Window> = Arc::from(window);
 
@@ -169,7 +207,7 @@ impl WindowState {
             .unwrap_or(surface_caps.formats[0]);
 
         // Select present mode based on display configuration
-        let present_mode = display_config.to_present_mode(&surface_caps.present_modes);
+        let present_mode = present_mode_for(display_config, &surface_caps.present_modes);
 
         // Select alpha mode for transparency support
         // Prefer modes that support transparency, with Inherit as fallback for X11
@@ -404,7 +442,7 @@ impl WindowState {
             typewriter: super::typewriter::TypewriterEffect::new(),
             ui_config: ui_config.clone(),
             typewriter_enabled,
-            last_processing_state: crate::ui::common::ProcessingState::Idle,
+            last_processing_state: ProcessingState::Idle,
 
             // Reusable buffers
             silence_buffer: vec![0.0; 1024],
@@ -492,7 +530,7 @@ impl WindowState {
         }
 
         // Check if transcription mode has changed
-        let current_mode = crate::real_time_transcriber::TranscriptionMode::from_u8(
+        let current_mode = speechcore::TranscriptionMode::from_u8(
             self.transcription_mode_ref
                 .load(std::sync::atomic::Ordering::Relaxed),
         );
@@ -580,7 +618,7 @@ impl WindowState {
         // Get audio data once
         let mut display_text: String = String::new();
         let mut is_speaking: bool = false;
-        let mut processing_state = crate::ui::common::ProcessingState::Idle;
+        let mut processing_state = ProcessingState::Idle;
 
         // Check recording state
         let is_recording = self
@@ -632,20 +670,16 @@ impl WindowState {
                 {
                     let mut status = self.backend_status.write();
                     match processing_state {
-                        crate::ui::common::ProcessingState::Transcribing => {
-                            if status.state == crate::ui::common::BackendStatusState::Ready {
-                                status.state = crate::ui::common::BackendStatusState::Loading(
-                                    "Transcribing...".to_string(),
-                                );
+                        ProcessingState::Transcribing => {
+                            if status.state == BackendStatusState::Ready {
+                                status.state =
+                                    BackendStatusState::Loading("Transcribing...".to_string());
                             }
                         }
-                        crate::ui::common::ProcessingState::Idle
-                        | crate::ui::common::ProcessingState::Completed => {
-                            if let crate::ui::common::BackendStatusState::Loading(msg) =
-                                &status.state
-                            {
+                        ProcessingState::Idle | ProcessingState::Completed => {
+                            if let BackendStatusState::Loading(msg) = &status.state {
                                 if msg == "Transcribing..." {
-                                    status.state = crate::ui::common::BackendStatusState::Ready;
+                                    status.state = BackendStatusState::Ready;
                                 }
                             }
                         }
@@ -752,7 +786,7 @@ impl WindowState {
             .get_text_position(self.scroll_state.scroll_offset);
 
         // Get current transcription mode
-        let transcription_mode = crate::real_time_transcriber::TranscriptionMode::from_u8(
+        let transcription_mode = speechcore::TranscriptionMode::from_u8(
             self.transcription_mode_ref
                 .load(std::sync::atomic::Ordering::Relaxed),
         );
@@ -760,23 +794,20 @@ impl WindowState {
         // Check if we should show processing animation instead of text
         let should_show_animation = match processing_state {
             // Show loading animation only when loading model
-            crate::ui::common::ProcessingState::Loading => true,
+            ProcessingState::Loading => true,
             // Transcribing state is shown in the status bar, not as an overlay
             _ => false,
         };
 
         // Trigger typewriter effect when transcription completes (manual mode)
-        if self.typewriter_enabled
-            && transcription_mode == crate::real_time_transcriber::TranscriptionMode::Manual
-        {
+        if self.typewriter_enabled && transcription_mode == speechcore::TranscriptionMode::Manual {
             // Detect transition from Transcribing to Idle with text
-            let state_transition = self.last_processing_state
-                == crate::ui::common::ProcessingState::Transcribing
-                && processing_state == crate::ui::common::ProcessingState::Idle
+            let state_transition = self.last_processing_state == ProcessingState::Transcribing
+                && processing_state == ProcessingState::Idle
                 && !display_text.is_empty();
 
             // Also detect when text content changes while idle (e.g., enhancement result)
-            let text_changed = processing_state == crate::ui::common::ProcessingState::Idle
+            let text_changed = processing_state == ProcessingState::Idle
                 && !display_text.is_empty()
                 && display_text != self.typewriter.get_visible_text()
                 && !self.typewriter.is_active();
@@ -1070,13 +1101,9 @@ impl WindowState {
             // ASYNC: Send command without blocking UI thread
             tokio::spawn(async move {
                 let command = if is_currently_recording {
-                    crate::real_time_transcriber::ManualSessionCommand::StopSession {
-                        responder: None,
-                    }
+                    speechcore::ManualSessionCommand::StopSession { responder: None }
                 } else {
-                    crate::real_time_transcriber::ManualSessionCommand::StartSession {
-                        responder: None,
-                    }
+                    speechcore::ManualSessionCommand::StartSession { responder: None }
                 };
 
                 if let Err(e) = sender.send(command).await {
@@ -1091,24 +1118,20 @@ impl WindowState {
 
     pub fn toggle_mode(&mut self) {
         // Switch between manual and real-time modes
-        let current_mode = crate::real_time_transcriber::TranscriptionMode::from_u8(
+        let current_mode = speechcore::TranscriptionMode::from_u8(
             self.transcription_mode_ref
                 .load(std::sync::atomic::Ordering::Relaxed),
         );
         let new_mode = match current_mode {
-            crate::real_time_transcriber::TranscriptionMode::RealTime => {
-                crate::real_time_transcriber::TranscriptionMode::Manual
-            }
-            crate::real_time_transcriber::TranscriptionMode::Manual => {
-                crate::real_time_transcriber::TranscriptionMode::RealTime
-            }
+            speechcore::TranscriptionMode::RealTime => speechcore::TranscriptionMode::Manual,
+            speechcore::TranscriptionMode::Manual => speechcore::TranscriptionMode::RealTime,
         };
 
         if let Some(sender) = &self.event_handler.manual_session_sender {
             let sender = sender.clone();
             tokio::spawn(async move {
                 if let Err(e) = sender
-                    .send(crate::real_time_transcriber::ManualSessionCommand::SwitchMode(new_mode))
+                    .send(speechcore::ManualSessionCommand::SwitchMode(new_mode))
                     .await
                 {
                     eprintln!("Failed to send mode switch command from tray: {}", e);

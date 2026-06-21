@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Sonori** is a real-time speech transcription application built in Rust with GPU-accelerated rendering and Wayland layer shell integration on Linux.
 
+Speech-to-text runtime code is shared through the sibling `../speechcore` crate. Keep app-specific behavior in Sonori and reusable capture/VAD/backend/transcription behavior in `speechcore`.
+
 For detailed architectural information, component relationships, and system design patterns, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ## Development Commands
@@ -58,9 +60,8 @@ For NixOS users, use `nix develop`. For other distributions, refer to dependency
 - Use efficient shader variants for different rendering modes
 - Implement multi-pass rendering with layered alpha blending
 
-### Multi-Backend Architecture Patterns
-- Implement backends as trait objects conforming to `TranscriptionBackend` enum dispatch
-- Use factory pattern (`backend/factory.rs`) for backend instantiation based on config
+- Keep backend implementations and shared transcription orchestration in `../speechcore`.
+- Sonori should select/configure backends through `speechcore::BackendConfig` and `speechcore::SpeechConfig`.
 - Support quantization level mapping from unified enum to backend-specific formats
 - Handle backend-specific model formats (CT2 directories vs Whisper.cpp .bin files)
 - Implement graceful fallback when backend initialization fails
@@ -101,8 +102,8 @@ For NixOS users, use `nix develop`. For other distributions, refer to dependency
 - Use system clipboard integration (wl-copy/wtype) for text pasting
 
 ### Code Organization Principles
-- Maintain clean separation between audio processing, AI inference, and UI rendering
-- Use Facade pattern for main coordination (RealTimeTranscriber)
+- Maintain clean separation between shared STT runtime (`speechcore`) and Sonori app/UI/system integration.
+- Use `speechcore::RealTimeTranscriber` for main transcription coordination.
 - Encapsulate component state within respective modules
 - Implement modular, self-contained UI components
 - Use async/await patterns for I/O operations and model management

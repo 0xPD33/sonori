@@ -14,8 +14,7 @@ pub struct SettingsWindow {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     panel: SettingsPanel,
-    backend_command_tx:
-        Option<tokio::sync::mpsc::UnboundedSender<crate::backend_manager::BackendCommand>>,
+    backend_command_tx: Option<tokio::sync::mpsc::UnboundedSender<speechcore::BackendCommand>>,
     applied_config: Option<AppConfig>,
 }
 
@@ -28,9 +27,7 @@ impl SettingsWindow {
         queue: wgpu::Queue,
         surface_format: wgpu::TextureFormat,
         initial_config: &AppConfig,
-        backend_command_tx: Option<
-            tokio::sync::mpsc::UnboundedSender<crate::backend_manager::BackendCommand>,
-        >,
+        backend_command_tx: Option<tokio::sync::mpsc::UnboundedSender<speechcore::BackendCommand>>,
     ) -> Result<Self, String> {
         let window: Arc<dyn Window> = Arc::from(window);
 
@@ -209,7 +206,7 @@ impl SettingsWindow {
             self.applied_config = Some(app_config.clone());
             if needs_reload {
                 if let Some(tx) = &self.backend_command_tx {
-                    let _ = tx.send(crate::backend_manager::BackendCommand::Reload {
+                    let _ = tx.send(speechcore::BackendCommand::Reload {
                         backend_config: app_config.backend_config.clone(),
                         model_name: app_config.general_config.model.clone(),
                     });

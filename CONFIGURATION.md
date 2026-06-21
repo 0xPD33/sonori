@@ -4,6 +4,8 @@ This document provides comprehensive configuration options for Sonori. The appli
 
 **Important:** Most users don't need to change many settings! The defaults work well for everyone. You typically only need to adjust 2-3 settings based on your needs.
 
+Existing user configs are merged with new defaults on startup. Values already present in your local config are preserved; missing keys are added from `AppConfig::default()`.
+
 ## Quick Start Examples
 
 Here are the most common configurations. Just copy the relevant sections into your `config.toml`:
@@ -194,7 +196,7 @@ normalize_whitespace = true       # Normalize whitespace
 enabled = false                   # Enable magic mode by default
 # model = ""                      # HuggingFace GGUF: "owner/repo/filename.gguf"
 max_tokens = 256                  # Maximum tokens to generate
-# system_prompt = ""              # Custom system prompt
+system_prompt = "Rewrite the transcript into clean, natural text while preserving the speaker's meaning. Fix obvious transcription artifacts, punctuation, and casing. Do not add facts, explanations, or commentary."
 
 [portal_config]
 enable_xdg_portal = true              # Enable XDG Desktop Portal for input injection and global shortcuts
@@ -214,6 +216,16 @@ window_position = "BottomCenter"      # Window position on screen
 
 [window_behavior_config]
 show_in_system_tray = true            # Show icon in system tray
+
+[ui_config]
+visual_theme = "Focus"               # Focus, Pulse, Terminal
+spectrogram_skin = "Bars"            # Bars, Waveform, Meter
+font_size = 10.0                     # Transcript font size
+speaking_color = [0.1, 0.9, 0.5, 1.0]
+idle_color = [1.0, 0.85, 0.15, 1.0]
+recording_indicator_color = [0.9, 0.2, 0.2, 1.0]
+show_recording_indicator = true
+typewriter_effect = false            # Animate text reveal in manual mode
 
 [debug_config]
 log_stats_enabled = false             # Enable detailed performance logging
@@ -274,7 +286,7 @@ Recommended models:
 - `tiny` - Fastest, lowest memory
 - `base` - Higher accuracy, still fast
 
-Moonshine models are auto-downloaded on first run into `~/.cache/sonori/models/moonshine-<model>-onnx`.
+Moonshine models are auto-downloaded on first run into `~/.cache/speechcore/models/moonshine-<model>-onnx`.
 
 #### Parakeet TDT Backend
 - **Models**: NVIDIA NeMo Parakeet TDT INT8 ONNX models via sherpa-onnx (auto-downloaded, ~640-660MB)
@@ -365,6 +377,11 @@ These parameters fine-tune the VAD behavior (defaults work well for most users):
 - `show_in_system_tray`: Show application icon in system tray (default: true)
 
 #### UI Configuration
+- `visual_theme`: Built-in visual theme (`Focus`, `Pulse`, `Terminal`)
+- `spectrogram_skin`: Audio visualization style (`Bars`, `Waveform`, `Meter`)
+- `font_size`: Transcript font size
+- `speaking_color`, `idle_color`, `recording_indicator_color`: RGBA colors used by the Focus theme
+- `show_recording_indicator`: Show the pulsing recording indicator
 - `typewriter_effect`: Animate text reveal character-by-character when transcription completes in manual mode (default: false)
 
 ### Enhancement Configuration (Magic Mode)
@@ -386,7 +403,7 @@ Uses llama.cpp with GGUF models from HuggingFace for GPU-accelerated inference.
 enabled = false           # Enable magic mode by default when starting
 # model = ""              # HuggingFace GGUF: "owner/repo/filename.gguf"
 max_tokens = 256          # Maximum tokens to generate
-# system_prompt = ""      # Custom system prompt (uses default if empty)
+system_prompt = "Rewrite the transcript into clean, natural text while preserving the speaker's meaning. Fix obvious transcription artifacts, punctuation, and casing. Do not add facts, explanations, or commentary."
 ```
 
 #### Model Storage
@@ -442,8 +459,6 @@ transcript_history_path = "~/.cache/sonori/transcript_history.txt"  # Optional c
 
 The history file grows unbounded. To clear it, simply delete or truncate the file.
 
-**Note**: These settings don't appear in the default config.toml since they're optional. Add them manually to enable history.
-
 ### System Tray Integration
 
 Sonori integrates with the system tray using StatusNotifierItem (freedesktop standard). The system tray provides quick access to:
@@ -460,11 +475,13 @@ The tray icon updates to reflect the current recording state and can show a prev
 ## File Locations
 
 ### Model Storage
-- `~/.cache/sonori/models/` - Downloaded and converted Whisper models
-- `~/.cache/sonori/models/moonshine-*-onnx` - Downloaded Moonshine ONNX models
-- `~/.cache/sonori/models/parakeet-tdt-v3-int8/` - Parakeet TDT v3 model (multilingual)
-- `~/.cache/sonori/models/parakeet-tdt-v2-int8/` - Parakeet TDT v2 model (English-only)
-- `~/.cache/sonori/models/silero_vad.onnx` - Silero VAD model
+- `~/.cache/speechcore/models/` - Shared STT model cache used by `speechcore`
+- `~/.cache/speechcore/models/ggml-*.bin` - Whisper.cpp GGML models
+- `~/.cache/speechcore/models/*-ct2/` - Downloaded and converted CTranslate2 models
+- `~/.cache/speechcore/models/moonshine-*-onnx` - Downloaded Moonshine ONNX models
+- `~/.cache/speechcore/models/parakeet-tdt-v3-int8/` - Parakeet TDT v3 model (multilingual)
+- `~/.cache/speechcore/models/parakeet-tdt-v2-int8/` - Parakeet TDT v2 model (English-only)
+- `~/.cache/speechcore/models/silero_vad.onnx` - Silero VAD model
 - `~/.cache/sonori/models/enhancement/` - Enhancement models
 
 ### Logs and Output

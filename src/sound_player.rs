@@ -3,6 +3,7 @@ use crate::sound_generator::{SoundGenerator, SoundType};
 use anyhow::Result;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use parking_lot::Mutex;
+use speechcore::{FeedbackEvent, FeedbackSink};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -115,5 +116,19 @@ impl SoundPlayer {
         drop(stream);
 
         Ok(())
+    }
+}
+
+impl FeedbackSink for SoundPlayer {
+    fn play(&self, event: FeedbackEvent) {
+        let sound_type = match event {
+            FeedbackEvent::RecordStart => SoundType::RecordStart,
+            FeedbackEvent::RecordStop => SoundType::RecordStop,
+            FeedbackEvent::SessionStart => SoundType::SessionStart,
+            FeedbackEvent::SessionComplete => SoundType::SessionComplete,
+            FeedbackEvent::SessionCancel => SoundType::SessionCancel,
+        };
+
+        self.play(sound_type);
     }
 }

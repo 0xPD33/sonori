@@ -3,7 +3,6 @@ pub mod batch_text_renderer;
 pub mod button_panel;
 pub mod button_texture;
 pub mod buttons;
-pub mod common;
 pub mod event_handler;
 pub mod gpu_utils;
 pub mod layout_manager;

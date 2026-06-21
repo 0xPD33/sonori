@@ -5,10 +5,10 @@ use winit::keyboard::{Key, NamedKey};
 
 use super::batch_text_renderer::{BatchTextRenderer, TextItem};
 use super::widgets::{Select, SelectOption, Slider, Toggle, WidgetRenderer};
-use crate::backend::BackendType;
 use crate::config::{
     AppConfig, ShortcutMode, SpectrogramSkin, VadSensitivity, VisualThemePreset, WindowPosition,
 };
+use speechcore::BackendType;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsTab {
@@ -148,6 +148,7 @@ fn backend_has_language_select(backend: BackendType, english_only: bool) -> bool
     match backend {
         BackendType::WhisperCpp => !english_only,
         BackendType::Parakeet => true,
+        BackendType::Nemotron => true,
         _ => false,
     }
 }
@@ -173,6 +174,7 @@ fn models_for_backend(backend: BackendType, english_only: bool) -> Vec<SelectOpt
         BackendType::CTranslate2 => &["tiny.en", "base.en", "small.en", "medium.en", "large-v3"],
         BackendType::Moonshine => &["tiny", "base"],
         BackendType::Parakeet => &["parakeet-tdt-0.6b-v3", "parakeet-tdt-0.6b-v2"],
+        BackendType::Nemotron => &["nemotron-3.5-asr-streaming-0.6b"],
     };
     names
         .iter()
@@ -218,6 +220,49 @@ fn languages_for_backend(backend: BackendType) -> Vec<SelectOption> {
             ("Czech", "cs"),
             ("Ukrainian", "uk"),
             ("Hungarian", "hu"),
+        ],
+        BackendType::Nemotron => &[
+            ("Auto detect", "auto"),
+            ("English (US)", "en-US"),
+            ("English (UK)", "en-GB"),
+            ("Spanish (ES)", "es-ES"),
+            ("Spanish (US)", "es-US"),
+            ("French (FR)", "fr-FR"),
+            ("French (CA)", "fr-CA"),
+            ("German", "de-DE"),
+            ("Italian", "it-IT"),
+            ("Portuguese (BR)", "pt-BR"),
+            ("Portuguese (PT)", "pt-PT"),
+            ("Dutch", "nl-NL"),
+            ("Russian", "ru-RU"),
+            ("Ukrainian", "uk-UA"),
+            ("Polish", "pl-PL"),
+            ("Czech", "cs-CZ"),
+            ("Slovak", "sk-SK"),
+            ("Croatian", "hr-HR"),
+            ("Bulgarian", "bg-BG"),
+            ("Slovenian", "sl-SI"),
+            ("Romanian", "ro-RO"),
+            ("Greek", "el-GR"),
+            ("Hungarian", "hu-HU"),
+            ("Swedish", "sv-SE"),
+            ("Danish", "da-DK"),
+            ("Finnish", "fi-FI"),
+            ("Norwegian (Bokmål)", "nb-NO"),
+            ("Norwegian (Nynorsk)", "nn-NO"),
+            ("Lithuanian", "lt-LT"),
+            ("Latvian", "lv-LV"),
+            ("Estonian", "et-EE"),
+            ("Turkish", "tr-TR"),
+            ("Arabic", "ar-AR"),
+            ("Hebrew", "he-IL"),
+            ("Hindi", "hi-IN"),
+            ("Japanese", "ja-JP"),
+            ("Korean", "ko-KR"),
+            ("Chinese", "zh-CN"),
+            ("Thai", "th-TH"),
+            ("Vietnamese", "vi-VN"),
+            ("Maltese", "mt-MT"),
         ],
         _ => &[],
     };
@@ -265,6 +310,10 @@ impl SettingsPanel {
                 SelectOption {
                     label: "Parakeet".into(),
                     value: "Parakeet".into(),
+                },
+                SelectOption {
+                    label: "Nemotron".into(),
+                    value: "Nemotron".into(),
                 },
             ],
             0,
@@ -820,6 +869,7 @@ impl SettingsPanel {
             1 => BackendType::WhisperCpp,
             2 => BackendType::Moonshine,
             3 => BackendType::Parakeet,
+            4 => BackendType::Nemotron,
             _ => BackendType::CTranslate2,
         };
         let english_only = self.english_only_toggle.value;
@@ -979,6 +1029,7 @@ impl SettingsPanel {
             BackendType::WhisperCpp => 1,
             BackendType::Moonshine => 2,
             BackendType::Parakeet => 3,
+            BackendType::Nemotron => 4,
         };
         self.show_english_toggle = backend_has_english_toggle(backend);
         let english_only = config.general_config.model.ends_with(".en");
@@ -1088,6 +1139,7 @@ impl SettingsPanel {
                 1 => BackendType::WhisperCpp,
                 2 => BackendType::Moonshine,
                 3 => BackendType::Parakeet,
+                4 => BackendType::Nemotron,
                 _ => config.backend_config.backend,
             };
             let english_only = self.english_only_toggle.value;
@@ -1560,6 +1612,7 @@ impl SettingsPanel {
                         1 => BackendType::WhisperCpp,
                         2 => BackendType::Moonshine,
                         3 => BackendType::Parakeet,
+                        4 => BackendType::Nemotron,
                         _ => BackendType::CTranslate2,
                     };
                     let old_model = self.model_select.selected_value().to_string();
@@ -1779,6 +1832,7 @@ impl SettingsPanel {
                     BackendType::WhisperCpp => 1,
                     BackendType::Moonshine => 2,
                     BackendType::Parakeet => 3,
+                    BackendType::Nemotron => 4,
                 };
                 self.backend_select.mark_changed();
                 self.show_english_toggle = backend_has_english_toggle(backend);

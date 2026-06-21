@@ -9,8 +9,8 @@ use winit::{
 };
 
 use super::buttons::ButtonType;
-use super::common::AudioVisualizationData;
 use parking_lot::RwLock;
+use speechcore::AudioVisualizationData;
 
 // Event handling methods that will be used by WindowState
 pub struct EventHandler {
@@ -19,8 +19,7 @@ pub struct EventHandler {
     pub auto_scroll: bool,
     pub recording: Option<Arc<AtomicBool>>,
     pub magic_mode_enabled: Option<Arc<AtomicBool>>,
-    pub manual_session_sender:
-        Option<tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>>,
+    pub manual_session_sender: Option<tokio::sync::mpsc::Sender<speechcore::ManualSessionCommand>>,
     pub transcription_mode_ref: Arc<AtomicU8>,
     pub settings_requested: Cell<bool>,
 }
@@ -29,9 +28,7 @@ impl EventHandler {
     pub fn new(
         recording: Option<Arc<AtomicBool>>,
         magic_mode_enabled: Option<Arc<AtomicBool>>,
-        manual_session_sender: Option<
-            tokio::sync::mpsc::Sender<crate::real_time_transcriber::ManualSessionCommand>,
-        >,
+        manual_session_sender: Option<tokio::sync::mpsc::Sender<speechcore::ManualSessionCommand>>,
         transcription_mode_ref: Arc<AtomicU8>,
     ) -> Self {
         Self {
@@ -230,11 +227,11 @@ impl EventHandler {
                             // ASYNC: Send command without blocking UI thread
                             tokio::spawn(async move {
                                 let command = if is_currently_recording {
-                                    crate::real_time_transcriber::ManualSessionCommand::StopSession {
+                                    speechcore::ManualSessionCommand::StopSession {
                                         responder: None,
                                     }
                                 } else {
-                                    crate::real_time_transcriber::ManualSessionCommand::StartSession {
+                                    speechcore::ManualSessionCommand::StartSession {
                                         responder: None,
                                     }
                                 };
@@ -258,15 +255,15 @@ impl EventHandler {
                     }
                     ButtonType::ModeToggle => {
                         // IMMEDIATE UI response: Calculate new mode and send command asynchronously
-                        let current_mode = crate::real_time_transcriber::TranscriptionMode::from_u8(
+                        let current_mode = speechcore::TranscriptionMode::from_u8(
                             self.transcription_mode_ref.load(Ordering::Relaxed),
                         );
                         let new_mode = match current_mode {
-                            crate::real_time_transcriber::TranscriptionMode::RealTime => {
-                                crate::real_time_transcriber::TranscriptionMode::Manual
+                            speechcore::TranscriptionMode::RealTime => {
+                                speechcore::TranscriptionMode::Manual
                             }
-                            crate::real_time_transcriber::TranscriptionMode::Manual => {
-                                crate::real_time_transcriber::TranscriptionMode::RealTime
+                            speechcore::TranscriptionMode::Manual => {
+                                speechcore::TranscriptionMode::RealTime
                             }
                         };
 
@@ -279,7 +276,10 @@ impl EventHandler {
                         if let Some(sender) = &self.manual_session_sender {
                             let sender = sender.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = sender.send(crate::real_time_transcriber::ManualSessionCommand::SwitchMode(new_mode)).await {
+                                if let Err(e) = sender
+                                    .send(speechcore::ManualSessionCommand::SwitchMode(new_mode))
+                                    .await
+                                {
                                     eprintln!("Failed to send mode switch command: {}", e);
                                 } else {
                                     println!("Mode switch command sent successfully (background)");

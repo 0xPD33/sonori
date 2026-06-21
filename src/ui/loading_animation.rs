@@ -1,9 +1,8 @@
 use std::sync::Arc;
 use wgpu;
 
-use super::common::ProcessingState;
 use super::gpu_utils::GpuQuadRenderer;
-use crate::real_time_transcriber::TranscriptionMode;
+use speechcore::{ProcessingState, TranscriptionMode};
 
 /// Loading animation component for transcription processing
 pub struct LoadingAnimation {
