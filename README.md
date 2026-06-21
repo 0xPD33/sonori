@@ -24,8 +24,8 @@ Real-time or on-demand transcription, entirely on your device.
 
 ### Core
 - **Local AI Processing** - All transcription happens on your device, no cloud services required
-- **Multi-Backend Support** - Choose between CTranslate2, Whisper.cpp, Moonshine, or Parakeet TDT backends
-- **Shared STT Runtime** - Speech capture, VAD, model downloads, and backend inference are provided by the reusable `speechcore` crate
+- **Multi-Backend Support** - Choose between CTranslate2, Whisper.cpp, Moonshine, Parakeet TDT, or Nemotron 3.5 ASR (streaming) backends
+- **Shared STT Runtime** - Speech capture, VAD, model downloads, and backend inference are provided by the reusable [`speechcore`](https://github.com/0xPD33/speechcore) crate, maintained as a separate dependency and pulled in automatically when building
 - **Dual Transcription Modes** - Real-time continuous transcription or manual on-demand sessions
 - **Voice Activity Detection** - Uses Silero VAD for accurate speech detection
 - **Automatic Model Download** - Models are downloaded automatically on first run
@@ -38,7 +38,7 @@ Real-time or on-demand transcription, entirely on your device.
 - **Typewriter Effect** - Character-by-character text reveal animation when transcription completes
 
 ### Optional Features
-- **GPU Acceleration** - Vulkan-based rendering; Whisper.cpp Vulkan acceleration; ONNX Runtime GPU acceleration for Moonshine and Parakeet TDT backends
+- **GPU Acceleration** - Vulkan-based rendering; Whisper.cpp Vulkan acceleration; ONNX Runtime GPU acceleration for Moonshine, Parakeet TDT, and Nemotron 3.5 ASR backends
 - **Global Shortcuts** - System-wide hotkeys via XDG Desktop Portal (e.g., Super+\ to toggle recording)
 - **Auto-Paste** - Automatic text injection via XDG Desktop Portal, with wtype/dotool fallback for compositors without portal support
 - **Sound Feedback** - Audio cues for recording state changes
@@ -119,6 +119,8 @@ Or add to your flake:
 ```
 
 ### Building from Source
+
+Sonori depends on [**speechcore**](https://github.com/0xPD33/speechcore) (the shared speech-to-text runtime), pulled in automatically as a git dependency by Cargo — no manual checkout needed. The system dependencies below cover both crates.
 
 **Prerequisites:** [Rust](https://rustup.rs/) and distribution-specific dependencies.
 
@@ -285,6 +287,7 @@ Sonori uses `config.toml` for configuration. Defaults work well for most users. 
 - **Multilingual** - For non-English languages
 - **Moonshine** - ONNX-based backend with fast real-time performance
 - **Parakeet TDT** - NVIDIA NeMo model via sherpa-onnx, multilingual or English-only
+- **Nemotron 3.5 ASR** - NVIDIA streaming model (cache-aware FastConformer + RNNT), 40+ locales with auto-detect
 
 ## Troubleshooting
 
@@ -339,6 +342,8 @@ ct2-transformers-converter --model your-model --output_dir ~/.cache/speechcore/m
 **Moonshine model layout:** Moonshine uses ONNX merged models (auto-downloaded) and expects a model name like `tiny` or `base`. If you see decoder input errors, set `[moonshine_options].enable_cache = false` and retry.
 
 **Parakeet model layout:** Parakeet uses INT8 split ONNX models via sherpa-onnx (auto-downloaded from HuggingFace). STT models are stored under `~/.cache/speechcore/models/` by default.
+
+**Nemotron model layout:** Nemotron 3.5 ASR uses split ONNX models (encoder/decoder/joint, int4) auto-downloaded from HuggingFace. Set the target language (or `auto`) via `[nemotron_options].language`.
 
 ## Known Issues
 
