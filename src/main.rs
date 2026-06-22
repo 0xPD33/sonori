@@ -529,7 +529,9 @@ async fn run_gui_mode(
                         format!("{} {}", history, message.text)
                     }
                 };
-                audio_visualization_data_for_thread.write().transcript = preview;
+                // Trailing ellipsis marks the live, provisional tail; the final
+                // message replaces it with committed text (no marker).
+                audio_visualization_data_for_thread.write().transcript = format!("{preview} …");
                 continue;
             }
 
