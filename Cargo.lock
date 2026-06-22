@@ -4386,7 +4386,7 @@ dependencies = [
 
 [[package]]
 name = "sonori"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "ashpd",
@@ -4418,7 +4418,7 @@ dependencies = [
 [[package]]
 name = "speechcore"
 version = "0.1.0"
-source = "git+https://github.com/0xPD33/speechcore?branch=main#23a637179c0f15599f3e8dfc0808a08158da2a0b"
+source = "git+https://github.com/0xPD33/speechcore?tag=v0.1.0#c4f0785782441e40687b87d66a174cc8b6fb7390"
 dependencies = [
  "anyhow",
  "chrono",

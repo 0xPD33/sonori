@@ -1,10 +1,10 @@
 [package]
 name = "sonori"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2021"
 
 [dependencies]
-speechcore = { git = "https://github.com/0xPD33/speechcore", branch = "main", default-features = false, features = ["runtime"] }
+speechcore = { git = "https://github.com/0xPD33/speechcore", tag = "v0.1.0", default-features = false, features = ["runtime"] }
 cpal = "0.16"
 serde_json = "1.0"
 reqwest = { version = "0.12.14", features = ["stream", "json"] }
