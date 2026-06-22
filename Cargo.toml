@@ -4,7 +4,7 @@ version = "0.10.0"
 edition = "2021"
 
 [dependencies]
-speechcore = { git = "https://github.com/0xPD33/speechcore", tag = "v0.1.0", default-features = false, features = ["runtime"] }
+speechcore = { git = "https://github.com/0xPD33/speechcore", tag = "v0.1.1", default-features = false, features = ["runtime"] }
 cpal = "0.16"
 serde_json = "1.0"
 reqwest = { version = "0.12.14", features = ["stream", "json"] }
@@ -46,7 +46,11 @@ backend-ctranslate2 = ["speechcore/backend-ctranslate2"]
 backend-moonshine = ["speechcore/backend-moonshine"]
 backend-parakeet = ["speechcore/backend-parakeet"]
 backend-nemotron = ["speechcore/backend-nemotron"]
-backend-whisper-cpp = ["speechcore/backend-whisper-cpp"]
+backend-whisper-cpp = [
+    "speechcore/backend-whisper-cpp",
+    "speechcore/whisper-cpp-vulkan",
+    "speechcore/whisper-cpp-openblas",
+]
 # ORT execution providers
 ort-cpu = ["speechcore/ort-cpu"]
 ort-cuda = ["speechcore/ort-cuda"]
