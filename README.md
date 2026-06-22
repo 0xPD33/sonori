@@ -25,7 +25,7 @@ Real-time or on-demand transcription, entirely on your device.
 ### Core
 - **Local AI Processing** - All transcription happens on your device, no cloud services required
 - **Multi-Backend Support** - Choose between CTranslate2, Whisper.cpp, Moonshine, Parakeet TDT, or Nemotron 3.5 ASR (streaming) backends
-- **Shared STT Runtime** - Speech capture, VAD, model downloads, and backend inference are provided by the reusable [`speechcore`](https://github.com/0xPD33/speechcore) crate, maintained as a separate dependency and pulled in automatically when building
+- **Shared STT Runtime** - Speech capture, VAD, model downloads, and backend inference are provided by the reusable [`speechcore`](https://crates.io/crates/speechcore) crate ([source](https://github.com/0xPD33/speechcore)), maintained as a separate dependency and pulled in automatically when building
 - **Dual Transcription Modes** - Real-time continuous transcription or manual on-demand sessions
 - **Voice Activity Detection** - Uses Silero VAD for accurate speech detection
 - **Automatic Model Download** - Models are downloaded automatically on first run
