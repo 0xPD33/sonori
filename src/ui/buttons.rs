@@ -1118,7 +1118,7 @@ impl ButtonManager {
                 }
 
                 // Reset all buttons to appropriate state (hover if mouse over, normal otherwise)
-                for (_, button) in self.buttons.iter_mut() {
+                for button in self.buttons.values_mut() {
                     let new_state = if button.contains_point(x, y) {
                         ButtonState::Hover
                     } else {

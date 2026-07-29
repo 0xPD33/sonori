@@ -151,9 +151,10 @@ impl LlamaCppModel {
         // Generate completion
         let decode_start = Instant::now();
         let mut output_tokens = Vec::new();
-        let mut n_cur = tokens.len() as i32;
 
-        for _ in 0..self.max_tokens {
+        // n_cur is the absolute position of the token being added to the
+        // batch, so it continues from the end of the prompt.
+        for n_cur in (tokens.len() as i32..).take(self.max_tokens) {
             // Sample next token
             let token = sampler.sample(&ctx, batch.n_tokens() - 1);
             sampler.accept(token);
@@ -180,7 +181,6 @@ impl LlamaCppModel {
             batch.add(token, n_cur, &[0], true).map_err(|e| {
                 EnhancementError::InferenceError(format!("Failed to add token: {:?}", e))
             })?;
-            n_cur += 1;
 
             // Decode
             ctx.decode(&mut batch).map_err(|e| {
