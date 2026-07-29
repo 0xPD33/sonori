@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+# A superseded push has nothing useful to say; don't pay for it.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+
+    env:
+      BLAS_INCLUDE_DIRS: /usr/include/x86_64-linux-gnu
+      OPENBLAS_PATH: /usr
+      ORT_STRATEGY: system
+      ORT_LIB_LOCATION: /usr/local/lib
+      ONNX_VERSION: "1.22.0"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Same list as release.yml — the default feature set pulls in
+      # CTranslate2, whisper.cpp (vulkan + openblas), ONNX and llama.cpp.
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            portaudio19-dev \
+            libclang-dev \
+            pkg-config \
+            libxkbcommon-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxrandr-dev \
+            libasound2-dev \
+            libssl-dev \
+            libfftw3-dev \
+            curl \
+            cmake \
+            libvulkan-dev \
+            libopenblas-dev \
+            glslc
+
+      - name: Install ONNX Runtime
+        run: |
+          wget -q https://github.com/microsoft/onnxruntime/releases/download/v${ONNX_VERSION}/onnxruntime-linux-x64-${ONNX_VERSION}.tgz
+          tar -xzf onnxruntime-linux-x64-${ONNX_VERSION}.tgz
+          sudo cp -r onnxruntime-linux-x64-${ONNX_VERSION}/include/* /usr/local/include/
+          sudo cp -r onnxruntime-linux-x64-${ONNX_VERSION}/lib/* /usr/local/lib/
+          sudo ldconfig
+          echo "LIBRARY_PATH=/usr/local/lib:${LIBRARY_PATH}" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}" >> $GITHUB_ENV
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Lint
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test

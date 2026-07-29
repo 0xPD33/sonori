@@ -1,3 +1,10 @@
+// ponytail: token_to_str/Special are deprecated in favour of token_to_piece,
+// which takes an `&mut encoding_rs::Decoder` that llama-cpp-2 does not
+// re-export. Migrating means taking a direct encoding_rs dependency and
+// keeping its version in lockstep with llama-cpp-2's. Do that when the
+// deprecated calls are actually removed, not before.
+#![allow(deprecated)]
+
 use super::EnhancementError;
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;

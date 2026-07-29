@@ -30,6 +30,12 @@ num_cpus = "1.16"
 llama-cpp-2 = { version = "0.1.131", features = ["vulkan"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
+[lints.clippy]
+# ponytail: the wgpu render helpers genuinely take device/queue/config/layout/
+# bounds/... . Bundling them into structs to satisfy a lint would add types
+# nobody asked for. Allowed crate-wide so CI can run -D warnings on the rest.
+too_many_arguments = "allow"
+
 [features]
 default = [
     "backend-ctranslate2",
