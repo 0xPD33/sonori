@@ -26,9 +26,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # Pinned to match rust-toolchain.toml exactly. Using a moving channel
+      # here drifts from the nix dev shell, which resolves its toolchain
+      # through flake.lock — that is how clippy came to pass locally and fail
+      # on the runner. Bump this and rust-toolchain.toml together.
       - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: "1.97.1"
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2

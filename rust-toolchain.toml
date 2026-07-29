@@ -1,4 +1,9 @@
 [toolchain]
-channel = "beta"
+# Pinned to an exact version rather than a channel so the nix dev shell and
+# CI resolve byte-identical toolchains. A moving channel drifts between the
+# two: flake.lock froze "beta" at a January build while CI kept pulling the
+# live channel, so clippy passed locally and failed on the runner.
+# Bump deliberately, and run `nix flake update rust-overlay` alongside it.
+channel = "1.97.1"
 components = ["rustfmt", "clippy", "rust-src"]
 targets = []
