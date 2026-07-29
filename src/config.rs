@@ -113,9 +113,9 @@ pub struct ManualModeConfig {
     /// Overlap amount is controlled by chunk_overlap_seconds
     pub enable_chunk_overlap: bool,
 
-    /// Overlap duration in seconds between chunks (default: 0.5)
+    /// Overlap duration in seconds between chunks (default: 2.0)
     /// Only used when enable_chunk_overlap is true
-    /// Recommended range: 0.1 to 1.0 seconds (avoid 2+ seconds due to hallucination)
+    /// Recommended range: 0.5 to 2.0 seconds; reduce it if boundary words repeat
     pub chunk_overlap_seconds: f32,
 
     /// EXPERIMENTAL: Disable chunking for manual mode transcription (default: false)

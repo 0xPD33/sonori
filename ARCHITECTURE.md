@@ -560,7 +560,7 @@ Manual mode includes sophisticated audio chunking for long recordings:
 - **`chunk_duration_seconds`** (default: 29.0) - Segment size for transcription
   - Why 29.0? Whisper trained on 30s chunks; 29s provides 1-second safety buffer to avoid edge cases
 - **`enable_chunk_overlap`** (default: true) - Enables overlap between chunks
-- **`chunk_overlap_seconds`** (default: 0.5-2.0) - Overlap duration for context preservation
+- **`chunk_overlap_seconds`** (default: 2.0) - Overlap duration for context preservation (range 0.5-2.0)
 - **`max_recording_duration_secs`** (default: 120) - Maximum session length before auto-stop
 - **`clear_on_new_session`** (default: true) - Clear previous transcript on new session
 - **`disable_chunking`** (default: false) - Experimental flag to disable automatic chunking
