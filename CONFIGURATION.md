@@ -191,6 +191,10 @@ enabled = true                    # Enable post-processing of transcriptions
 remove_leading_dashes = true      # Remove leading dashes (e.g., "- text" → "text")
 remove_trailing_dashes = true     # Remove trailing dashes (e.g., "text -" → "text")
 normalize_whitespace = true       # Normalize whitespace
+remove_fillers = true             # Drop standalone "um", "uh", "erm", "hm"
+collapse_repeated_words = false   # Collapse stutters (e.g., "the the" → "the")
+capitalize_sentences = false      # Capitalize the first letter of each sentence
+ensure_terminal_punctuation = false  # Append a full stop if the text ends on a word
 
 [enhancement_config]
 enabled = false                   # Enable magic mode by default
@@ -321,6 +325,17 @@ Manual mode allows push-to-talk transcription with specialized chunking for long
 - `max_recording_duration_secs`: Maximum total recording length (default: 120 seconds)
 - `clear_on_new_session`: Whether to clear previous transcript when starting new session
 - `disable_chunking`: Experimental mode to process entire recording without chunks (may fail on long/dense speech)
+
+### Transcript Cleanup (`post_process_config`)
+
+Deterministic text cleanup applied to every transcript, whichever backend produced it. It runs before Magic Mode, so enabling these often removes the need for an LLM pass at all.
+
+- `remove_fillers` (default: on) — drops standalone `um`, `uh`, `uhm`, `erm`, `hm`, `hmm`, `mhm` along with their trailing punctuation. Only whole words match, so `Umbrella` and `humming` are untouched. The list is deliberately short: `ah`, `oh`, `so` and `like` carry meaning often enough that removing them would change what you said.
+- `collapse_repeated_words` (default: **off**) — collapses `the the` to `the`. Off because `had had`, `that that` and `very very` are legitimate English. Repetition across punctuation (`No, no`) is always preserved, since that reads as deliberate.
+- `capitalize_sentences` (default: **off**) — off because every backend Sonori ships already capitalizes, and it is wrong when dictating shell commands. Useful for a backend that emits lowercase.
+- `ensure_terminal_punctuation` (default: **off**) — appends a full stop when the text ends on a word. Off for the same reason.
+
+The two defaults that are on (`remove_fillers`, `normalize_whitespace`) are safe for prose and code alike. Turn the others on if you dictate mostly prose.
 
 ### Voice Activity Detection (VAD)
 

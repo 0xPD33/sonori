@@ -90,6 +90,14 @@ enabled = true
 remove_leading_dashes = true
 remove_trailing_dashes = true
 normalize_whitespace = true
+# Drop standalone "um", "uh", "erm", "hm" and friends
+remove_fillers = true
+# Off by default: "had had" and "that that" are legitimate English
+collapse_repeated_words = false
+# Off by default: the backends already capitalize, and it is wrong for
+# dictating shell commands
+capitalize_sentences = false
+ensure_terminal_punctuation = false
 
 # =============================================================================
 # ENHANCEMENT (Magic Mode)

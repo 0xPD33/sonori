@@ -4417,8 +4417,8 @@ dependencies = [
 
 [[package]]
 name = "speechcore"
-version = "0.1.2"
-source = "git+https://github.com/0xPD33/speechcore?tag=v0.1.2#4ef051b8950e7ec8dde518487c0b413f791c564f"
+version = "0.1.3"
+source = "git+https://github.com/0xPD33/speechcore?tag=v0.1.3#463c1374b918b7a75b1ff56e6ef9eceea1b54762"
 dependencies = [
  "anyhow",
  "chrono",
