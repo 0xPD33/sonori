@@ -358,16 +358,9 @@ async fn run_manual_cli(mut transcriber: RealTimeTranscriber) -> anyhow::Result<
                         println!("\nCopy transcript requested");
                         let transcript = transcriber.get_transcript();
                         if !transcript.is_empty() {
-                            match std::process::Command::new("wl-copy")
-                                .arg(&transcript)
-                                .spawn()
-                                .and_then(|mut child| child.wait())
-                            {
-                                Ok(exit_status) if exit_status.success() => {
+                            match copy::WlCopy::copy_to_clipboard(&transcript) {
+                                Ok(()) => {
                                     println!("Transcript copied to clipboard successfully");
-                                }
-                                Ok(_) => {
-                                    eprintln!("Failed to copy transcript: wl-copy exited with error");
                                 }
                                 Err(e) => {
                                     eprintln!("Failed to copy transcript: {}", e);

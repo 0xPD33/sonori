@@ -1,5 +1,4 @@
 use std::cell::Cell;
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use winit::{
@@ -118,15 +117,9 @@ impl EventHandler {
             let transcript = audio_data_lock.transcript.clone();
             drop(audio_data_lock);
 
-            // Use wl-copy command for clipboard
-            if let Err(e) = Command::new("wl-copy")
-                .arg(&transcript)
-                .spawn()
-                .map(|child| child.wait_with_output())
-            {
-                println!("Failed to copy to clipboard: {:?}", e);
-            } else {
-                println!("Copied transcript to clipboard using wl-copy");
+            match crate::copy::WlCopy::copy_to_clipboard(&transcript) {
+                Ok(()) => println!("Copied transcript to clipboard using wl-copy"),
+                Err(e) => println!("Failed to copy to clipboard: {}", e),
             }
         }
     }
