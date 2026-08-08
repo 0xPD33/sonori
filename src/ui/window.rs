@@ -555,6 +555,9 @@ impl WindowState {
             self.hover_animation_progress =
                 (self.hover_animation_progress - delta_time * animation_speed).max(0.0);
         }
+        // The redraw loop only sustains itself through the request_redraw() at the
+        // end of this function, so every bail-out has to re-arm it or the overlay
+        // stops painting for good and the process lives on with an invisible window.
         let output = match self.surface.get_current_texture() {
             Ok(output) => output,
             Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
@@ -564,12 +567,14 @@ impl WindowState {
                     Ok(output) => output,
                     Err(e) => {
                         eprintln!("Failed to get surface texture after reconfigure: {:?}", e);
+                        self.window.request_redraw();
                         return;
                     }
                 }
             }
             Err(wgpu::SurfaceError::Timeout) => {
                 eprintln!("Surface texture acquisition timed out");
+                self.window.request_redraw();
                 return;
             }
             Err(wgpu::SurfaceError::OutOfMemory) => {
@@ -581,6 +586,7 @@ impl WindowState {
             }
             Err(e) => {
                 eprintln!("Surface error: {:?}", e);
+                self.window.request_redraw();
                 return;
             }
         };
