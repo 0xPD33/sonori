@@ -651,6 +651,13 @@ impl ApplicationHandler for WindowApp {
             }
         }
 
+        // can_create_surfaces() gives up silently when no monitor is advertised yet
+        // (niri drops outputs while they are powered off), which would leave us
+        // running headless forever. Retry until we actually have a window.
+        if self.windows.is_empty() {
+            self.can_create_surfaces(event_loop);
+        }
+
         // Process tray commands if available
         if let Some(tray_rx) = &mut self.tray_command_rx {
             let mut notify_recording = false;
