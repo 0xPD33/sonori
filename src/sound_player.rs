@@ -4,6 +4,7 @@ use anyhow::Result;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use parking_lot::Mutex;
 use speechcore::{FeedbackEvent, FeedbackSink};
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -22,31 +23,8 @@ impl SoundPlayer {
 
         // Use a dedicated blocking thread for sound playback (CPAL streams are not Send)
         std::thread::spawn(move || {
-            let host = cpal::default_host();
-
-            let device = match host.default_output_device() {
-                Some(d) => d,
-                None => {
-                    eprintln!("No audio output device available for sound playback");
-                    return;
-                }
-            };
-
-            let config = match device.default_output_config() {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!("Failed to get default output config: {}", e);
-                    return;
-                }
-            };
-
-            let sample_rate = config.sample_rate().0;
-            let generator = SoundGenerator::new(sample_rate);
-
-            while let Ok((sound_type, volume)) = sound_rx.recv() {
-                if let Err(e) = Self::play_sound_internal(&device, &generator, sound_type, volume) {
-                    eprintln!("Failed to play sound {:?}: {}", sound_type, e);
-                }
+            if let Err(e) = Self::run(sound_rx) {
+                eprintln!("Sound playback unavailable: {}", e);
             }
         });
 
@@ -74,46 +52,46 @@ impl SoundPlayer {
         *self.volume.lock() = volume.clamp(0.0, 1.0);
     }
 
-    fn play_sound_internal(
-        device: &cpal::Device,
-        generator: &SoundGenerator,
-        sound_type: SoundType,
-        volume: f32,
-    ) -> Result<()> {
-        let cached_samples = generator.generate(sound_type);
-
-        let samples: Vec<f32> = cached_samples.iter().map(|&s| s * volume).collect();
-
+    // ponytail: one stream stays open for the process lifetime and outputs silence when
+    // idle. Per-cue streams lost the cue when the sink (Bluetooth) had more latency than
+    // the stream lifetime, because closing an ALSA PCM discards unplayed audio.
+    // Upgrade path: pause the stream after N seconds of silence if idle CPU matters.
+    fn run(sound_rx: mpsc::Receiver<(SoundType, f32)>) -> Result<()> {
+        let host = cpal::default_host();
+        let device = host
+            .default_output_device()
+            .ok_or_else(|| anyhow::anyhow!("no audio output device"))?;
         let config = device.default_output_config()?;
         let sample_rate = config.sample_rate().0;
+        let channels = config.channels() as usize;
+        let generator = SoundGenerator::new(sample_rate);
 
-        let mut sample_idx = 0;
-        let samples_len = samples.len();
-        let samples = Arc::new(samples);
-        let samples_clone = samples.clone();
+        // Mono samples pending playback; the callback writes each one to every channel.
+        let queue: Arc<Mutex<VecDeque<f32>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let queue_cb = queue.clone();
 
         let stream = device.build_output_stream(
             &config.into(),
             move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                for sample in data.iter_mut() {
-                    if sample_idx < samples_len {
-                        *sample = samples_clone[sample_idx];
-                        sample_idx += 1;
-                    } else {
-                        *sample = 0.0;
-                    }
+                // try_lock: never block the audio thread; a missed period plays silence.
+                let mut pending = queue_cb.try_lock();
+                for frame in data.chunks_mut(channels) {
+                    let sample = pending
+                        .as_mut()
+                        .and_then(|q| q.pop_front())
+                        .unwrap_or(0.0);
+                    frame.fill(sample);
                 }
             },
             |err| eprintln!("Audio stream error: {}", err),
             None,
         )?;
-
         stream.play()?;
 
-        let duration_secs = samples_len as f32 / sample_rate as f32;
-        std::thread::sleep(std::time::Duration::from_secs_f32(duration_secs + 0.1));
-
-        drop(stream);
+        while let Ok((sound_type, volume)) = sound_rx.recv() {
+            let mut pending = queue.lock();
+            pending.extend(generator.generate(sound_type).iter().map(|s| s * volume));
+        }
 
         Ok(())
     }
