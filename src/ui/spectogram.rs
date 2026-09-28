@@ -342,6 +342,13 @@ impl Spectrogram {
         self.update_instance_buffer();
     }
 
+    /// Whether any bar still moves, e.g. decaying after speech stopped.
+    pub fn is_animating(&self) -> bool {
+        self.bar_data
+            .iter()
+            .any(|bar| bar.abs() > self.config.min_amplitude + 1e-3)
+    }
+
     /// Processes audio samples and updates the target bar heights
     ///
     /// This is a key performance-critical function that converts audio samples

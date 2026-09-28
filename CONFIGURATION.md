@@ -139,6 +139,7 @@ quantization_level = "medium"     # Precision: "high" (full), "medium" (q8_0), "
 
 [audio_processor_config]
 buffer_size = 1024                # Audio buffer size (also used for visualization)
+# input_device = "USB"             # Part of the microphone name; unset = system default
                                    # Note: Sample rate is hardcoded to 16000 Hz (Silero VAD requirement)
 
 [realtime_mode_config]
@@ -146,11 +147,9 @@ max_buffer_duration_sec = 30.0    # Maximum audio buffer duration for VAD histor
 max_segment_count = 20            # Maximum number of speech segments to buffer
 
 [manual_mode_config]
-max_recording_duration_secs = 120 # Maximum recording time per session (2 minutes)
+max_recording_duration_secs = 600 # Maximum recording time per session (10 minutes)
 clear_on_new_session = true       # Clear transcript when starting new session
 chunk_duration_seconds = 29.0     # Chunk size in seconds (29s recommended to avoid 30s boundary issues)
-enable_chunk_overlap = true       # Enable overlapping chunks for long sessions
-chunk_overlap_seconds = 2.0       # Overlap duration between chunks (seconds)
 disable_chunking = false          # Experimental: Disable chunking for no-limit mode
 
 [vad_config]
@@ -179,6 +178,7 @@ temperature = 0.2                 # Sampling temperature (0.0 = deterministic, h
 suppress_blank = true             # Suppress blank outputs at beginning
 no_context = true                 # Disable context to prevent double transcriptions
 max_tokens = 0                    # Maximum tokens per segment (0 = auto)
+# initial_prompt = "Sonori, NixOS, Wayland"  # Custom vocabulary: names and jargon to recognize
                                    # Note: Internal thresholds (entropy, logprob, no_speech) are hardcoded to whisper.cpp defaults
 
 [moonshine_options]
@@ -199,7 +199,8 @@ ensure_terminal_punctuation = false  # Append a full stop if the text ends on a 
 [enhancement_config]
 enabled = false                   # Enable magic mode by default
 # model = ""                      # HuggingFace GGUF: "owner/repo/filename.gguf"
-max_tokens = 256                  # Maximum tokens to generate
+max_tokens = 1024                 # Maximum tokens to generate
+active = false                    # Magic Mode on or off; the overlay button and `sonori magic` change it
 system_prompt = "Rewrite the transcript into clean, natural text while preserving the speaker's meaning. Fix obvious transcription artifacts, punctuation, and casing. Do not add facts, explanations, or commentary."
 
 [portal_config]
@@ -208,6 +209,8 @@ enable_global_shortcuts = true        # Enable global shortcuts via portal
 manual_toggle_accelerator = "<Super>backslash"  # Accelerator for toggling manual sessions
 shortcut_mode = "Toggle"              # Shortcut behavior: "Toggle" (press to start/stop) or "PushToTalk" (hold to record)
 paste_shortcut = "ctrl_shift_v"       # Paste method: "ctrl_shift_v" (terminals) or "ctrl_v" (apps)
+output_mode = "Paste"                 # "Paste" (clipboard + paste shortcut), "Type" (wtype/dotool types the text,
+                                      # clipboard untouched) or "Clipboard" (copy only)
                                       # Note: Application ID for portal registration is hardcoded to "dev.sonori"
 
 [display_config]
@@ -235,8 +238,10 @@ typewriter_effect = false            # Animate text reveal in manual mode
 log_stats_enabled = false             # Enable detailed performance logging
 save_manual_audio_debug = false       # Save manual mode audio to WAV files
 recording_dir = "recordings"          # Directory to save debug audio recordings
-save_transcript_history = false       # Save all transcripts to persistent history file
-transcript_history_path = "~/.cache/sonori/transcript_history.txt"  # History file location (optional)
+
+[history_config]
+enabled = true                        # Append every transcript to the history file
+# path = "/home/you/notes/dictation.txt"  # Optional; default ~/.cache/sonori/transcript_history.txt
 ```
 
 ## Configuration Sections
@@ -315,14 +320,8 @@ Manual mode allows push-to-talk transcription with specialized chunking for long
 - **Why not 30s?**: Whisper has a 224-token output limit per chunk. When recordings exactly match the chunk duration (30s), they can hit this limit with dense speech, causing transcription to cut off prematurely. Using 29s creates safer chunking boundaries.
 - **Effect**: Recordings longer than this value are automatically split into chunks for processing
 
-#### Chunk Overlap (`enable_chunk_overlap`, `chunk_overlap_seconds`)
-- **Purpose**: Prevents words at chunk boundaries from being cut off
-- **Default**: Enabled with 2.0 second overlap
-- **Recommended**: Keep enabled; if you notice repetition, reduce overlap to 0.5-1.0 seconds
-- **Range**: 0.5 to 2.0 seconds (reduce overlap if you see boundary repeats)
-
 #### Other Options
-- `max_recording_duration_secs`: Maximum total recording length (default: 120 seconds)
+- `max_recording_duration_secs`: Maximum total recording length (default: 600 seconds). Long recordings are transcribed in chunks while you speak, so Stop only waits for the last chunk
 - `clear_on_new_session`: Whether to clear previous transcript when starting new session
 - `disable_chunking`: Experimental mode to process entire recording without chunks (may fail on long/dense speech)
 
@@ -336,6 +335,16 @@ Deterministic text cleanup applied to every transcript, whichever backend produc
 - `ensure_terminal_punctuation` (default: **off**) — appends a full stop when the text ends on a word. Off for the same reason.
 
 The two defaults that are on (`remove_fillers`, `normalize_whitespace`) are safe for prose and code alike. Turn the others on if you dictate mostly prose.
+
+To fix names and jargon for every backend, add replacements. Each key matches whole words without case; the value is written exactly:
+
+```toml
+[post_process_config.replacements]
+"nix os" = "NixOS"
+"claude code" = "Claude Code"
+```
+
+For whisper.cpp you can also bias recognition itself with `whisper_cpp_options.initial_prompt`, a list of names and terms.
 
 ### Voice Activity Detection (VAD)
 
@@ -417,7 +426,8 @@ Uses llama.cpp with GGUF models from HuggingFace for GPU-accelerated inference.
 [enhancement_config]
 enabled = false           # Enable magic mode by default when starting
 # model = ""              # HuggingFace GGUF: "owner/repo/filename.gguf"
-max_tokens = 256          # Maximum tokens to generate
+max_tokens = 1024         # Maximum tokens to generate
+active = false            # Whether Magic Mode is on; kept across restarts
 system_prompt = "Rewrite the transcript into clean, natural text while preserving the speaker's meaning. Fix obvious transcription artifacts, punctuation, and casing. Do not add facts, explanations, or commentary."
 ```
 
@@ -459,13 +469,15 @@ Save manual mode audio recordings to WAV files for debugging or review by enabli
 
 ### Transcript History
 
-Enable persistent transcript history by adding to your `[debug_config]` section:
+Transcript history is on by default. Configure it in `[history_config]`:
 
 ```toml
-[debug_config]
-save_transcript_history = true         # Enable history saving
-transcript_history_path = "~/.cache/sonori/transcript_history.txt"  # Optional custom path
+[history_config]
+enabled = true                          # Set false to keep no history
+path = "~/notes/dictation.txt"          # Optional custom path; a leading ~/ means your home
 ```
+
+Older configs that set `debug_config.transcript_history_path` keep that path; Sonori moves it into `history_config` on the next start.
 
 - **Format**: Plain text with timestamps, one entry per line: `[2025-12-11 14:30:22] Your transcribed text`
 - **Default Location**: `~/.cache/sonori/transcript_history.txt` (respects `$XDG_CACHE_HOME`)
@@ -502,7 +514,7 @@ The tray icon updates to reflect the current recording state and can show a prev
 ### Logs and Output
 - `transcription_stats.log` - Performance statistics (when `log_stats_enabled = true`)
 - `recordings/` - Debug audio recordings (when `save_manual_audio_debug = true`)
-- `~/.cache/sonori/transcript_history.txt` - Transcript history (when `save_transcript_history = true`)
+- `~/.cache/sonori/transcript_history.txt` - Transcript history (unless `history_config.enabled = false`)
 
 ### Configuration
 - `~/.config/sonori/config.toml` - User configuration file (or `$XDG_CONFIG_HOME/sonori/config.toml`)

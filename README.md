@@ -231,8 +231,9 @@ sonori
 
 1. A transparent overlay appears at the bottom of your screen
 2. **Real-time mode:** Recording starts automatically
-3. **Manual mode:** Press Record to start/stop sessions
+3. **Manual mode:** Press the global hotkey (default `Super+\`), click Record, or run `sonori toggle` to start and stop a session. The empty overlay shows the hotkey that is bound.
 4. Use overlay buttons to copy text, clear history, switch modes, or exit
+5. On X11, `Tab` also toggles a manual session while the overlay has keyboard focus. On Wayland the overlay never takes focus, so the paste lands in your app.
 
 ### CLI Mode
 
@@ -264,9 +265,15 @@ sonori toggle      # Toggle recording on/off
 sonori start       # Start recording session
 sonori stop        # Stop recording session
 sonori cancel      # Cancel session without processing
-sonori status      # Get current status (JSON)
+sonori status      # Get current status (JSON): mode, backend, hotkey
 sonori switch-mode manual|realtime
+sonori copy-last   # Copy the last transcript to the clipboard
+sonori paste-last  # Paste the last transcript again
+sonori magic       # Turn Magic Mode on or off
+sonori language de # Set the transcription language (applies from the next recording)
 ```
+
+Starting `sonori` while another instance runs replaces that instance.
 
 **Example niri keybinding** (`~/.config/niri/config.kdl`):
 ```kdl
@@ -320,6 +327,8 @@ Required for UI rendering and optional GPU-accelerated transcription.
 - Falls back to `wtype` when portal is unavailable (sway, Hyprland, niri, river, labwc, COSMIC)
 - Falls back to `dotool` if wtype also fails (works on all compositors via uinput — requires `input` group membership)
 - Copies text to clipboard via `wl-copy`, then simulates the configured paste shortcut
+- A portal paste that fails falls back to wtype/dotool; if every method fails, the status bar says "Copied, paste failed" and the text stays on the clipboard
+- `output_mode` (Settings → Behavior → Output) picks `Paste`, `Type` (wtype/dotool types the text; the clipboard stays untouched) or `Clipboard` (copy only)
 
 ### Model Issues
 

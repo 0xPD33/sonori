@@ -6,6 +6,9 @@ use winit::window::Window;
 
 use super::settings_panel::SettingsPanel;
 use crate::config::AppConfig;
+use crate::hotkey::SharedHotkeyState;
+use parking_lot::RwLock;
+use speechcore::BackendStatus;
 
 pub struct SettingsWindow {
     pub window: Arc<dyn Window>,
@@ -15,6 +18,8 @@ pub struct SettingsWindow {
     config: wgpu::SurfaceConfiguration,
     panel: SettingsPanel,
     backend_command_tx: Option<tokio::sync::mpsc::UnboundedSender<speechcore::BackendCommand>>,
+    backend_status: Option<Arc<RwLock<BackendStatus>>>,
+    hotkey_state: SharedHotkeyState,
     applied_config: Option<AppConfig>,
 }
 
@@ -28,6 +33,8 @@ impl SettingsWindow {
         surface_format: wgpu::TextureFormat,
         initial_config: &AppConfig,
         backend_command_tx: Option<tokio::sync::mpsc::UnboundedSender<speechcore::BackendCommand>>,
+        backend_status: Option<Arc<RwLock<BackendStatus>>>,
+        hotkey_state: SharedHotkeyState,
     ) -> Result<Self, String> {
         let window: Arc<dyn Window> = Arc::from(window);
 
@@ -85,6 +92,8 @@ impl SettingsWindow {
             config,
             panel,
             backend_command_tx,
+            backend_status,
+            hotkey_state,
             applied_config: None,
         })
     }
@@ -133,6 +142,14 @@ impl SettingsWindow {
             });
         }
 
+        self.panel.info_text = [
+            self.hotkey_state.read().describe(),
+            format!("Config: {}", crate::config::config_path_for_display()),
+            "Commands: sonori toggle, start, stop, cancel, status, copy-last, \
+             paste-last, magic, language <code>"
+                .to_string(),
+        ]
+        .join("\n");
         self.panel.render(
             &mut encoder,
             &view,
@@ -199,6 +216,11 @@ impl SettingsWindow {
 
             if let Err(e) = crate::config::write_app_config(&app_config) {
                 eprintln!("Failed to write config: {}", e);
+                if let Some(status) = &self.backend_status {
+                    status
+                        .write()
+                        .report_error(format!("Settings not saved: {e}"));
+                }
                 return;
             }
             self.panel.populate_from_config(&app_config);

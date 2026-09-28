@@ -141,9 +141,9 @@ impl LlamaCppModel {
             start.elapsed()
         );
 
-        // Set up sampler for generation
+        // Low temperature: a cleanup pass should stay close to what was said.
         let mut sampler = LlamaSampler::chain_simple([
-            LlamaSampler::temp(0.7),
+            LlamaSampler::temp(0.2),
             LlamaSampler::top_p(0.9, 1),
             LlamaSampler::dist(42),
         ]);
@@ -154,7 +154,9 @@ impl LlamaCppModel {
 
         // n_cur is the absolute position of the token being added to the
         // batch, so it continues from the end of the prompt.
-        for n_cur in (tokens.len() as i32..).take(self.max_tokens) {
+        // Stop at the context end too; decoding past it fails.
+        let room = (self.context_size as usize).saturating_sub(tokens.len());
+        for n_cur in (tokens.len() as i32..).take(self.max_tokens.min(room)) {
             // Sample next token
             let token = sampler.sample(&ctx, batch.n_tokens() - 1);
             sampler.accept(token);

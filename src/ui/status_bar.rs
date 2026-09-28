@@ -171,6 +171,22 @@ impl StatusBar {
         self.show_recording_indicator = ui_config.show_recording_indicator;
     }
 
+    /// Whether the bar shows motion: a loading sweep, download progress, or an
+    /// error that will fade (errors stay up while no model is loaded).
+    pub fn is_animating(&self) -> bool {
+        let status = self.status.read();
+        matches!(status.state, BackendStatusState::Loading(_))
+            || status.download_progress.is_some()
+            || (status.last_error.is_some() && status.state != BackendStatusState::NoModel)
+    }
+
+    pub fn trim_atlases(&mut self) {
+        self.left_text_renderer.trim_atlas();
+        self.right_text_renderer.trim_atlas();
+        self.recording_dot_renderer.trim_atlas();
+        self.recording_timer_renderer.trim_atlas();
+    }
+
     pub fn resize(&mut self, size: PhysicalSize<u32>) {
         self.left_text_renderer.resize(size);
         self.right_text_renderer.resize(size);
@@ -206,32 +222,28 @@ impl StatusBar {
             is_loading,
         ) = {
             let mut status = self.status.write();
+            let error_red = [1.0, 0.3, 0.3, 0.9];
 
-            // Auto-clear errors after ERROR_FADE_DURATION_SECS
-            if let BackendStatusState::Error(_) = &status.state {
-                if let Some(error_time) = status.error_time {
-                    if error_time.elapsed().as_secs_f64() >= ERROR_FADE_DURATION_SECS {
-                        status.state = BackendStatusState::Ready;
-                        status.error_time = None;
-                    }
-                }
+            // An error fades out only while a backend works; without one it stays up.
+            let has_model = status.state != BackendStatusState::NoModel;
+            if has_model
+                && status
+                    .last_error
+                    .as_ref()
+                    .is_some_and(|(_, at)| at.elapsed().as_secs_f64() >= ERROR_FADE_DURATION_SECS)
+            {
+                status.last_error = None;
             }
 
-            let error_tint = match &status.state {
-                BackendStatusState::Error(_) => {
-                    if let Some(error_time) = status.error_time {
-                        let elapsed = error_time.elapsed().as_secs_f64();
-                        let fade_start = ERROR_FADE_DURATION_SECS - 2.0;
-                        if elapsed > fade_start {
-                            1.0 - ((elapsed - fade_start) / 2.0).min(1.0) as f32
-                        } else {
-                            1.0
-                        }
-                    } else {
-                        1.0
-                    }
+            let error_tint = match &status.last_error {
+                Some((_, at)) if has_model => {
+                    let elapsed = at.elapsed().as_secs_f64();
+                    let fade_start = ERROR_FADE_DURATION_SECS - 2.0;
+                    1.0 - ((elapsed - fade_start).max(0.0) / 2.0).min(1.0) as f32
                 }
-                _ => 0.0,
+                Some(_) => 1.0,
+                None if !has_model => 1.0,
+                None => 0.0,
             };
 
             let (status_text, status_color) = if let Some(progress) = status.download_progress {
@@ -239,6 +251,8 @@ impl StatusBar {
                     format!("Downloading {:.0}%", progress * 100.0),
                     [0.2, 0.7, 1.0, 0.9], // blue
                 )
+            } else if let Some((message, _)) = &status.last_error {
+                (message.clone(), error_red)
             } else {
                 match &status.state {
                     BackendStatusState::Ready => ("Ready".to_string(), [0.3, 0.85, 0.4, 0.9]),
@@ -250,7 +264,7 @@ impl StatusBar {
                         };
                         (text, [1.0, 0.85, 0.2, 0.9])
                     }
-                    BackendStatusState::Error(msg) => (msg.clone(), [1.0, 0.3, 0.3, 0.9]),
+                    BackendStatusState::NoModel => ("No model loaded".to_string(), error_red),
                 }
             };
 

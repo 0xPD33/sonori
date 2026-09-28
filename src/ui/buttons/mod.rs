@@ -656,12 +656,6 @@ impl ButtonManager {
         if self.transcription_mode != mode {
             let old_mode = self.transcription_mode;
 
-            // Reset magic_mode_active when leaving Manual mode to prevent stale state
-            if old_mode == TranscriptionMode::Manual && self.magic_mode_active {
-                self.magic_mode_active = false;
-                println!("ButtonManager: Reset magic_mode_active when leaving Manual mode");
-            }
-
             self.transcription_mode = mode;
             println!(
                 "ButtonManager: Switching from {:?} to {:?} mode",

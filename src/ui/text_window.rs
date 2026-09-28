@@ -2,6 +2,7 @@ use wgpu::{self, util::DeviceExt};
 use winit::dpi::PhysicalSize;
 
 use super::text_renderer::TextRenderer;
+use super::window::LEFT_MARGIN;
 
 pub struct TextWindow {
     pipeline: wgpu::RenderPipeline,
@@ -97,6 +98,10 @@ impl TextWindow {
         self.text_renderer.resize(size);
     }
 
+    pub fn trim_atlas(&mut self) {
+        self.text_renderer.trim_atlas();
+    }
+
     pub fn render(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
@@ -155,6 +160,49 @@ impl TextWindow {
             text_area_width,
             clip_h,
             Some((0, 0, text_area_width, clip_h)),
+        );
+    }
+
+    /// Background plus one short line centered in the text area.
+    pub fn render_centered(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        text: &str,
+        text_area_width: u32,
+        text_area_height: u32,
+        gap: u32,
+        text_scale: f32,
+        text_color: [f32; 4],
+        hover_bind_group: &wgpu::BindGroup,
+    ) {
+        self.render_background(
+            encoder,
+            view,
+            text_area_width,
+            text_area_height,
+            gap,
+            0.0,
+            0.0,
+            hover_bind_group,
+        );
+
+        // Same metrics as TextRenderer: font size 10 * scale, line height 1.1x.
+        let width = self.text_renderer.measure_text(text, text_scale);
+        let line_height = 10.0 * text_scale * 1.1;
+        let x = ((text_area_width as f32 - width) / 2.0).max(LEFT_MARGIN);
+        let y = ((text_area_height - gap) as f32 - line_height) / 2.0;
+        self.render_text_only(
+            encoder,
+            view,
+            text,
+            text_area_width,
+            text_area_height,
+            gap,
+            x,
+            y.max(0.0),
+            text_scale,
+            text_color,
         );
     }
 

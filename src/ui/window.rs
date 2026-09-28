@@ -35,6 +35,13 @@ pub const GAP: u32 = 0; // Gap replaced by status bar top border
 pub const RIGHT_MARGIN: f32 = 4.0; // Right margin for text area
 pub const LEFT_MARGIN: f32 = 4.0; // Left margin for text area
 
+fn idle_hint(trigger: Option<&str>) -> String {
+    match trigger {
+        Some(trigger) => format!("Press {trigger} to dictate"),
+        None => "Click Record or run sonori toggle".to_string(),
+    }
+}
+
 fn target_frame_duration(target_fps: u32) -> std::time::Duration {
     std::time::Duration::from_secs_f64(1.0 / target_fps.max(1) as f64)
 }
@@ -137,6 +144,20 @@ pub struct WindowState {
     // Reusable buffers to avoid per-frame allocations
     silence_buffer: Vec<f32>,
     frame_samples: Vec<f32>,
+    hotkey_state: crate::hotkey::SharedHotkeyState,
+    /// Shared state seen by the last frame; see `needs_redraw`.
+    last_signature: u64,
+    /// Whether the last frame had something in motion.
+    animating: bool,
+    /// Transcript as last read, and its cleaned form, so a frame copies it only on change.
+    raw_transcript: String,
+    display_text: String,
+    last_timeout_log: Option<std::time::Instant>,
+    suppressed_timeouts: u32,
+    /// Whether a recording ever started; the idle hint shows only before that.
+    has_recorded: bool,
+    /// Hotkey the Record tooltip names, to reshape it only when that changes.
+    tooltip_trigger: Option<String>,
 }
 
 impl WindowState {
@@ -161,7 +182,9 @@ impl WindowState {
         model_name: &str,
         external_backend_status: Option<Arc<RwLock<BackendStatus>>>,
         backend_command_tx: Option<tokio::sync::mpsc::UnboundedSender<speechcore::BackendCommand>>,
-    ) -> Self {
+        app_tx: tokio::sync::mpsc::UnboundedSender<crate::ipc::AppCommand>,
+        hotkey_state: crate::hotkey::SharedHotkeyState,
+    ) -> Result<Self, String> {
         let window: Arc<dyn Window> = Arc::from(window);
 
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
@@ -169,30 +192,34 @@ impl WindowState {
             ..Default::default()
         });
 
-        let surface = instance.create_surface(window.clone()).expect(
-            "Failed to create GPU surface. Ensure your display server and GPU drivers are working.",
-        );
+        let surface = instance.create_surface(window.clone()).map_err(|e| {
+            format!(
+                "Failed to create a GPU surface ({e}). Check your display server and GPU drivers."
+            )
+        })?;
 
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::default(),
             compatible_surface: Some(&surface),
             force_fallback_adapter: false,
         }))
-        .expect("No suitable GPU adapter found. Ensure Vulkan drivers are installed.");
+        .map_err(|e| {
+            format!("No suitable GPU adapter found ({e}). Sonori needs Vulkan drivers.")
+        })?;
 
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: None,
-                required_features: wgpu::Features::PUSH_CONSTANTS,
-                required_limits: wgpu::Limits {
-                    max_push_constant_size: 128,
-                    ..wgpu::Limits::default()
-                },
-                memory_hints: wgpu::MemoryHints::default(),
-                trace: wgpu::Trace::Off,
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: None,
+            required_features: wgpu::Features::PUSH_CONSTANTS,
+            required_limits: wgpu::Limits {
+                max_push_constant_size: 128,
+                ..wgpu::Limits::default()
             },
-        ))
-        .expect("Failed to request GPU device. Ensure Vulkan drivers are installed and GPU is available.");
+            memory_hints: wgpu::MemoryHints::default(),
+            trace: wgpu::Trace::Off,
+        }))
+        .map_err(|e| {
+            format!("Failed to open the GPU device ({e}). Check that Vulkan drivers are installed.")
+        })?;
 
         // Use dynamic sizing values
         let fixed_width = window_width;
@@ -358,6 +385,7 @@ impl WindowState {
             magic_mode_enabled.clone(),
             manual_session_sender,
             transcription_mode_ref.clone(),
+            Some(app_tx),
         );
         let last_known_mode = transcription_mode;
 
@@ -376,7 +404,7 @@ impl WindowState {
         let target_frame_duration = target_frame_duration(display_config.target_fps);
         let typewriter_enabled = ui_config.effective_typewriter_enabled();
 
-        Self {
+        Ok(Self {
             window,
             instance,
             adapter,
@@ -447,7 +475,62 @@ impl WindowState {
             // Reusable buffers
             silence_buffer: vec![0.0; 1024],
             frame_samples: Vec::with_capacity(1024),
+            hotkey_state,
+            last_signature: 0,
+            animating: true,
+            raw_transcript: String::new(),
+            display_text: String::new(),
+            last_timeout_log: None,
+            suppressed_timeouts: 0,
+            tooltip_trigger: None,
+            has_recorded: false,
+        })
+    }
+
+    /// Whether the overlay must paint a new frame: something moves, or shared
+    /// state changed since the last frame. The event loop polls this while idle,
+    /// so an idle overlay does not render at the display rate.
+    pub fn needs_redraw(&self) -> bool {
+        self.animating || self.state_signature() != self.last_signature
+    }
+
+    /// Hash of all shared state a frame shows.
+    fn state_signature(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = std::hash::DefaultHasher::new();
+        self.recording
+            .as_ref()
+            .map(|recording| recording.load(Ordering::Relaxed))
+            .hash(&mut hasher);
+        self.magic_mode_enabled
+            .as_ref()
+            .map(|magic| magic.load(Ordering::Relaxed))
+            .hash(&mut hasher);
+        self.transcription_mode_ref
+            .load(Ordering::Relaxed)
+            .hash(&mut hasher);
+        if let Some(audio_data) = &self.audio_data {
+            let audio_data = audio_data.read();
+            audio_data.transcript.hash(&mut hasher);
+            audio_data.processing_state.hash(&mut hasher);
+            audio_data.is_speaking.hash(&mut hasher);
+            audio_data.samples.is_empty().hash(&mut hasher);
         }
+        {
+            let status = self.backend_status.read();
+            status.state.hash(&mut hasher);
+            status.backend_name.hash(&mut hasher);
+            status.model_name.hash(&mut hasher);
+            status
+                .last_error
+                .as_ref()
+                .map(|(message, _)| message)
+                .hash(&mut hasher);
+            status.download_progress.map(f32::to_bits).hash(&mut hasher);
+        }
+        self.hotkey_state.read().hash(&mut hasher);
+        hasher.finish()
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -529,6 +612,8 @@ impl WindowState {
             }
         }
 
+        self.last_signature = self.state_signature();
+
         // Check if transcription mode has changed
         let current_mode = speechcore::TranscriptionMode::from_u8(
             self.transcription_mode_ref
@@ -537,6 +622,15 @@ impl WindowState {
         if current_mode != self.last_known_mode {
             self.button_manager.set_transcription_mode(current_mode);
             self.last_known_mode = current_mode;
+        }
+        if let Some(magic_mode) = &self.magic_mode_enabled {
+            self.button_manager
+                .set_magic_mode_active(magic_mode.load(Ordering::Relaxed));
+        }
+        let trigger = self.hotkey_state.read().trigger().map(str::to_string);
+        if trigger != self.tooltip_trigger {
+            self.tooltip.set_record_shortcut(trigger.as_deref());
+            self.tooltip_trigger = trigger;
         }
 
         // Update hover animation state
@@ -555,9 +649,7 @@ impl WindowState {
             self.hover_animation_progress =
                 (self.hover_animation_progress - delta_time * animation_speed).max(0.0);
         }
-        // The redraw loop only sustains itself through the request_redraw() at the
-        // end of this function, so every bail-out has to re-arm it or the overlay
-        // stops painting for good and the process lives on with an invisible window.
+        // Every bail-out re-arms the redraw, so a failed frame is retried soon.
         let output = match self.surface.get_current_texture() {
             Ok(output) => output,
             Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
@@ -573,7 +665,19 @@ impl WindowState {
                 }
             }
             Err(wgpu::SurfaceError::Timeout) => {
-                eprintln!("Surface texture acquisition timed out");
+                // Times out on every frame while the monitor is off; log once a minute.
+                self.suppressed_timeouts += 1;
+                if self
+                    .last_timeout_log
+                    .is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(60))
+                {
+                    eprintln!(
+                        "Surface texture acquisition timed out ({} times since the last report)",
+                        self.suppressed_timeouts
+                    );
+                    self.last_timeout_log = Some(std::time::Instant::now());
+                    self.suppressed_timeouts = 0;
+                }
                 self.window.request_redraw();
                 return;
             }
@@ -622,7 +726,7 @@ impl WindowState {
         );
 
         // Get audio data once
-        let mut display_text: String = String::new();
+        let mut display_text = std::mem::take(&mut self.display_text);
         let mut is_speaking: bool = false;
         let mut processing_state = ProcessingState::Idle;
 
@@ -668,8 +772,10 @@ impl WindowState {
             if let Some(audio_data) = &self.audio_data {
                 let audio_data_lock = audio_data.read();
                 is_speaking = is_recording && audio_data_lock.is_speaking;
-                let transcript_ref = &audio_data_lock.transcript;
-                display_text = self.text_processor.clean_whitespace(transcript_ref);
+                if audio_data_lock.transcript != self.raw_transcript {
+                    self.raw_transcript.clone_from(&audio_data_lock.transcript);
+                    display_text = self.text_processor.clean_whitespace(&self.raw_transcript);
+                }
                 processing_state = audio_data_lock.processing_state;
 
                 // Sync processing state to status bar
@@ -779,7 +885,7 @@ impl WindowState {
         self.scroll_state.auto_scroll = self.event_handler.auto_scroll;
 
         // Update with auto-scroll animation
-        self.scroll_state.update_with_auto_scroll();
+        let scrolling = self.scroll_state.update_with_auto_scroll();
 
         // Sync scrollbar state
         self.scrollbar.max_scroll_offset = self.scroll_state.max_scroll_offset;
@@ -825,6 +931,16 @@ impl WindowState {
             self.last_processing_state = processing_state;
         }
 
+        // Until the first recording, the empty overlay says how to start, with the
+        // hotkey that is actually bound. Later an empty overlay only means the
+        // transcript is on its way, so it stays empty.
+        self.has_recorded |= is_recording;
+        let idle_hint = (transcription_mode == speechcore::TranscriptionMode::Manual
+            && !self.has_recorded
+            && display_text.is_empty()
+            && !self.typewriter.is_active())
+        .then(|| idle_hint(self.hotkey_state.read().trigger()));
+
         // Get the text to display (may be typewriter-animated)
         let render_text: &str = if self.typewriter.is_active() {
             self.typewriter.update()
@@ -836,6 +952,9 @@ impl WindowState {
         let text_color = if should_show_animation {
             self.loading_animation
                 .get_processing_color(processing_state)
+        } else if idle_hint.is_some() {
+            let [r, g, b, a] = self.ui_config.effective_idle_color();
+            [r, g, b, a * 0.6]
         } else if is_speaking {
             self.ui_config.effective_speaking_color()
         } else {
@@ -894,19 +1013,33 @@ impl WindowState {
             );
         } else {
             // Render text window (background and text) normally
-            self.text_window.render(
-                &mut encoder,
-                &view,
-                render_text,
-                text_area_width,
-                text_area_height,
-                self.gap,
-                text_x,
-                text_y,
-                text_scale,
-                text_color,
-                &self.render_pipelines.hover_bind_group,
-            );
+            if let Some(hint) = &idle_hint {
+                self.text_window.render_centered(
+                    &mut encoder,
+                    &view,
+                    hint,
+                    text_area_width,
+                    text_area_height,
+                    self.gap,
+                    text_scale,
+                    text_color,
+                    &self.render_pipelines.hover_bind_group,
+                );
+            } else {
+                self.text_window.render(
+                    &mut encoder,
+                    &view,
+                    render_text,
+                    text_area_width,
+                    text_area_height,
+                    self.gap,
+                    text_x,
+                    text_y,
+                    text_scale,
+                    text_color,
+                    &self.render_pipelines.hover_bind_group,
+                );
+            }
         }
 
         // Render status bar between text area and spectrogram
@@ -985,9 +1118,31 @@ impl WindowState {
             self.last_frame_time = Some(std::time::Instant::now());
         }
 
-        // ALWAYS request redraw to keep animation loop going
-        // This ensures spectrogram decay animation continues when paused
-        self.window.request_redraw();
+        // Glyphs unused since the last frame may now be evicted.
+        self.text_window.trim_atlas();
+        self.status_bar.trim_atlases();
+
+        // Keep painting while anything moves, including the spectrogram decay
+        // after speech stops. Otherwise the event loop wakes us on a state change.
+        self.animating = is_recording
+            || scrolling
+            || self.typewriter.is_active()
+            || matches!(
+                processing_state,
+                ProcessingState::Loading | ProcessingState::Transcribing
+            )
+            || (self.hover_animation_progress > 0.0 && self.hover_animation_progress < 1.0)
+            || self.button_panel.is_animating()
+            || self.tooltip.is_active()
+            || self
+                .spectrogram
+                .as_ref()
+                .is_some_and(|spectrogram| spectrogram.is_animating())
+            || self.status_bar.is_animating();
+        self.display_text = display_text;
+        if self.animating {
+            self.window.request_redraw();
+        }
     }
 
     pub fn handle_scroll(&mut self, delta: MouseScrollDelta) {
@@ -1077,49 +1232,6 @@ impl WindowState {
             &mut self.scroll_state.scroll_offset,
             &mut self.scroll_state.max_scroll_offset,
         );
-    }
-
-    pub fn toggle_recording(&mut self) {
-        if let Some(recording) = &self.recording {
-            // IMMEDIATE: Toggle recording state atomically (non-blocking)
-            let was_recording = recording.load(Ordering::Relaxed);
-            let new_state = !was_recording;
-            recording.store(new_state, Ordering::Relaxed);
-
-            // IMMEDIATE: Update button texture (local UI state, non-blocking)
-            self.button_manager.update_record_toggle_button_texture();
-
-            // The transcription systems will detect this change asynchronously
-            // via their polling of the atomic flag - no blocking here
-        }
-    }
-
-    pub fn toggle_manual_session(&mut self) {
-        // IMMEDIATE: Check current state and send command asynchronously
-        let is_currently_recording = self
-            .recording
-            .as_ref()
-            .map(|rec| rec.load(Ordering::Relaxed))
-            .unwrap_or(false);
-
-        if let Some(sender) = &self.event_handler.manual_session_sender {
-            let sender = sender.clone();
-            // ASYNC: Send command without blocking UI thread
-            tokio::spawn(async move {
-                let command = if is_currently_recording {
-                    speechcore::ManualSessionCommand::StopSession { responder: None }
-                } else {
-                    speechcore::ManualSessionCommand::StartSession { responder: None }
-                };
-
-                if let Err(e) = sender.send(command).await {
-                    eprintln!("Failed to send manual session command: {}", e);
-                }
-            });
-        } else {
-            eprintln!("Manual session sender not available");
-        }
-        // UI thread continues immediately - manual session processor handles the command
     }
 
     pub fn toggle_mode(&mut self) {

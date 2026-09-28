@@ -169,6 +169,11 @@ impl ButtonPanel {
         }
     }
 
+    /// Whether the fade still runs.
+    pub fn is_animating(&self) -> bool {
+        self.animation_start_time.is_some()
+    }
+
     /// Get current animation progress (0.0 = hidden, 1.0 = visible)
     pub fn animation_progress(&self) -> f32 {
         self.animation_progress

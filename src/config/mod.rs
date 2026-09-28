@@ -19,11 +19,18 @@ pub struct AudioProcessorConfig {
     /// This is the fundamental audio processing block size in samples
     /// Also used for visualization sample count
     pub buffer_size: usize,
+    /// Microphone to record from: part of its name, matched without case.
+    /// The system default input when unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_device: Option<String>,
 }
 
 impl Default for AudioProcessorConfig {
     fn default() -> Self {
-        Self { buffer_size: 1024 }
+        Self {
+            buffer_size: 1024,
+            input_device: None,
+        }
     }
 }
 
@@ -77,6 +84,20 @@ pub struct PortalConfig {
     pub shortcut_mode: ShortcutMode,
     /// Paste shortcut to use: "ctrl_shift_v" (default, works in terminals) or "ctrl_v"
     pub paste_shortcut: String,
+    /// What happens with a finished transcript
+    pub output_mode: OutputMode,
+}
+
+/// What happens with a finished transcript.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum OutputMode {
+    /// Copy to the clipboard, then send the paste shortcut.
+    #[default]
+    Paste,
+    /// Type the text with wtype or dotool. The clipboard stays untouched.
+    Type,
+    /// Copy to the clipboard only.
+    Clipboard,
 }
 
 /// Configuration for real-time transcription mode
@@ -103,7 +124,7 @@ impl Default for RealtimeModeConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ManualModeConfig {
-    /// Maximum recording duration in seconds (default: 120)
+    /// Maximum recording duration in seconds (default: 600)
     /// Buffer size is calculated as: max_recording_duration_secs * sample_rate
     pub max_recording_duration_secs: u32,
 
@@ -113,16 +134,6 @@ pub struct ManualModeConfig {
     /// Duration of each chunk in seconds (default: 29.0)
     /// Note: 29s avoids edge case where duration == chunk_size hits token limits
     pub chunk_duration_seconds: f32,
-
-    /// Whether to enable chunk overlap for manual mode transcription (default: true)
-    /// When enabled, uses small overlap between chunks to catch boundary words
-    /// Overlap amount is controlled by chunk_overlap_seconds
-    pub enable_chunk_overlap: bool,
-
-    /// Overlap duration in seconds between chunks (default: 2.0)
-    /// Only used when enable_chunk_overlap is true
-    /// Recommended range: 0.5 to 2.0 seconds; reduce it if boundary words repeat
-    pub chunk_overlap_seconds: f32,
 
     /// EXPERIMENTAL: Disable chunking for manual mode transcription (default: false)
     /// When enabled, processes entire recording as single segment (no chunk limit)
@@ -139,6 +150,7 @@ impl Default for PortalConfig {
             manual_toggle_accelerator: "<Super>backslash".to_string(),
             shortcut_mode: ShortcutMode::default(),
             paste_shortcut: "ctrl_shift_v".to_string(), // Default: Ctrl+Shift+V (works in terminals)
+            output_mode: OutputMode::default(),
         }
     }
 }
@@ -146,11 +158,9 @@ impl Default for PortalConfig {
 impl Default for ManualModeConfig {
     fn default() -> Self {
         Self {
-            max_recording_duration_secs: 120,
+            max_recording_duration_secs: 600,
             clear_on_new_session: true,
             chunk_duration_seconds: 29.0, // 29s avoids edge case at exactly 30s boundary
-            enable_chunk_overlap: true,   // Enable overlap by default
-            chunk_overlap_seconds: 2.0,   // 2.0 second overlap (matches packaged config)
             disable_chunking: false,      // Chunking enabled by default
         }
     }
@@ -188,12 +198,27 @@ pub struct DebugConfig {
     pub save_manual_audio_debug: bool,
     /// Directory to save debug recordings (default: "recordings")
     pub recording_dir: String,
-    /// Whether to save transcript history to a persistent file
-    pub save_transcript_history: bool,
-    /// Path to transcript history file (default: ~/.cache/sonori/transcript_history.txt)
-    /// Skipped during serialization if using the default value to allow per-user paths
+}
+
+/// Configuration for the persistent transcript history file
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TranscriptHistoryConfig {
+    /// Append every final transcript to the history file
+    pub enabled: bool,
+    /// History file (default: ~/.cache/sonori/transcript_history.txt). Skipped
+    /// when serializing the default, so each user keeps their own home path.
     #[serde(skip_serializing_if = "is_default_transcript_history_path")]
-    pub transcript_history_path: String,
+    pub path: String,
+}
+
+impl Default for TranscriptHistoryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            path: default_transcript_history_path(),
+        }
+    }
 }
 
 /// Configuration for sound settings
@@ -212,8 +237,6 @@ impl Default for DebugConfig {
             log_stats_enabled: false,
             save_manual_audio_debug: false,
             recording_dir: "recordings".to_string(),
-            save_transcript_history: false,
-            transcript_history_path: default_transcript_history_path(),
         }
     }
 }
@@ -242,6 +265,9 @@ pub struct PostProcessConfig {
     /// Append a full stop when the text ends without terminal punctuation.
     /// Off by default for the same reason as `capitalize_sentences`.
     pub ensure_terminal_punctuation: bool,
+    /// Whole-word replacements, matched without case: `"nix os" = "NixOS"`.
+    /// Fixes names and jargon for every backend.
+    pub replacements: std::collections::BTreeMap<String, String>,
 }
 
 impl Default for PostProcessConfig {
@@ -255,6 +281,7 @@ impl Default for PostProcessConfig {
             collapse_repeated_words: false,
             capitalize_sentences: false,
             ensure_terminal_punctuation: false,
+            replacements: Default::default(),
         }
     }
 }
@@ -277,8 +304,10 @@ pub struct EnhancementConfig {
     /// Custom system prompt for the enhancement model
     #[serde(default = "default_enhancement_system_prompt")]
     pub system_prompt: Option<String>,
-    /// Maximum tokens to generate (default: 256)
+    /// Maximum tokens to generate (default: 1024)
     pub max_tokens: usize,
+    /// Whether Magic Mode is on. Kept across restarts.
+    pub active: bool,
 }
 
 impl Default for EnhancementConfig {
@@ -287,7 +316,8 @@ impl Default for EnhancementConfig {
             enabled: false,
             model: None,
             system_prompt: default_enhancement_system_prompt(),
-            max_tokens: 256,
+            max_tokens: 1024,
+            active: false,
         }
     }
 }
@@ -354,6 +384,9 @@ pub struct AppConfig {
     /// Debug and development configuration
     pub debug_config: DebugConfig,
 
+    /// Persistent transcript history
+    pub history_config: TranscriptHistoryConfig,
+
     /// Transcription post-processing configuration
     pub post_process_config: PostProcessConfig,
 
@@ -397,6 +430,7 @@ impl Default for AppConfig {
             window_behavior_config: WindowBehaviorConfig::default(),
             sound_config: SoundConfig::default(),
             debug_config: DebugConfig::default(),
+            history_config: TranscriptHistoryConfig::default(),
             post_process_config: PostProcessConfig::default(),
             enhancement_config: EnhancementConfig::default(),
             ui_config: UiConfig::default(),
@@ -417,6 +451,7 @@ impl From<AppConfig> for speechcore::SpeechConfig {
             backend_config: config.backend_config,
             audio_processor_config: speechcore::config::AudioProcessorConfig {
                 buffer_size: config.audio_processor_config.buffer_size,
+                input_device: config.audio_processor_config.input_device,
             },
             realtime_mode_config: speechcore::config::RealtimeModeConfig {
                 max_buffer_duration_sec: config.realtime_mode_config.max_buffer_duration_sec,
@@ -426,8 +461,6 @@ impl From<AppConfig> for speechcore::SpeechConfig {
                 max_recording_duration_secs: config.manual_mode_config.max_recording_duration_secs,
                 clear_on_new_session: config.manual_mode_config.clear_on_new_session,
                 chunk_duration_seconds: config.manual_mode_config.chunk_duration_seconds,
-                enable_chunk_overlap: config.manual_mode_config.enable_chunk_overlap,
-                chunk_overlap_seconds: config.manual_mode_config.chunk_overlap_seconds,
                 disable_chunking: config.manual_mode_config.disable_chunking,
             },
             vad_config: speechcore::config::VadConfigSerde {
@@ -472,6 +505,7 @@ impl From<AppConfig> for speechcore::SpeechConfig {
                 collapse_repeated_words: config.post_process_config.collapse_repeated_words,
                 capitalize_sentences: config.post_process_config.capitalize_sentences,
                 ensure_terminal_punctuation: config.post_process_config.ensure_terminal_punctuation,
+                replacements: config.post_process_config.replacements,
             },
             compute_type: config.compute_type,
             device: config.device,
@@ -514,6 +548,16 @@ impl AppConfig {
                 "Enabling whisper_cpp_options.no_context to prevent cross-session duplication"
             );
             self.whisper_cpp_options.no_context = true;
+        }
+
+        // 120 s was the old cap; long recordings now transcribe while recording.
+        if self.manual_mode_config.max_recording_duration_secs == 120 {
+            self.manual_mode_config.max_recording_duration_secs = 600;
+        }
+
+        // 256 was the old default and cut longer dictations short.
+        if self.enhancement_config.max_tokens == 256 {
+            self.enhancement_config.max_tokens = 1024;
         }
 
         // Bring legacy configs up to current default temperature if they were using the old default
@@ -565,6 +609,17 @@ fn find_config_path() -> Option<std::path::PathBuf> {
 
     // 2. No config found
     None
+}
+
+/// The config file Sonori reads and writes, for display, with `~` for the home directory.
+pub fn config_path_for_display() -> String {
+    let Some(path) = find_config_path().or_else(user_config_path) else {
+        return "none (set HOME)".to_string();
+    };
+    match std::env::var_os("HOME").and_then(|home| path.strip_prefix(home).ok()) {
+        Some(relative) => format!("~/{}", relative.display()),
+        None => path.display().to_string(),
+    }
 }
 
 fn user_config_path() -> Option<std::path::PathBuf> {
@@ -655,11 +710,18 @@ pub fn read_app_config_with_path() -> (AppConfig, Option<std::path::PathBuf>) {
     };
 
     let config = match build_config_with_defaults(&config_str) {
-        Ok((mut config, updated_toml)) => {
+        Ok((mut config, updated_toml, unknown_keys)) => {
             config.migrate_legacy_config();
 
+            if !unknown_keys.is_empty() {
+                eprintln!(
+                    "Warning: unknown config keys are ignored: {}",
+                    unknown_keys.join(", ")
+                );
+            }
+
             if let (Some(path), Some(updated_toml)) = (config_path.as_ref(), updated_toml) {
-                if let Err(e) = std::fs::write(path, updated_toml) {
+                if let Err(e) = write_config_file(path, &updated_toml) {
                     eprintln!("Failed to update config with new defaults: {}", e);
                 }
             }
@@ -667,15 +729,38 @@ pub fn read_app_config_with_path() -> (AppConfig, Option<std::path::PathBuf>) {
             config
         }
         Err(e) => {
-            println!(
-                "Failed to parse config.toml: {}. Using default configuration.",
-                e
+            eprintln!(
+                "Failed to parse config.toml ({}). Using default configuration; saving settings is blocked until the file is fixed.",
+                describe_toml_error(&config_str, &e)
             );
+            if let Some(path) = config_path.as_ref() {
+                let backup = path.with_extension("toml.bak");
+                match std::fs::copy(path, &backup) {
+                    Ok(_) => eprintln!("Backed up the invalid config to {}", backup.display()),
+                    Err(e) => eprintln!("Failed to back up the invalid config: {}", e),
+                }
+            }
             AppConfig::default()
         }
     };
 
     (config, config_path)
+}
+
+/// A user-facing problem with the config file on disk: a parse error or unknown keys.
+pub fn config_file_problem() -> Option<String> {
+    let content = std::fs::read_to_string(find_config_path()?).ok()?;
+    match build_config_with_defaults(&content) {
+        Err(e) => Some(format!(
+            "config.toml invalid ({}); using defaults",
+            describe_toml_error(&content, &e)
+        )),
+        Ok((_, _, unknown_keys)) if !unknown_keys.is_empty() => Some(format!(
+            "Unknown config keys ignored: {}",
+            unknown_keys.join(", ")
+        )),
+        Ok(_) => None,
+    }
 }
 
 pub fn write_app_config(config: &AppConfig) -> Result<(), String> {
@@ -685,6 +770,16 @@ pub fn write_app_config(config: &AppConfig) -> Result<(), String> {
             "Unable to determine config path. Set SONORI_CONFIG_PATH or HOME.".to_string()
         })?;
 
+    // The running config fell back to defaults; saving it would erase the user's file.
+    if let Ok(content) = std::fs::read_to_string(&config_path) {
+        if let Err(e) = build_config_with_defaults(&content) {
+            return Err(format!(
+                "config.toml has an error ({}); fix it before saving settings",
+                describe_toml_error(&content, &e)
+            ));
+        }
+    }
+
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create config directory: {}", e))?;
@@ -692,15 +787,34 @@ pub fn write_app_config(config: &AppConfig) -> Result<(), String> {
 
     let toml_string = toml::to_string_pretty(&config)
         .map_err(|e| format!("Failed to serialize config: {}", e))?;
-    std::fs::write(&config_path, toml_string)
+    write_config_file(&config_path, &toml_string)
         .map_err(|e| format!("Failed to write config: {}", e))?;
 
     Ok(())
 }
 
+/// Writes through a temp file and a rename, so a crash never leaves a truncated
+/// config. The rename targets the resolved path, so a symlinked config stays a symlink.
+fn write_config_file(path: &std::path::Path, content: &str) -> std::io::Result<()> {
+    let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let tmp = path.with_extension("toml.tmp");
+    std::fs::write(&tmp, content)?;
+    std::fs::rename(&tmp, &path)
+}
+
+fn describe_toml_error(config_str: &str, e: &toml::de::Error) -> String {
+    let message = e.message().trim();
+    match e.span().and_then(|span| config_str.get(..span.start)) {
+        Some(before) => format!("line {}: {}", before.matches('\n').count() + 1, message),
+        None => message.to_string(),
+    }
+}
+
+/// Returns the merged config, the merged TOML when it differs from the user's
+/// file, and the user's keys that no config field reads.
 fn build_config_with_defaults(
     config_str: &str,
-) -> Result<(AppConfig, Option<String>), toml::de::Error> {
+) -> Result<(AppConfig, Option<String>, Vec<String>), toml::de::Error> {
     let mut default_value = toml::Value::Table(Default::default());
     if let Ok(default_toml) = toml::to_string(&AppConfig::default()) {
         if let Ok(value) = toml::from_str::<toml::Value>(&default_toml) {
@@ -708,7 +822,19 @@ fn build_config_with_defaults(
         }
     }
 
-    let user_value = toml::from_str::<toml::Value>(config_str)?;
+    let mut user_value = toml::from_str::<toml::Value>(config_str)?;
+    migrate_legacy_keys(&mut user_value);
+    // Typed parse of the user's own text, so error spans point into their file.
+    let parsed = toml::from_str::<AppConfig>(config_str)?;
+
+    // ponytail: a key whose value serde skips when serializing (an unset Option,
+    // or the default transcript path) is reported only if the user writes that
+    // exact skipped value, which the generated config never does.
+    let mut unknown_keys = Vec::new();
+    if let Ok(known) = toml::Value::try_from(&parsed) {
+        collect_unknown_keys(&user_value, &known, "", &mut unknown_keys);
+    }
+
     let mut merged_value = default_value;
     merge_toml(&mut merged_value, user_value.clone());
 
@@ -721,7 +847,62 @@ fn build_config_with_defaults(
     let merged_string = toml::to_string(&merged_value).unwrap_or_default();
     let config = toml::from_str::<AppConfig>(&merged_string)?;
 
-    Ok((config, updated_toml))
+    Ok((config, updated_toml, unknown_keys))
+}
+
+/// Moves or drops keys that older versions wrote, so they are not reported as
+/// unknown and the write-back removes them from the file.
+fn migrate_legacy_keys(user: &mut toml::Value) {
+    let Some(root) = user.as_table_mut() else {
+        return;
+    };
+    if let Some(manual) = root
+        .get_mut("manual_mode_config")
+        .and_then(toml::Value::as_table_mut)
+    {
+        // Chunk overlap was never implemented.
+        manual.remove("enable_chunk_overlap");
+        manual.remove("chunk_overlap_seconds");
+    }
+    let legacy_path = root
+        .get_mut("debug_config")
+        .and_then(toml::Value::as_table_mut)
+        .and_then(|debug| {
+            // History is on by default now; the old default `false` is not a choice.
+            debug.remove("save_transcript_history");
+            debug.remove("transcript_history_path")
+        });
+    if let Some(path) = legacy_path {
+        if let Some(history) = root
+            .entry("history_config")
+            .or_insert_with(|| toml::Value::Table(Default::default()))
+            .as_table_mut()
+        {
+            history.entry("path").or_insert(path);
+        }
+    }
+}
+
+fn collect_unknown_keys(
+    user: &toml::Value,
+    known: &toml::Value,
+    prefix: &str,
+    out: &mut Vec<String>,
+) {
+    let (Some(user), Some(known)) = (user.as_table(), known.as_table()) else {
+        return;
+    };
+    for (key, value) in user {
+        let path = if prefix.is_empty() {
+            key.clone()
+        } else {
+            format!("{prefix}.{key}")
+        };
+        match known.get(key) {
+            Some(known_value) => collect_unknown_keys(value, known_value, &path, out),
+            None => out.push(path),
+        }
+    }
 }
 
 fn merge_toml(base: &mut toml::Value, overlay: toml::Value) {
@@ -794,7 +975,7 @@ mod tests {
 enabled = true
 "#;
 
-        let (config, _) = build_config_with_defaults(toml).expect("config should parse");
+        let (config, _, _) = build_config_with_defaults(toml).expect("config should parse");
 
         assert_eq!(
             config.enhancement_config.system_prompt.as_deref(),

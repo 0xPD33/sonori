@@ -274,4 +274,3 @@ impl DisplayConfig {
         }
     }
 }
-

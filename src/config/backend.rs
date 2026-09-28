@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use speechcore;
 
-
 /// VAD sensitivity presets for different acoustic environments
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum VadSensitivity {
@@ -33,8 +32,6 @@ impl VadSensitivity {
         }
     }
 }
-
-
 
 impl From<VadSensitivity> for speechcore::config::VadSensitivity {
     fn from(sensitivity: VadSensitivity) -> Self {
@@ -94,8 +91,9 @@ pub struct WhisperCppOptions {
     pub suppress_blank: bool,
     pub no_context: bool,
     pub max_tokens: i32,
-    /// Initial prompt to condition the model (used internally for chunk continuity)
-    #[serde(skip)]
+    /// Words and names to bias recognition toward (custom vocabulary).
+    /// Long recordings append each chunk's context after it.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_prompt: Option<String>,
 }
 
@@ -106,7 +104,7 @@ impl Default for WhisperCppOptions {
             suppress_blank: true, // Skip blank segments
             no_context: true,     // Disable context to prevent double transcriptions
             max_tokens: 0,        // No limit
-            initial_prompt: None, // Set dynamically for chunk continuity
+            initial_prompt: None,
         }
     }
 }

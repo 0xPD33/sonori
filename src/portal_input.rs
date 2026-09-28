@@ -114,91 +114,44 @@ impl PortalInput {
         Ok((rd_session, tokens_updated))
     }
 
-    /// Send Ctrl+V via keysym to paste from clipboard
-    pub async fn paste_via_ctrl_v(&self) -> Result<()> {
-        // Press Control
-        self.rd
-            .notify_keyboard_keysym(
-                &self.rd_session,
-                keysyms::KEY_Control_L as i32,
-                KeyState::Pressed,
-            )
-            .await?;
-        // Press 'v'
-        self.rd
-            .notify_keyboard_keysym(&self.rd_session, keysyms::KEY_v as i32, KeyState::Pressed)
-            .await?;
-        // Release 'v'
-        self.rd
-            .notify_keyboard_keysym(&self.rd_session, keysyms::KEY_v as i32, KeyState::Released)
-            .await?;
-        // Release Control
-        self.rd
-            .notify_keyboard_keysym(
-                &self.rd_session,
-                keysyms::KEY_Control_L as i32,
-                KeyState::Released,
-            )
-            .await?;
+    /// Send Ctrl+V, or Ctrl+Shift+V (for terminals), to paste from the clipboard.
+    /// On failure every key is released, so no modifier stays stuck down.
+    pub async fn paste(&self, with_shift: bool) -> Result<()> {
+        let mut keys = vec![keysyms::KEY_Control_L];
+        if with_shift {
+            keys.push(keysyms::KEY_Shift_L);
+        }
+        keys.push(keysyms::KEY_v);
 
+        let result = self.press_chord(&keys).await;
+        if result.is_err() {
+            for &key in keys.iter().rev() {
+                let _ = self.send_key(key, KeyState::Released).await;
+            }
+        }
+        result
+    }
+
+    async fn press_chord(&self, keys: &[u32]) -> Result<()> {
+        use tokio::time::{sleep, Duration};
+
+        for &key in keys {
+            self.send_key(key, KeyState::Pressed).await?;
+            sleep(Duration::from_millis(10)).await;
+        }
+        // Some apps miss a keypress that is released at once.
+        sleep(Duration::from_millis(40)).await;
+        for &key in keys.iter().rev() {
+            self.send_key(key, KeyState::Released).await?;
+            sleep(Duration::from_millis(10)).await;
+        }
         Ok(())
     }
 
-    /// Send Ctrl+Shift+V via keysym to paste from clipboard (for terminals)
-    pub async fn paste_via_ctrl_shift_v(&self) -> Result<()> {
-        use tokio::time::{sleep, Duration};
-
-        // Press Control
+    async fn send_key(&self, keysym: u32, state: KeyState) -> Result<()> {
         self.rd
-            .notify_keyboard_keysym(
-                &self.rd_session,
-                keysyms::KEY_Control_L as i32,
-                KeyState::Pressed,
-            )
+            .notify_keyboard_keysym(&self.rd_session, keysym as i32, state)
             .await?;
-        sleep(Duration::from_millis(10)).await;
-
-        // Press Shift
-        self.rd
-            .notify_keyboard_keysym(
-                &self.rd_session,
-                keysyms::KEY_Shift_L as i32,
-                KeyState::Pressed,
-            )
-            .await?;
-        sleep(Duration::from_millis(10)).await;
-
-        // Press 'v'
-        self.rd
-            .notify_keyboard_keysym(&self.rd_session, keysyms::KEY_v as i32, KeyState::Pressed)
-            .await?;
-        sleep(Duration::from_millis(50)).await;
-
-        // Release 'v'
-        self.rd
-            .notify_keyboard_keysym(&self.rd_session, keysyms::KEY_v as i32, KeyState::Released)
-            .await?;
-        sleep(Duration::from_millis(10)).await;
-
-        // Release Shift
-        self.rd
-            .notify_keyboard_keysym(
-                &self.rd_session,
-                keysyms::KEY_Shift_L as i32,
-                KeyState::Released,
-            )
-            .await?;
-        sleep(Duration::from_millis(10)).await;
-
-        // Release Control
-        self.rd
-            .notify_keyboard_keysym(
-                &self.rd_session,
-                keysyms::KEY_Control_L as i32,
-                KeyState::Released,
-            )
-            .await?;
-
         Ok(())
     }
 }

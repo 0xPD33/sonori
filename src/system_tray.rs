@@ -1,7 +1,8 @@
 use anyhow::Result;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use zbus::object_server::SignalEmitter;
 use zbus::{connection, interface, Connection};
 
 use speechcore::TranscriptionMode;
@@ -12,15 +13,8 @@ pub enum TrayCommand {
     ToggleRecording,
     ToggleManualSession,
     SwitchMode,
+    OpenSettings,
     Quit,
-}
-
-/// State updates from the application to the tray icon
-#[derive(Debug, Clone)]
-pub enum TrayUpdate {
-    Recording(bool),
-    Mode(TranscriptionMode),
-    Transcript(String),
 }
 
 /// StatusNotifierItem implementation
@@ -35,6 +29,8 @@ struct DbusMenu {
     command_tx: mpsc::UnboundedSender<TrayCommand>,
     is_recording: Arc<AtomicBool>,
     transcription_mode: Arc<AtomicU8>,
+    /// Bumped on each state change, so hosts know the cached layout is stale.
+    revision: Arc<AtomicU32>,
 }
 
 #[interface(name = "org.kde.StatusNotifierItem")]
@@ -75,11 +71,21 @@ impl StatusNotifierItem {
         "Active"
     }
 
-    /// IconName property
+    /// IconName property: a record icon while recording
     #[zbus(property)]
     async fn icon_name(&self) -> &str {
-        "audio-input-microphone"
+        if self.is_recording.load(Ordering::Relaxed) {
+            "media-record"
+        } else {
+            "audio-input-microphone"
+        }
     }
+
+    #[zbus(signal)]
+    async fn new_icon(emitter: &SignalEmitter<'_>) -> zbus::Result<()>;
+
+    #[zbus(signal)]
+    async fn new_tool_tip(emitter: &SignalEmitter<'_>) -> zbus::Result<()>;
 
     /// ToolTip property - returns (icon_name, icon_pixmap, title, description)
     #[zbus(property)]
@@ -118,6 +124,7 @@ const MENU_TOGGLE_RECORDING: i32 = 1;
 const MENU_TOGGLE_MODE: i32 = 2;
 const MENU_SEPARATOR: i32 = 3;
 const MENU_QUIT: i32 = 4;
+const MENU_SETTINGS: i32 = 5;
 
 #[interface(name = "com.canonical.dbusmenu")]
 impl DbusMenu {
@@ -175,6 +182,15 @@ impl DbusMenu {
         let item2 = Value::new((MENU_TOGGLE_MODE, item2_props, Vec::<Value>::new()));
         items.push(item2);
 
+        let mut settings_props = HashMap::new();
+        settings_props.insert("label".to_string(), Value::new("Settings"));
+        settings_props.insert("enabled".to_string(), Value::new(true));
+        items.push(Value::new((
+            MENU_SETTINGS,
+            settings_props,
+            Vec::<Value>::new(),
+        )));
+
         // Item 3: Separator
         let mut item3_props = HashMap::new();
         item3_props.insert("type".to_string(), Value::new("separator"));
@@ -192,8 +208,7 @@ impl DbusMenu {
         let root_props = HashMap::new();
         let layout = (0, root_props, items);
 
-        // Revision number (increment when menu changes)
-        (1u32, layout)
+        (self.revision.load(Ordering::Relaxed), layout)
     }
 
     /// Handle menu item activation
@@ -215,6 +230,7 @@ impl DbusMenu {
                 }
             }
             MENU_TOGGLE_MODE => Some(TrayCommand::SwitchMode),
+            MENU_SETTINGS => Some(TrayCommand::OpenSettings),
             MENU_QUIT => Some(TrayCommand::Quit),
             _ => None,
         };
@@ -223,6 +239,13 @@ impl DbusMenu {
             let _ = self.command_tx.send(cmd);
         }
     }
+
+    #[zbus(signal)]
+    async fn layout_updated(
+        emitter: &SignalEmitter<'_>,
+        revision: u32,
+        parent: i32,
+    ) -> zbus::Result<()>;
 
     /// DBusMenu version
     #[zbus(property)]
@@ -248,12 +271,9 @@ pub async fn run_system_tray(
     is_recording: Arc<AtomicBool>,
     transcription_mode: Arc<AtomicU8>,
     running: Arc<AtomicBool>,
-) -> Result<(
-    mpsc::UnboundedSender<TrayUpdate>,
-    mpsc::UnboundedReceiver<TrayCommand>,
-)> {
+) -> Result<mpsc::UnboundedReceiver<TrayCommand>> {
     let (command_tx, command_rx) = mpsc::unbounded_channel();
-    let (update_tx, mut update_rx) = mpsc::unbounded_channel();
+    let revision = Arc::new(AtomicU32::new(1));
 
     // Create our StatusNotifierItem
     let sni = StatusNotifierItem {
@@ -267,6 +287,7 @@ pub async fn run_system_tray(
         command_tx: command_tx.clone(),
         is_recording: is_recording.clone(),
         transcription_mode: transcription_mode.clone(),
+        revision: revision.clone(),
     };
 
     // Build DBus connection and register our services
@@ -280,33 +301,44 @@ pub async fn run_system_tray(
     // Register with StatusNotifierWatcher
     register_with_watcher(&conn).await?;
 
-    // Spawn update handler and keep connection alive
-    let is_recording_clone = is_recording.clone();
-    let transcription_mode_clone = transcription_mode.clone();
-
+    // Watch the shared state and tell tray hosts when icon, tooltip or menu change.
+    // Hotkeys and IPC change it too, so the UI cannot be the one to report it.
     tokio::spawn(async move {
-        // Keep the connection alive for the lifetime of the app
-        let _conn = conn;
+        let state = || {
+            (
+                is_recording.load(Ordering::Relaxed),
+                transcription_mode.load(Ordering::Relaxed),
+            )
+        };
+        let mut last = state();
 
         while running.load(Ordering::Relaxed) {
-            if let Some(update) = update_rx.recv().await {
-                match update {
-                    TrayUpdate::Recording(recording) => {
-                        is_recording_clone.store(recording, Ordering::Relaxed);
-                        // Note: Properties will update when queried by the tray
-                    }
-                    TrayUpdate::Mode(mode) => {
-                        transcription_mode_clone.store(mode.as_u8(), Ordering::Relaxed);
-                    }
-                    TrayUpdate::Transcript(_text) => {
-                        // No longer displaying transcript preview
-                    }
-                }
+            tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
+            let current = state();
+            if current == last {
+                continue;
+            }
+            last = current;
+            let revision = revision.fetch_add(1, Ordering::Relaxed) + 1;
+
+            let server = conn.object_server();
+            if let Ok(item) = server
+                .interface::<_, StatusNotifierItem>("/StatusNotifierItem")
+                .await
+            {
+                let _ = StatusNotifierItem::new_icon(item.signal_emitter()).await;
+                let _ = StatusNotifierItem::new_tool_tip(item.signal_emitter()).await;
+            }
+            if let Ok(menu) = server
+                .interface::<_, DbusMenu>("/StatusNotifierItem/menu")
+                .await
+            {
+                let _ = DbusMenu::layout_updated(menu.signal_emitter(), revision, 0).await;
             }
         }
     });
 
-    Ok((update_tx, command_rx))
+    Ok(command_rx)
 }
 
 /// Register our tray icon with the StatusNotifierWatcher

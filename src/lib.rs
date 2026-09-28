@@ -1,6 +1,7 @@
 pub mod config;
 pub mod copy;
 pub mod enhancement;
+pub mod hotkey;
 pub mod ipc;
 pub mod portal_input;
 pub mod portal_tokens;

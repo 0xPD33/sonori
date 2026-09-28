@@ -2,12 +2,13 @@ use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use winit::{
     application::ApplicationHandler,
     cursor::CursorIcon,
     dpi::{LogicalPosition, LogicalSize, PhysicalSize},
     event::{DeviceEvent, DeviceId, ElementState, KeyEvent, Modifiers, MouseButton, WindowEvent},
-    event_loop::{ActiveEventLoop, DeviceEvents, EventLoop},
+    event_loop::{ActiveEventLoop, ControlFlow, DeviceEvents, EventLoop},
     keyboard::{KeyCode, PhysicalKey},
     monitor::{MonitorHandle, VideoMode},
     platform::wayland::ActiveEventLoopExtWayland,
@@ -22,6 +23,8 @@ use super::window::WindowState;
 // Constants from window.rs
 use super::window::MARGIN;
 use crate::config::{AppConfig, CustomWindowPosition, DisplayConfig, WindowPosition};
+use crate::hotkey::SharedHotkeyState;
+use crate::ipc::AppCommand;
 use speechcore::{AudioVisualizationData, BackendStatus};
 
 const DRAG_DEBUG_ENV: &str = "SONORI_DRAG_DEBUG";
@@ -31,68 +34,60 @@ const DRAG_MAX_CATCH_UP_PX: f64 = 2.0;
 const DRAG_MAX_CATCH_UP_TO_RAW_RATIO: f64 = 0.25;
 const DRAG_MAX_FRAME_DELTA_PX: f64 = 96.0;
 const DRAG_EDGE_INSET_PX: i32 = 32;
+/// How often an idle overlay checks shared state for changes to paint.
+const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const ORPHAN_GRACE: Duration = Duration::from_secs(5);
 
-pub fn run() {
-    let event_loop = EventLoop::new()
-        .expect("Failed to create event loop. Ensure a display server (Wayland/X11) is available.");
-    let app_config = crate::config::AppConfig::default();
-    let mut app = WindowApp {
-        windows: HashMap::new(),
-        audio_data: None,
-        running: None,
-        recording: None,
-        magic_mode_enabled: None,
-        current_modifiers: Modifiers::default(),
-        config: app_config,
-        manual_session_sender: None,
-        transcription_mode_ref: Arc::new(AtomicU8::new(
-            speechcore::TranscriptionMode::RealTime.as_u8(),
-        )),
-        tray_update_tx: None,
-        tray_command_rx: None,
-        backend_status: None,
-        backend_command_tx: None,
-        settings_window: None,
-        settings_window_id: None,
-        window_drag: None,
-    };
-    event_loop
-        .run_app(&mut app)
-        .expect("Event loop exited with error");
+/// Everything the UI shares with the rest of the app.
+pub struct UiHandles {
+    pub audio_data: Arc<RwLock<AudioVisualizationData>>,
+    pub running: Arc<AtomicBool>,
+    pub recording: Arc<AtomicBool>,
+    pub magic_mode_enabled: Arc<AtomicBool>,
+    pub config: AppConfig,
+    pub manual_session_sender: Option<tokio::sync::mpsc::Sender<speechcore::ManualSessionCommand>>,
+    pub transcription_mode_ref: Arc<AtomicU8>,
+    pub tray_command_rx:
+        Option<tokio::sync::mpsc::UnboundedReceiver<crate::system_tray::TrayCommand>>,
+    pub backend_status: Option<Arc<RwLock<BackendStatus>>>,
+    pub backend_command_tx: Option<tokio::sync::mpsc::UnboundedSender<speechcore::BackendCommand>>,
+    /// Receives each config the Settings window applies.
+    pub config_tx: tokio::sync::watch::Sender<AppConfig>,
+    pub app_tx: tokio::sync::mpsc::UnboundedSender<AppCommand>,
+    pub hotkey_state: SharedHotkeyState,
 }
 
-pub fn run_with_audio_data(
-    audio_data: Arc<RwLock<AudioVisualizationData>>,
-    running: Arc<AtomicBool>,
-    recording: Arc<AtomicBool>,
-    magic_mode_enabled: Arc<AtomicBool>,
-    config: AppConfig,
-    manual_session_sender: Option<tokio::sync::mpsc::Sender<speechcore::ManualSessionCommand>>,
-    transcription_mode_ref: Arc<AtomicU8>,
-    tray_update_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::system_tray::TrayUpdate>>,
-    tray_command_rx: Option<tokio::sync::mpsc::UnboundedReceiver<crate::system_tray::TrayCommand>>,
-    backend_status: Option<Arc<RwLock<BackendStatus>>>,
-    backend_command_tx: Option<tokio::sync::mpsc::UnboundedSender<speechcore::BackendCommand>>,
-) {
-    let event_loop = EventLoop::new()
-        .expect("Failed to create event loop. Ensure a display server (Wayland/X11) is available.");
+pub fn run_with_audio_data(handles: UiHandles) {
+    let event_loop = match EventLoop::new() {
+        Ok(event_loop) => event_loop,
+        Err(e) => {
+            eprintln!(
+                "Failed to open the display: {e}. Sonori needs a running Wayland or X11 session."
+            );
+            std::process::exit(1);
+        }
+    };
     let mut app = WindowApp {
         windows: HashMap::new(),
-        audio_data: Some(audio_data),
-        running: Some(running),
-        recording: Some(recording),
-        magic_mode_enabled: Some(magic_mode_enabled),
+        audio_data: Some(handles.audio_data),
+        running: Some(handles.running),
+        recording: Some(handles.recording),
+        magic_mode_enabled: Some(handles.magic_mode_enabled),
         current_modifiers: Modifiers::default(),
-        config,
-        manual_session_sender,
-        transcription_mode_ref,
-        tray_update_tx,
-        tray_command_rx,
-        backend_status,
-        backend_command_tx,
+        config: handles.config,
+        manual_session_sender: handles.manual_session_sender,
+        transcription_mode_ref: handles.transcription_mode_ref,
+        tray_command_rx: handles.tray_command_rx,
+        backend_status: handles.backend_status,
+        backend_command_tx: handles.backend_command_tx,
+        config_tx: handles.config_tx,
+        app_tx: handles.app_tx,
+        hotkey_state: handles.hotkey_state,
         settings_window: None,
         settings_window_id: None,
         window_drag: None,
+        orphaned_since: None,
+        overlay_created: false,
     };
 
     event_loop
@@ -110,14 +105,21 @@ pub struct WindowApp {
     pub config: AppConfig,
     pub manual_session_sender: Option<tokio::sync::mpsc::Sender<speechcore::ManualSessionCommand>>,
     pub transcription_mode_ref: Arc<AtomicU8>,
-    pub tray_update_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::system_tray::TrayUpdate>>,
     pub tray_command_rx:
         Option<tokio::sync::mpsc::UnboundedReceiver<crate::system_tray::TrayCommand>>,
     pub backend_status: Option<Arc<RwLock<BackendStatus>>>,
     pub backend_command_tx: Option<tokio::sync::mpsc::UnboundedSender<speechcore::BackendCommand>>,
+    config_tx: tokio::sync::watch::Sender<AppConfig>,
+    app_tx: tokio::sync::mpsc::UnboundedSender<AppCommand>,
+    hotkey_state: SharedHotkeyState,
     pub settings_window: Option<SettingsWindow>,
     pub settings_window_id: Option<WindowId>,
     window_drag: Option<WindowDragState>,
+    /// When the overlay was first seen without a live output; see `check_orphaned_windows`.
+    orphaned_since: Option<Instant>,
+    /// Whether an overlay was ever created. The first failure exits with a clear
+    /// message; later ones (e.g. after output hotplug) are retried.
+    overlay_created: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -138,6 +140,31 @@ struct WindowDragState {
 }
 
 impl WindowApp {
+    /// Drops overlays that no live output shows, so `about_to_wait` recreates them.
+    /// A layer surface can vanish without a `CloseRequested` (e.g. output hotplug),
+    /// and sctk keeps the dead output in the surface's list, so check both.
+    fn check_orphaned_windows(&mut self, event_loop: &dyn ActiveEventLoop) {
+        let monitors: Vec<MonitorHandle> = event_loop.available_monitors().collect();
+        let orphaned = self.windows.values().any(|w| {
+            w.window
+                .current_monitor()
+                .is_none_or(|current| !monitors.contains(&current))
+        });
+
+        if !orphaned {
+            self.orphaned_since = None;
+            return;
+        }
+
+        let since = *self.orphaned_since.get_or_insert_with(Instant::now);
+        if since.elapsed() >= ORPHAN_GRACE {
+            eprintln!("Overlay has no live output; recreating the window");
+            self.windows.clear();
+            self.window_drag = None;
+            self.orphaned_since = None;
+        }
+    }
+
     fn open_settings_window(&mut self, event_loop: &dyn ActiveEventLoop) {
         if self.settings_window.is_some() {
             return;
@@ -187,6 +214,8 @@ impl WindowApp {
                     format,
                     &self.config,
                     self.backend_command_tx.clone(),
+                    self.backend_status.clone(),
+                    self.hotkey_state.clone(),
                 ) {
                     Ok(settings_win) => settings_win,
                     Err(e) => {
@@ -201,13 +230,6 @@ impl WindowApp {
             Err(e) => {
                 eprintln!("Failed to create settings window: {}", e);
             }
-        }
-    }
-
-    fn notify_tray_about_recording(&self) {
-        if let (Some(recording_flag), Some(tray_tx)) = (&self.recording, &self.tray_update_tx) {
-            let is_recording = recording_flag.load(Ordering::Relaxed);
-            let _ = tray_tx.send(crate::system_tray::TrayUpdate::Recording(is_recording));
         }
     }
 
@@ -431,10 +453,16 @@ impl WindowApp {
 
         if let Err(e) = crate::config::write_app_config(&app_config) {
             eprintln!("Failed to persist dragged window position: {}", e);
+            if let Some(status) = &self.backend_status {
+                status
+                    .write()
+                    .report_error(format!("Window position not saved: {e}"));
+            }
         }
     }
 
     fn apply_runtime_config(&mut self, event_loop: &dyn ActiveEventLoop, config: AppConfig) {
+        self.config_tx.send_replace(config.clone());
         let display_config = config.display_config.clone();
         let ui_config = config.ui_config.clone();
         self.config = config;
@@ -468,6 +496,18 @@ impl WindowApp {
             }
         }
     }
+}
+
+/// Starts or stops a manual session, or pauses or resumes realtime capture.
+fn send_toggle(sender: &Option<tokio::sync::mpsc::Sender<speechcore::ManualSessionCommand>>) {
+    let Some(sender) = sender.clone() else {
+        return;
+    };
+    tokio::spawn(async move {
+        if let Err(e) = sender.send(speechcore::ManualSessionCommand::Toggle).await {
+            eprintln!("Failed to send toggle command: {}", e);
+        }
+    });
 }
 
 fn current_monitor_size(event_loop: &dyn ActiveEventLoop) -> Option<PhysicalSize<u32>> {
@@ -651,6 +691,16 @@ impl ApplicationHandler for WindowApp {
             }
         }
 
+        // An idle overlay renders no frames, so this wake-up is what notices new
+        // transcripts, status changes, a lost overlay, or a cleared running flag.
+        event_loop.set_control_flow(ControlFlow::wait_duration(IDLE_POLL_INTERVAL));
+        self.check_orphaned_windows(event_loop);
+        for window in self.windows.values() {
+            if window.needs_redraw() {
+                window.window.request_redraw();
+            }
+        }
+
         // can_create_surfaces() gives up silently when no monitor is advertised yet
         // (niri drops outputs while they are powered off), which would leave us
         // running headless forever. Retry until we actually have a window.
@@ -659,42 +709,34 @@ impl ApplicationHandler for WindowApp {
         }
 
         // Process tray commands if available
+        let mut tray_commands = Vec::new();
         if let Some(tray_rx) = &mut self.tray_command_rx {
-            let mut notify_recording = false;
             while let Ok(command) = tray_rx.try_recv() {
-                match command {
-                    crate::system_tray::TrayCommand::ToggleRecording => {
-                        // Toggle recording in real-time mode
-                        for window in self.windows.values_mut() {
-                            window.toggle_recording();
-                        }
-                        notify_recording = true;
-                    }
-                    crate::system_tray::TrayCommand::ToggleManualSession => {
-                        // Toggle manual session in manual mode
-                        for window in self.windows.values_mut() {
-                            window.toggle_manual_session();
-                        }
-                        notify_recording = true;
-                    }
-                    crate::system_tray::TrayCommand::SwitchMode => {
-                        // Switch between manual and real-time modes
-                        for window in self.windows.values_mut() {
-                            window.toggle_mode();
-                        }
-                        notify_recording = true;
-                    }
-                    crate::system_tray::TrayCommand::Quit => {
-                        println!("Quit requested from system tray");
-                        if let Some(running) = &self.running {
-                            running.store(false, std::sync::atomic::Ordering::Relaxed);
-                        }
-                        event_loop.exit();
+                tray_commands.push(command);
+            }
+        }
+        for command in tray_commands {
+            match command {
+                crate::system_tray::TrayCommand::ToggleRecording
+                | crate::system_tray::TrayCommand::ToggleManualSession => {
+                    send_toggle(&self.manual_session_sender);
+                }
+                crate::system_tray::TrayCommand::SwitchMode => {
+                    // Switch between manual and real-time modes
+                    for window in self.windows.values_mut() {
+                        window.toggle_mode();
                     }
                 }
-            }
-            if notify_recording {
-                self.notify_tray_about_recording();
+                crate::system_tray::TrayCommand::OpenSettings => {
+                    self.open_settings_window(event_loop);
+                }
+                crate::system_tray::TrayCommand::Quit => {
+                    println!("Quit requested from system tray");
+                    if let Some(running) = &self.running {
+                        running.store(false, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    event_loop.exit();
+                }
             }
         }
     }
@@ -718,7 +760,7 @@ impl ApplicationHandler for WindowApp {
             }
             .to_string();
             let model_name = self.config.general_config.model.clone();
-            let mut window_state = create_window(
+            let created = create_window(
                 event_loop,
                 window_attributes.with_title("Sonori"),
                 1.0,
@@ -739,7 +781,22 @@ impl ApplicationHandler for WindowApp {
                 &model_name,
                 self.backend_status.clone(),
                 self.backend_command_tx.clone(),
+                self.app_tx.clone(),
+                self.hotkey_state.clone(),
             );
+            let mut window_state = match created {
+                Ok(window_state) => window_state,
+                Err(e) if !self.overlay_created => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+                Err(e) => {
+                    // about_to_wait retries while no window exists.
+                    eprintln!("{e}; retrying");
+                    return;
+                }
+            };
+            self.overlay_created = true;
 
             if let Some(audio_data) = &self.audio_data {
                 window_state.set_audio_data(audio_data.clone());
@@ -847,16 +904,14 @@ impl ApplicationHandler for WindowApp {
                     },
                 ..
             } => {
-                if let Some(window) = self.windows.get_mut(&window_id) {
-                    // Tab - Toggle manual session (temporary, works when window focused)
-                    // TODO: Once global shortcut (Super+Tab) works unfocused, remove this
-                    if key_code == KeyCode::Tab {
-                        let current_mode = speechcore::TranscriptionMode::from_u8(
-                            self.transcription_mode_ref.load(Ordering::Relaxed),
-                        );
-                        if current_mode == speechcore::TranscriptionMode::Manual {
-                            window.toggle_manual_session();
-                        }
+                // Tab - Toggle manual session (X11 only: the Wayland overlay never
+                // takes keyboard focus)
+                if key_code == KeyCode::Tab {
+                    let current_mode = speechcore::TranscriptionMode::from_u8(
+                        self.transcription_mode_ref.load(Ordering::Relaxed),
+                    );
+                    if current_mode == speechcore::TranscriptionMode::Manual {
+                        send_toggle(&self.manual_session_sender);
                     }
                 }
                 return;
@@ -896,9 +951,15 @@ impl ApplicationHandler for WindowApp {
         }
 
         // Handle other window events
+        let mut drop_overlay = false;
         if let Some(window) = self.windows.get_mut(&window_id) {
-            let mut should_notify_recording = false;
             match event {
+                // A Wayland layer surface is closed by the compositor (e.g. its output
+                // went away), never by the user, so build a new one instead of quitting.
+                WindowEvent::CloseRequested if event_loop.is_wayland() => {
+                    println!("Overlay surface closed by the compositor; recreating it");
+                    drop_overlay = true;
+                }
                 WindowEvent::CloseRequested => {
                     println!("Window close requested");
                     // First quit to set the running flag to false
@@ -930,17 +991,18 @@ impl ApplicationHandler for WindowApp {
                         position,
                         Some(event_loop),
                     );
-                    should_notify_recording = true;
                 }
                 WindowEvent::PointerLeft { .. } => {
                     window.handle_cursor_leave();
                 }
                 _ => {}
             }
-
-            if should_notify_recording {
-                self.notify_tray_about_recording();
-            }
+        }
+        if drop_overlay {
+            // about_to_wait creates a new overlay while none exists.
+            self.windows.remove(&window_id);
+            self.window_drag = None;
+            return;
         }
 
         // Check if settings was requested (outside the window borrow scope)
@@ -974,7 +1036,9 @@ fn create_window(
     model_name: &str,
     backend_status: Option<Arc<RwLock<BackendStatus>>>,
     backend_command_tx: Option<tokio::sync::mpsc::UnboundedSender<speechcore::BackendCommand>>,
-) -> WindowState {
+    app_tx: tokio::sync::mpsc::UnboundedSender<AppCommand>,
+    hotkey_state: SharedHotkeyState,
+) -> Result<WindowState, String> {
     // Get monitor dimensions from video mode
     let monitor_size = monitor_mode.size();
     let monitor_width = monitor_size.width;
@@ -1013,9 +1077,9 @@ fn create_window(
         positioning_window_size,
     );
 
-    // TEMPORARY: Use OnDemand to restore Tab key functionality while debugging portal
-    // TODO: Switch to None once portal works (None prevents window from stealing keys)
-    let keyboard_mode = KeyboardInteractivity::OnDemand;
+    // Never take keyboard focus: a click on Stop must leave the target app focused,
+    // or the paste lands in the overlay.
+    let keyboard_mode = KeyboardInteractivity::None;
 
     if ev.is_wayland() {
         // For Wayland, create platform-specific attributes using WindowAttributesWayland
@@ -1052,9 +1116,18 @@ fn create_window(
 
     ev.listen_device_events(DeviceEvents::Always);
 
+    let window = ev.create_window(w).map_err(|e| {
+        if ev.is_wayland() {
+            format!(
+                "Failed to create the overlay window: {e}. On Wayland, Sonori needs the 
+                 wlr-layer-shell protocol, which GNOME does not provide."
+            )
+        } else {
+            format!("Failed to create the overlay window: {e}")
+        }
+    })?;
     WindowState::new(
-        ev.create_window(w)
-            .expect("Failed to create application window"),
+        window,
         running,
         recording,
         magic_mode_enabled,
@@ -1074,5 +1147,7 @@ fn create_window(
         model_name,
         backend_status,
         backend_command_tx,
+        app_tx,
+        hotkey_state,
     )
 }

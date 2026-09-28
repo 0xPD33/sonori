@@ -2,16 +2,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 // Use library modules (the binary should not redeclare modules)
-use sonori::config::{read_app_config_with_path, AppConfig};
+use sonori::config::{read_app_config_with_path, AppConfig, OutputMode};
 use sonori::copy;
-use sonori::ipc::{self, IpcCommand};
+use sonori::hotkey::{HotkeyState, SharedHotkeyState};
+use sonori::ipc::{self, AppCommand, IpcCommand};
 use sonori::portal_input;
 use sonori::sound_player::SoundPlayer;
 use sonori::system_tray;
 use sonori::ui;
-use speechcore::{
-    init_all_models, FeedbackSink, RealTimeTranscriber, SpeechConfig, TranscriptionMode,
-};
+use speechcore::{FeedbackSink, RealTimeTranscriber, SpeechConfig, TranscriptionMode};
 
 // Binary-specific modules (not in library)
 mod global_shortcuts;
@@ -45,6 +44,17 @@ enum Command {
     SwitchMode {
         /// Mode to switch to: "manual" or "realtime"
         mode: String,
+    },
+    /// Copy the last transcript to the clipboard
+    CopyLast,
+    /// Paste the last transcript again
+    PasteLast,
+    /// Turn Magic Mode on or off
+    Magic,
+    /// Set the transcription language, e.g. "en" or "de"
+    Language {
+        /// Language code
+        code: String,
     },
 }
 
@@ -82,6 +92,10 @@ async fn main() -> anyhow::Result<()> {
     // Handle IPC subcommands (control running instance)
     if let Some(cmd) = args.command {
         return handle_ipc_command(cmd).await;
+    }
+
+    if !args.cli {
+        ipc::replace_running_instance().await;
     }
 
     println!("Loading configuration...");
@@ -129,17 +143,21 @@ async fn main() -> anyhow::Result<()> {
     println!("Transcription mode: {:?}", transcription_mode);
 
     println!("Initializing models...");
-    let (transcription_model_path, _silero_model_path) = init_all_models(
-        Some(&app_config.general_config.model),
-        app_config.backend_config.backend,
-        &app_config.backend_config.quantization_level,
-    )
-    .await?;
-
-    println!(
-        "Transcription model ready at: {:?}",
-        transcription_model_path
-    );
+    speechcore::download::init_silero_model().await?;
+    // The GUI resolves the model in the background, so the overlay shows the
+    // download progress and any error. The CLI has no overlay and waits here.
+    let transcription_model_path = if args.cli {
+        let path = speechcore::resolve_model_path(
+            &app_config.general_config.model,
+            app_config.backend_config.backend,
+            &app_config.backend_config.quantization_level,
+        )
+        .await?;
+        println!("Transcription model ready at: {:?}", path);
+        Some(path)
+    } else {
+        None
+    };
 
     // Initialize sound player
     let sound_player = match SoundPlayer::new(&app_config.sound_config) {
@@ -154,7 +172,9 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let feedback_sink = sound_player.map(|player| player as std::sync::Arc<dyn FeedbackSink>);
-    let magic_mode_enabled = Arc::new(AtomicBool::new(false));
+    let magic_mode_enabled = Arc::new(AtomicBool::new(
+        app_config.enhancement_config.enabled && app_config.enhancement_config.active,
+    ));
     let magic_mode_enhancer = if app_config.enhancement_config.enabled {
         Some(Arc::new(sonori::enhancement::MagicModeEnhancer::new(
             app_config.enhancement_config.clone(),
@@ -167,6 +187,12 @@ async fn main() -> anyhow::Result<()> {
     let speech_config: SpeechConfig = app_config.clone().into();
     let mut transcriber =
         RealTimeTranscriber::new(transcription_model_path, speech_config, feedback_sink)?;
+    if let Some(problem) = sonori::config::config_file_problem() {
+        transcriber
+            .get_backend_status()
+            .write()
+            .report_error(problem);
+    }
 
     transcriber.start()?;
 
@@ -430,255 +456,79 @@ async fn run_manual_cli(mut transcriber: RealTimeTranscriber) -> anyhow::Result<
     Ok(())
 }
 
+/// Longest transcript the overlay keeps. A long realtime session would otherwise
+/// grow it, and the copy of it on every final, without bound.
+const MAX_OVERLAY_TRANSCRIPT_BYTES: usize = 20_000;
+
+/// A finished transcript and what to do with it.
+struct Output {
+    text: String,
+    mode: OutputMode,
+}
+
 async fn run_gui_mode(
     transcriber: RealTimeTranscriber,
     app_config: AppConfig,
     magic_mode_enabled: Arc<AtomicBool>,
     magic_mode_enhancer: Option<Arc<sonori::enhancement::MagicModeEnhancer>>,
 ) -> anyhow::Result<()> {
-    // Set up shutdown channels and monitoring task
-    let (_shutdown_tx, shutdown_rx) = tokio::sync::mpsc::channel::<()>(2);
     let transcript_history = transcriber.get_transcript_history();
-    let mut transcript_rx = transcriber.get_transcript_rx();
+    let transcript_rx = transcriber.get_transcript_rx();
     let audio_visualization_data = transcriber.get_audio_visualization_data();
-    let audio_visualization_data_for_thread = audio_visualization_data.clone();
-    let running_for_shutdown = transcriber.get_running().clone();
+    let backend_status = transcriber.get_backend_status();
+    let last_transcript = Arc::new(parking_lot::RwLock::new(String::new()));
 
-    // Single unified shutdown task that handles all shutdown paths
-    tokio::spawn(async move {
-        let mut shutdown_rx = shutdown_rx;
+    // Settings changes reach the pipeline through this channel, so they apply
+    // without a restart.
+    let (config_tx, config_rx) = tokio::sync::watch::channel(app_config.clone());
 
-        let mut check_interval = tokio::time::interval(tokio::time::Duration::from_millis(100));
-
-        loop {
-            tokio::select! {
-                Some(_) = shutdown_rx.recv() => {
-                    println!("Shutdown signal received, starting graceful shutdown...");
-                    break;
-                }
-
-                _ = check_interval.tick() => {
-                    let is_running = running_for_shutdown.load(Ordering::Relaxed);
-
-                    if !is_running {
-                        println!("Running flag is now false, starting graceful shutdown...");
-                        break;
-                    }
-                }
-            }
-        }
-
-        println!("Shutdown monitor detected shutdown, waiting for event loop to exit");
-    });
-
+    let (final_tx, final_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     // Single bounded queue for clipboard/paste work.
-    // This avoids unbounded growth and keeps worker ownership simple.
-    let (paste_tx, mut paste_rx) = tokio::sync::mpsc::channel::<String>(128);
-    let paste_tx_clone = paste_tx.clone();
-    let audio_processor_for_session = transcriber.get_audio_processor();
+    let (output_tx, output_rx) = tokio::sync::mpsc::channel::<Output>(128);
 
-    // Transcript history saving config
-    let save_transcript_history = app_config.debug_config.save_transcript_history;
-    let transcript_history_path = app_config.debug_config.transcript_history_path.clone();
+    tokio::spawn(consume_transcripts(
+        transcript_rx,
+        final_tx,
+        transcript_history.clone(),
+        audio_visualization_data.clone(),
+    ));
+    tokio::spawn(finalize_transcripts(
+        final_rx,
+        magic_mode_enhancer.clone(),
+        transcript_history,
+        audio_visualization_data.clone(),
+        last_transcript.clone(),
+        config_rx.clone(),
+        output_tx.clone(),
+    ));
+    tokio::spawn(output_worker(
+        output_rx,
+        app_config.portal_config.enable_xdg_portal,
+        config_rx.clone(),
+        backend_status.clone(),
+    ));
 
-    tokio::spawn(async move {
-        loop {
-            let message = match transcript_rx.recv().await {
-                Ok(message) => message,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                    eprintln!("Transcript consumer lagged; skipped {} message(s)", skipped);
-                    continue;
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-            };
+    let (app_tx, app_rx) = tokio::sync::mpsc::unbounded_channel::<AppCommand>();
+    tokio::spawn(handle_app_commands(
+        app_rx,
+        last_transcript,
+        output_tx,
+        magic_mode_enabled.clone(),
+        magic_mode_enhancer.is_some(),
+        config_tx.clone(),
+        backend_status.clone(),
+    ));
 
-            // Get current session ID to filter stale transcriptions
-            let current_session_id = if let Some(ref ap) = audio_processor_for_session {
-                ap.get_session_id()
-            } else {
-                None
-            };
-
-            // Discard transcriptions from old sessions
-            if message.session_id != current_session_id {
-                if message.is_final {
-                    println!(
-                        "Discarding stale transcription from session {:?} (current: {:?})",
-                        message.session_id, current_session_id
-                    );
-                }
-                continue;
-            }
-
-            // Interim streaming hypotheses: show as a live preview only — no
-            // history append, enhancement, file save, or clipboard paste. The
-            // final message for this utterance commits and supersedes it.
-            if !message.is_final {
-                let preview = {
-                    let history = transcript_history.read();
-                    if history.is_empty() {
-                        message.text
-                    } else {
-                        format!("{} {}", history, message.text)
-                    }
-                };
-                // Trailing ellipsis marks the live, provisional tail; the final
-                // message replaces it with committed text (no marker).
-                audio_visualization_data_for_thread.write().transcript = format!("{preview} …");
-                continue;
-            }
-
-            let mut transcription = message.text;
-            if let Some(enhancer) = &magic_mode_enhancer {
-                let raw_transcription = transcription.clone();
-                let enhancer = Arc::clone(enhancer);
-                match tokio::task::spawn_blocking(move || enhancer.enhance(&raw_transcription))
-                    .await
-                {
-                    Ok(Ok(enhanced)) => {
-                        if !enhanced.trim().is_empty() {
-                            transcription = enhanced;
-                        }
-                    }
-                    Ok(Err(e)) => eprintln!("Magic Mode enhancement failed: {e}"),
-                    Err(e) => eprintln!("Magic Mode enhancement worker failed: {e}"),
-                }
-            }
-
-            // Check if this is the first segment before updating history
-            let history_len_before = transcript_history.read().len();
-
-            let updated_transcript = {
-                let mut history = transcript_history.write();
-                if !history.is_empty() {
-                    history.push(' ');
-                }
-                history.push_str(&transcription);
-                history.clone()
-            };
-            {
-                let mut audio_data = audio_visualization_data_for_thread.write();
-                audio_data.transcript = updated_transcript;
-            }
-
-            // Save transcript to history file if enabled
-            if let Err(e) = sonori::transcript_writer::append_to_transcript_history(
-                &transcription,
-                &transcript_history_path,
-                save_transcript_history,
-            ) {
-                eprintln!("Failed to save transcript history: {}", e);
-            }
-
-            // Forward chunk to clipboard and portal workers with leading space (except for first segment)
-            let segment_with_space = if history_len_before > 0 {
-                format!(" {}", transcription)
-            } else {
-                transcription
-            };
-            if let Err(e) = paste_tx_clone.try_send(segment_with_space) {
-                match e {
-                    tokio::sync::mpsc::error::TrySendError::Full(_) => {
-                        eprintln!("Paste queue full; dropping transcript paste update");
-                    }
-                    tokio::sync::mpsc::error::TrySendError::Closed(_) => break,
-                }
-            }
-        }
-    });
-
-    // Paste worker: establish portal session when enabled, otherwise use key injection fallback.
-    let paste_shortcut = app_config.portal_config.paste_shortcut.clone();
-    if app_config.portal_config.enable_xdg_portal {
-        let paste_shortcut = paste_shortcut.clone();
+    // Settings and `sonori language` change the language without a restart.
+    {
+        let language = transcriber.get_language();
+        let mut config_rx = config_rx;
         tokio::spawn(async move {
-            let portal = match portal_input::PortalInput::new().await {
-                Ok(p) => Some(p),
-                Err(e) => {
-                    eprintln!(
-                        "Portal integration disabled: {}. Falling back to wtype/dotool.",
-                        e
-                    );
-                    None
-                }
-            };
-
-            while let Some(text) = paste_rx.recv().await {
-                let text_for_copy = text.clone();
-                match tokio::task::spawn_blocking(move || {
-                    copy::WlCopy::copy_to_clipboard(&text_for_copy)
-                })
-                .await
-                {
-                    Ok(Ok(())) => {}
-                    Ok(Err(e)) => {
-                        eprintln!("Clipboard copy failed: {}", e);
-                        continue;
-                    }
-                    Err(e) => {
-                        eprintln!("Clipboard worker failed: {}", e);
-                        continue;
-                    }
-                }
-
-                // Give clipboard managers a short moment before paste injection.
-                tokio::time::sleep(Duration::from_millis(50)).await;
-
-                if let Some(portal) = portal.as_ref() {
-                    let result = if paste_shortcut == "ctrl_v" {
-                        portal.paste_via_ctrl_v().await
-                    } else {
-                        portal.paste_via_ctrl_shift_v().await
-                    };
-
-                    if let Err(e) = result {
-                        eprintln!("Portal paste failed: {}", e);
-                    }
-                } else {
-                    let paste_shortcut = paste_shortcut.clone();
-                    match tokio::task::spawn_blocking(move || {
-                        copy::paste_via_keystroke(&paste_shortcut)
-                    })
-                    .await
-                    {
-                        Ok(Ok(())) => {}
-                        Ok(Err(e)) => eprintln!("Paste fallback failed: {}", e),
-                        Err(e) => eprintln!("Paste fallback worker failed: {}", e),
-                    }
-                }
-            }
-        });
-    } else {
-        tokio::spawn(async move {
-            while let Some(text) = paste_rx.recv().await {
-                let text_for_copy = text.clone();
-                match tokio::task::spawn_blocking(move || {
-                    copy::WlCopy::copy_to_clipboard(&text_for_copy)
-                })
-                .await
-                {
-                    Ok(Ok(())) => {}
-                    Ok(Err(e)) => {
-                        eprintln!("Clipboard copy failed: {}", e);
-                        continue;
-                    }
-                    Err(e) => {
-                        eprintln!("Clipboard worker failed: {}", e);
-                        continue;
-                    }
-                }
-
-                tokio::time::sleep(Duration::from_millis(50)).await;
-
-                let paste_shortcut = paste_shortcut.clone();
-                match tokio::task::spawn_blocking(move || {
-                    copy::paste_via_keystroke(&paste_shortcut)
-                })
-                .await
-                {
-                    Ok(Ok(())) => {}
-                    Ok(Err(e)) => eprintln!("Paste failed: {}", e),
-                    Err(e) => eprintln!("Paste worker failed: {}", e),
+            while config_rx.changed().await.is_ok() {
+                let new_language = config_rx.borrow().general_config.language.clone();
+                if *language.read() != new_language {
+                    println!("Transcription language set to {}", new_language);
+                    *language.write() = new_language;
                 }
             }
         });
@@ -687,13 +537,38 @@ async fn run_gui_mode(
     let running = transcriber.get_running();
     let recording = transcriber.get_recording();
     let manual_session_sender = transcriber.get_manual_session_sender();
+
+    // SIGTERM and Ctrl+C shut down cleanly: the event loop sees the running flag
+    // within one idle poll. A second signal exits at once, in case shutdown hangs.
+    {
+        let running = running.clone();
+        tokio::spawn(async move {
+            use tokio::signal::unix::{signal, SignalKind};
+            let (Ok(mut term), Ok(mut int)) = (
+                signal(SignalKind::terminate()),
+                signal(SignalKind::interrupt()),
+            ) else {
+                eprintln!("Failed to install signal handlers");
+                return;
+            };
+            tokio::select! {
+                _ = term.recv() => {}
+                _ = int.recv() => {}
+            }
+            println!("Shutdown signal received");
+            running.store(false, Ordering::Relaxed);
+            tokio::select! {
+                _ = term.recv() => {}
+                _ = int.recv() => {}
+            }
+            std::process::exit(130);
+        });
+    }
     let transcription_mode_ref = transcriber.get_transcription_mode_ref();
-    let backend_status = transcriber.get_backend_status();
     let backend_command_tx = transcriber.backend_command_sender();
 
     // System tray: start if enabled in configuration
-    let (tray_update_tx, tray_command_rx) = if app_config.window_behavior_config.show_in_system_tray
-    {
+    let tray_command_rx = if app_config.window_behavior_config.show_in_system_tray {
         match system_tray::run_system_tray(
             recording.clone(),
             transcription_mode_ref.clone(),
@@ -701,39 +576,42 @@ async fn run_gui_mode(
         )
         .await
         {
-            Ok((update_tx, command_rx)) => {
+            Ok(command_rx) => {
                 println!("System tray initialized successfully");
-                (Some(update_tx), Some(command_rx))
+                Some(command_rx)
             }
             Err(e) => {
                 eprintln!("Failed to initialize system tray: {}", e);
-                (None, None)
+                None
             }
         }
     } else {
-        (None, None)
+        None
     };
 
     // Global shortcuts: register Super+\ (or configured) to toggle manual session
+    let hotkey_state: SharedHotkeyState = Arc::new(parking_lot::RwLock::new(HotkeyState::Disabled));
     if app_config.portal_config.enable_global_shortcuts {
         let accelerator = app_config.portal_config.manual_toggle_accelerator.clone();
         let shortcut_mode = app_config.portal_config.shortcut_mode;
         let manual_tx = manual_session_sender.clone();
+        let app_tx = app_tx.clone();
         let mode_ref = transcription_mode_ref.clone();
-        let recording_ref = recording.clone();
         let running_ref = running.clone();
+        let hotkey_state = hotkey_state.clone();
         tokio::spawn(async move {
             if let Err(e) = crate::global_shortcuts::run_listener(
                 &accelerator,
                 shortcut_mode,
                 manual_tx,
+                app_tx,
                 mode_ref,
-                recording_ref,
                 running_ref,
+                hotkey_state,
             )
             .await
             {
-                eprintln!("Global shortcuts failed: {}", e);
+                eprintln!("Global shortcuts failed: {:#}", e);
             }
         });
     }
@@ -742,9 +620,12 @@ async fn run_gui_mode(
     {
         let ipc_server = ipc::IpcServer::new(
             manual_session_sender.clone(),
+            app_tx.clone(),
             transcription_mode_ref.clone(),
             recording.clone(),
             running.clone(),
+            backend_status.clone(),
+            hotkey_state.clone(),
         );
         tokio::spawn(async move {
             if let Err(e) = ipc_server.run().await {
@@ -754,25 +635,321 @@ async fn run_gui_mode(
     }
 
     // Run the UI with AtomicBool values directly and pass the configuration
-    ui::run_with_audio_data(
-        audio_visualization_data,
+    ui::run_with_audio_data(ui::UiHandles {
+        audio_data: audio_visualization_data,
         running,
         recording,
         magic_mode_enabled,
-        app_config,
-        Some(manual_session_sender),
+        config: app_config,
+        manual_session_sender: Some(manual_session_sender),
         transcription_mode_ref,
-        tray_update_tx,
         tray_command_rx,
-        Some(backend_status),
+        backend_status: Some(backend_status),
         backend_command_tx,
-    );
+        config_tx,
+        app_tx,
+        hotkey_state,
+    });
 
     // UI has exited, perform cleanup
     let mut transcriber = transcriber;
     transcriber.shutdown().await?;
 
     Ok(())
+}
+
+/// Shows interim hypotheses and hands finals on. It never waits on slow work,
+/// so the broadcast channel cannot lag and drop final transcripts.
+async fn consume_transcripts(
+    mut transcript_rx: tokio::sync::broadcast::Receiver<speechcore::TranscriptionMessage>,
+    final_tx: tokio::sync::mpsc::UnboundedSender<String>,
+    transcript_history: Arc<parking_lot::RwLock<String>>,
+    audio_visualization_data: Arc<parking_lot::RwLock<speechcore::AudioVisualizationData>>,
+) {
+    loop {
+        let message = match transcript_rx.recv().await {
+            Ok(message) => message,
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                eprintln!("Transcript consumer lagged; skipped {} message(s)", skipped);
+                continue;
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+        };
+
+        // Speechcore already drops transcripts of cancelled sessions. A finished
+        // session's text still arrives after the next session started, and is kept.
+
+        // Interim streaming hypotheses: show as a live preview only — no
+        // history append, enhancement, file save, or clipboard paste. The
+        // final message for this utterance commits and supersedes it.
+        if !message.is_final {
+            let preview = {
+                let history = transcript_history.read();
+                if history.is_empty() {
+                    message.text
+                } else {
+                    format!("{} {}", history, message.text)
+                }
+            };
+            // Trailing ellipsis marks the live, provisional tail; the final
+            // message replaces it with committed text (no marker).
+            audio_visualization_data.write().transcript = format!("{preview} …");
+            continue;
+        }
+
+        if final_tx.send(message.text).is_err() {
+            break;
+        }
+    }
+}
+
+/// Runs Magic Mode, then commits each final transcript in arrival order.
+async fn finalize_transcripts(
+    mut final_rx: tokio::sync::mpsc::UnboundedReceiver<String>,
+    magic_mode_enhancer: Option<Arc<sonori::enhancement::MagicModeEnhancer>>,
+    transcript_history: Arc<parking_lot::RwLock<String>>,
+    audio_visualization_data: Arc<parking_lot::RwLock<speechcore::AudioVisualizationData>>,
+    last_transcript: Arc<parking_lot::RwLock<String>>,
+    config_rx: tokio::sync::watch::Receiver<AppConfig>,
+    output_tx: tokio::sync::mpsc::Sender<Output>,
+) {
+    // clear_on_new_session empties the history, so it alone cannot tell
+    // whether this dictation follows an earlier one in the same text field.
+    let mut pasted_before = false;
+
+    while let Some(mut transcription) = final_rx.recv().await {
+        if let Some(enhancer) = &magic_mode_enhancer {
+            let raw_transcription = transcription.clone();
+            let enhancer = Arc::clone(enhancer);
+            match tokio::task::spawn_blocking(move || enhancer.enhance(&raw_transcription)).await {
+                Ok(Ok(enhanced)) => {
+                    if !enhanced.trim().is_empty() {
+                        transcription = enhanced;
+                    }
+                }
+                Ok(Err(e)) => eprintln!("Magic Mode enhancement failed: {e}"),
+                Err(e) => eprintln!("Magic Mode enhancement worker failed: {e}"),
+            }
+        }
+
+        // Check if this is the first segment before updating history
+        let history_len_before = transcript_history.read().len();
+
+        let updated_transcript = {
+            let mut history = transcript_history.write();
+            if !history.is_empty() {
+                history.push(' ');
+            }
+            history.push_str(&transcription);
+            trim_front(&mut history, MAX_OVERLAY_TRANSCRIPT_BYTES);
+            history.clone()
+        };
+        audio_visualization_data.write().transcript = updated_transcript;
+        *last_transcript.write() = transcription.clone();
+
+        let (history_enabled, history_path, output_mode) = {
+            let config = config_rx.borrow();
+            (
+                config.history_config.enabled,
+                config.history_config.path.clone(),
+                config.portal_config.output_mode,
+            )
+        };
+        if let Err(e) = sonori::transcript_writer::append_to_transcript_history(
+            &transcription,
+            &history_path,
+            history_enabled,
+        ) {
+            eprintln!("Failed to save transcript history: {}", e);
+        }
+
+        // Forward chunk to clipboard and portal workers with leading space (except for first segment)
+        let segment_with_space = if history_len_before > 0 || pasted_before {
+            format!(" {}", transcription)
+        } else {
+            transcription
+        };
+        pasted_before = true;
+        let output = Output {
+            text: segment_with_space,
+            mode: output_mode,
+        };
+        if let Err(e) = output_tx.try_send(output) {
+            match e {
+                tokio::sync::mpsc::error::TrySendError::Full(_) => {
+                    eprintln!("Paste queue full; dropping transcript paste update");
+                }
+                tokio::sync::mpsc::error::TrySendError::Closed(_) => break,
+            }
+        }
+    }
+}
+
+/// Drops whole words from the front until `text` fits in `max_bytes`.
+fn trim_front(text: &mut String, max_bytes: usize) {
+    if text.len() <= max_bytes {
+        return;
+    }
+    let mut cut = text.len() - max_bytes;
+    while !text.is_char_boundary(cut) {
+        cut += 1;
+    }
+    let cut = text[cut..]
+        .find(char::is_whitespace)
+        .map_or(cut, |space| cut + space + 1);
+    text.drain(..cut);
+}
+
+/// Delivers transcripts: clipboard and paste shortcut (through the portal when it
+/// is enabled, else or on failure through wtype/dotool), typing, or clipboard only.
+async fn output_worker(
+    mut output_rx: tokio::sync::mpsc::Receiver<Output>,
+    enable_portal: bool,
+    config_rx: tokio::sync::watch::Receiver<AppConfig>,
+    status: Arc<parking_lot::RwLock<speechcore::BackendStatus>>,
+) {
+    let portal = if enable_portal {
+        match portal_input::PortalInput::new().await {
+            Ok(p) => Some(p),
+            Err(e) => {
+                eprintln!(
+                    "Portal integration disabled: {}. Falling back to wtype/dotool.",
+                    e
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    while let Some(Output { text, mode }) = output_rx.recv().await {
+        let paste_shortcut = config_rx.borrow().portal_config.paste_shortcut.clone();
+        let with_shift = paste_shortcut != "ctrl_v";
+        let shortcut_label = if with_shift { "Ctrl+Shift+V" } else { "Ctrl+V" };
+
+        if mode == OutputMode::Type {
+            let typed_text = text.clone();
+            let typed = tokio::task::spawn_blocking(move || copy::type_text(&typed_text))
+                .await
+                .unwrap_or_else(|e| Err(e.to_string()));
+            let Err(e) = typed else {
+                continue;
+            };
+            eprintln!("Typing failed: {}", e);
+            // Fall through to the clipboard, so the text is not lost.
+            let copied = copy_to_clipboard(text).await;
+            status.write().report_error(match copied {
+                Ok(()) => format!("Typing failed; copied — press {shortcut_label}"),
+                Err(e) => format!("Typing and clipboard copy failed: {e}"),
+            });
+            continue;
+        }
+
+        if let Err(e) = copy_to_clipboard(text).await {
+            eprintln!("Clipboard copy failed: {}", e);
+            status
+                .write()
+                .report_error(format!("Clipboard copy failed: {e}"));
+            continue;
+        }
+        if mode == OutputMode::Clipboard {
+            continue;
+        }
+
+        // Give clipboard managers a short moment before paste injection.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        if let Some(portal) = portal.as_ref() {
+            match portal.paste(with_shift).await {
+                Ok(()) => continue,
+                Err(e) => eprintln!("Portal paste failed: {}; trying wtype/dotool", e),
+            }
+        }
+
+        let pasted =
+            tokio::task::spawn_blocking(move || copy::paste_via_keystroke(&paste_shortcut))
+                .await
+                .unwrap_or_else(|e| Err(e.to_string()));
+        if let Err(e) = pasted {
+            eprintln!("Paste failed: {}", e);
+            status
+                .write()
+                .report_error(format!("Copied, paste failed — press {shortcut_label}"));
+        }
+    }
+}
+
+async fn copy_to_clipboard(text: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || copy::WlCopy::copy_to_clipboard(&text))
+        .await
+        .unwrap_or_else(|e| Err(e.to_string()))
+}
+
+async fn handle_app_commands(
+    mut app_rx: tokio::sync::mpsc::UnboundedReceiver<AppCommand>,
+    last_transcript: Arc<parking_lot::RwLock<String>>,
+    output_tx: tokio::sync::mpsc::Sender<Output>,
+    magic_mode_enabled: Arc<AtomicBool>,
+    magic_mode_available: bool,
+    config_tx: tokio::sync::watch::Sender<AppConfig>,
+    status: Arc<parking_lot::RwLock<speechcore::BackendStatus>>,
+) {
+    while let Some(command) = app_rx.recv().await {
+        match command {
+            AppCommand::CopyLast | AppCommand::PasteLast => {
+                let text = last_transcript.read().clone();
+                if text.is_empty() {
+                    status.write().report_error("No transcript yet");
+                    continue;
+                }
+                let mode = if matches!(command, AppCommand::CopyLast) {
+                    OutputMode::Clipboard
+                } else {
+                    OutputMode::Paste
+                };
+                if output_tx.try_send(Output { text, mode }).is_err() {
+                    status.write().report_error("Paste queue full; try again");
+                }
+            }
+            AppCommand::ToggleMagicMode => {
+                if !magic_mode_available {
+                    status
+                        .write()
+                        .report_error("Magic Mode is off: set enhancement_config.enabled");
+                    continue;
+                }
+                let active = !magic_mode_enabled.load(Ordering::Relaxed);
+                magic_mode_enabled.store(active, Ordering::Relaxed);
+                println!("Magic Mode {}", if active { "on" } else { "off" });
+                persist_config(&config_tx, &status, |config| {
+                    config.enhancement_config.active = active
+                });
+            }
+            AppCommand::SetLanguage(code) => {
+                persist_config(&config_tx, &status, |config| {
+                    config.general_config.language = code.clone()
+                });
+            }
+        }
+    }
+}
+
+/// Applies `change` to the running config and the config file.
+fn persist_config(
+    config_tx: &tokio::sync::watch::Sender<AppConfig>,
+    status: &parking_lot::RwLock<speechcore::BackendStatus>,
+    change: impl Fn(&mut AppConfig),
+) {
+    config_tx.send_modify(&change);
+    let (mut config, _) = read_app_config_with_path();
+    change(&mut config);
+    if let Err(e) = sonori::config::write_app_config(&config) {
+        eprintln!("Failed to save config: {}", e);
+        status
+            .write()
+            .report_error(format!("Setting not saved: {e}"));
+    }
 }
 
 fn init_tracing() {
@@ -790,6 +967,10 @@ async fn handle_ipc_command(cmd: Command) -> anyhow::Result<()> {
         Command::Cancel => IpcCommand::Cancel,
         Command::Status => IpcCommand::Status,
         Command::SwitchMode { mode } => IpcCommand::SwitchMode { mode },
+        Command::CopyLast => IpcCommand::CopyLast,
+        Command::PasteLast => IpcCommand::PasteLast,
+        Command::Magic => IpcCommand::ToggleMagic,
+        Command::Language { code } => IpcCommand::Language { code },
     };
 
     match ipc::send_command(ipc_cmd).await {

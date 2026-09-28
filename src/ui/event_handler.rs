@@ -21,6 +21,7 @@ pub struct EventHandler {
     pub manual_session_sender: Option<tokio::sync::mpsc::Sender<speechcore::ManualSessionCommand>>,
     pub transcription_mode_ref: Arc<AtomicU8>,
     pub settings_requested: Cell<bool>,
+    app_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::ipc::AppCommand>>,
 }
 
 impl EventHandler {
@@ -29,6 +30,7 @@ impl EventHandler {
         magic_mode_enabled: Option<Arc<AtomicBool>>,
         manual_session_sender: Option<tokio::sync::mpsc::Sender<speechcore::ManualSessionCommand>>,
         transcription_mode_ref: Arc<AtomicU8>,
+        app_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::ipc::AppCommand>>,
     ) -> Self {
         Self {
             cursor_position: None,
@@ -39,6 +41,7 @@ impl EventHandler {
             manual_session_sender,
             transcription_mode_ref,
             settings_requested: Cell::new(false),
+            app_tx,
         }
     }
 
@@ -146,17 +149,18 @@ impl EventHandler {
         }
     }
 
-    pub fn toggle_recording(recording: &Option<Arc<AtomicBool>>) {
-        if let Some(recording) = recording {
-            // IMMEDIATE: Atomic toggle - UI thread continues instantly
-            let was_recording = recording.load(Ordering::Relaxed);
-            recording.store(!was_recording, Ordering::Relaxed);
-            println!(
-                "Recording state toggled atomically: {} -> {} (non-blocking)",
-                was_recording, !was_recording
-            );
-            // All transcription threads will detect this change via their atomic flag polling
-        }
+    /// Asks the transcriber to toggle. It opens or closes the mic itself, which
+    /// flipping the recording flag here would skip.
+    pub fn send_toggle(&self) {
+        let Some(sender) = self.manual_session_sender.clone() else {
+            eprintln!("Manual session sender not available");
+            return;
+        };
+        tokio::spawn(async move {
+            if let Err(e) = sender.send(speechcore::ManualSessionCommand::Toggle).await {
+                eprintln!("Failed to send toggle command: {}", e);
+            }
+        });
     }
 
     pub fn quit(running: &Option<Arc<AtomicBool>>) {
@@ -200,47 +204,8 @@ impl EventHandler {
 
                         // Do NOT immediately exit the event loop - let the monitors handle it
                     }
-                    ButtonType::Pause | ButtonType::Play => {
-                        // IMMEDIATE: Toggle recording state atomically (non-blocking UI)
-                        // Both realtime and manual transcription threads detect this change
-                        Self::toggle_recording(&self.recording);
-                    }
-                    ButtonType::RecordToggle => {
-                        // IMMEDIATE UI response: Check state and send command asynchronously
-                        let is_currently_recording = self
-                            .recording
-                            .as_ref()
-                            .map(|rec| rec.load(Ordering::Relaxed))
-                            .unwrap_or(false);
-
-                        println!("Manual RecordToggle clicked (current state: {}) - UI continues immediately", is_currently_recording);
-
-                        if let Some(sender) = &self.manual_session_sender {
-                            let sender = sender.clone();
-                            // ASYNC: Send command without blocking UI thread
-                            tokio::spawn(async move {
-                                let command = if is_currently_recording {
-                                    speechcore::ManualSessionCommand::StopSession {
-                                        responder: None,
-                                    }
-                                } else {
-                                    speechcore::ManualSessionCommand::StartSession {
-                                        responder: None,
-                                    }
-                                };
-
-                                if let Err(e) = sender.send(command).await {
-                                    eprintln!("Failed to send manual session command: {}", e);
-                                } else {
-                                    println!(
-                                        "Manual session command sent successfully (background)"
-                                    );
-                                }
-                            });
-                        } else {
-                            eprintln!("Manual session sender not available");
-                        }
-                        // UI thread continues immediately - manual session processor handles the command
+                    ButtonType::Pause | ButtonType::Play | ButtonType::RecordToggle => {
+                        self.send_toggle();
                     }
                     ButtonType::Accept => {
                         // Accept functionality is now handled by RecordToggle button
@@ -284,16 +249,10 @@ impl EventHandler {
                         // UI thread continues immediately - transcription system handles mode switch
                     }
                     ButtonType::MagicMode => {
-                        // Toggle magic mode active state (LFM enhancement)
-                        button_manager.toggle_magic_mode();
-                        let new_state = button_manager.is_magic_mode_active();
-                        if let Some(magic_mode) = &self.magic_mode_enabled {
-                            magic_mode.store(new_state, Ordering::Relaxed);
+                        // The app flips the flag and saves it; the button follows the flag.
+                        if let Some(app_tx) = &self.app_tx {
+                            let _ = app_tx.send(crate::ipc::AppCommand::ToggleMagicMode);
                         }
-                        println!(
-                            "Magic mode toggled: now {}",
-                            if new_state { "ON" } else { "OFF" }
-                        );
                     }
                     ButtonType::Settings => {
                         self.settings_requested.set(true);
@@ -319,7 +278,7 @@ mod tests {
     use super::*;
 
     fn handler() -> EventHandler {
-        EventHandler::new(None, None, None, Arc::new(AtomicU8::new(0)))
+        EventHandler::new(None, None, None, Arc::new(AtomicU8::new(0)), None)
     }
 
     #[test]

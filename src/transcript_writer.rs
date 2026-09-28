@@ -12,7 +12,12 @@ pub fn append_to_transcript_history(
         return Ok(());
     }
 
-    let path = Path::new(history_path);
+    // Users write "~/..." in the config; the shell never expands it here.
+    let expanded = match (history_path.strip_prefix("~/"), std::env::var_os("HOME")) {
+        (Some(rest), Some(home)) => Path::new(&home).join(rest),
+        _ => Path::new(history_path).to_path_buf(),
+    };
+    let path = expanded.as_path();
     let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
     let entry = format!("[{}] {}\n", timestamp, text.trim());
 

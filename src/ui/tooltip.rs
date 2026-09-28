@@ -62,6 +62,13 @@ enum TooltipState {
     },
 }
 
+impl Tooltip {
+    /// Whether a tooltip is waiting to show or showing, so frames must keep coming.
+    pub fn is_active(&self) -> bool {
+        !matches!(self.state, TooltipState::Hidden)
+    }
+}
+
 pub struct Tooltip {
     render_pipeline: RenderPipeline,
     vertex_buffer: wgpu::Buffer,
@@ -217,23 +224,8 @@ impl Tooltip {
             ButtonType::Settings,
         ] {
             let text = Self::get_tooltip_text(button_type);
-            let (width, height) =
-                Self::calculate_text_dimensions(text, TOOLTIP_FONT_SIZE, &mut font_system);
-            text_dimensions.insert(button_type, (width, height));
-
-            use glyphon::{Attrs, Buffer, Family, Metrics, Shaping};
-            let line_height = TOOLTIP_FONT_SIZE * TOOLTIP_LINE_HEIGHT_MULTIPLIER;
-            let metrics = Metrics::new(TOOLTIP_FONT_SIZE, line_height);
-            let mut buffer = Buffer::new(&mut font_system, metrics);
-            let tooltip_width = width + TOOLTIP_PADDING_X * 2.0;
-            let tooltip_height = height + TOOLTIP_PADDING_Y * 2.0;
-            buffer.set_size(&mut font_system, Some(tooltip_width), Some(tooltip_height));
-            buffer.set_text(
-                &mut font_system,
-                text,
-                &Attrs::new().family(Family::SansSerif),
-                Shaping::Advanced,
-            );
+            let (dimensions, buffer) = Self::shape_tooltip(text, &mut font_system);
+            text_dimensions.insert(button_type, dimensions);
             cached_buffers.insert(button_type, buffer);
         }
 
@@ -254,6 +246,41 @@ impl Tooltip {
             _cache: cache,
             viewport,
         }
+    }
+
+    /// Names the bound hotkey in the Record tooltip, e.g. "Record (Super+\)".
+    pub fn set_record_shortcut(&mut self, trigger: Option<&str>) {
+        let text = match trigger {
+            Some(trigger) => format!("Record ({trigger})"),
+            None => Self::get_tooltip_text(ButtonType::RecordToggle).to_string(),
+        };
+        let (dimensions, buffer) = Self::shape_tooltip(&text, &mut self.font_system);
+        self.text_dimensions
+            .insert(ButtonType::RecordToggle, dimensions);
+        self.cached_buffers.insert(ButtonType::RecordToggle, buffer);
+    }
+
+    /// Size and shaped text of one tooltip.
+    fn shape_tooltip(
+        text: &str,
+        font_system: &mut glyphon::FontSystem,
+    ) -> ((f32, f32), glyphon::Buffer) {
+        use glyphon::{Attrs, Buffer, Family, Metrics, Shaping};
+
+        let (width, height) = Self::calculate_text_dimensions(text, TOOLTIP_FONT_SIZE, font_system);
+        let line_height = TOOLTIP_FONT_SIZE * TOOLTIP_LINE_HEIGHT_MULTIPLIER;
+        let metrics = Metrics::new(TOOLTIP_FONT_SIZE, line_height);
+        let mut buffer = Buffer::new(font_system, metrics);
+        let tooltip_width = width + TOOLTIP_PADDING_X * 2.0;
+        let tooltip_height = height + TOOLTIP_PADDING_Y * 2.0;
+        buffer.set_size(font_system, Some(tooltip_width), Some(tooltip_height));
+        buffer.set_text(
+            font_system,
+            text,
+            &Attrs::new().family(Family::SansSerif),
+            Shaping::Advanced,
+        );
+        ((width, height), buffer)
     }
 
     /// Get tooltip text for a button type

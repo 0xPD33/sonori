@@ -301,26 +301,18 @@ impl LoadingAnimation {
             (_, ProcessingState::Loading) => "Loading model...",
 
             // Real-time mode messages
-            (TranscriptionMode::RealTime, ProcessingState::Idle) => {
-                "Press Space to start • Ready to transcribe"
-            }
-            (TranscriptionMode::RealTime, ProcessingState::Paused) => {
-                "Paused • Press Space to resume"
-            }
+            (TranscriptionMode::RealTime, ProcessingState::Idle) => "Ready to transcribe",
+            (TranscriptionMode::RealTime, ProcessingState::Paused) => "Paused",
             (TranscriptionMode::RealTime, ProcessingState::Transcribing) => "Transcribing...",
 
             // Manual mode messages
-            (TranscriptionMode::Manual, ProcessingState::Idle) => "Press Space to record • Ready",
+            (TranscriptionMode::Manual, ProcessingState::Idle) => "Ready",
             (TranscriptionMode::Manual, ProcessingState::Transcribing) => "Transcribing...",
-            (TranscriptionMode::Manual, ProcessingState::Completed) => {
-                "Complete • Press Space for new recording"
-            }
+            (TranscriptionMode::Manual, ProcessingState::Completed) => "Complete",
             (TranscriptionMode::Manual, ProcessingState::Error) => {
                 "Transcription failed • Try again"
             }
-            (TranscriptionMode::Manual, ProcessingState::Paused) => {
-                "Paused • Press Space to resume"
-            }
+            (TranscriptionMode::Manual, ProcessingState::Paused) => "Paused",
 
             // Fallback
             _ => "Ready",

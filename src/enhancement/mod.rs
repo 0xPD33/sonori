@@ -218,13 +218,23 @@ async fn download_enhancement_gguf(model: &str) -> Result<PathBuf, EnhancementEr
     let url = format!("https://huggingface.co/{repo}/resolve/main/{filename}");
     println!("Downloading Sonori Magic Mode model from: {url}");
 
-    let response = reqwest::get(&url)
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .read_timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| EnhancementError::InferenceError(format!("HTTP client failed: {e}")))?;
+    let response = client
+        .get(&url)
+        .send()
         .await
         .map_err(|e| EnhancementError::InferenceError(format!("download request failed: {e}")))?
         .error_for_status()
         .map_err(|e| EnhancementError::InferenceError(format!("download failed: {e}")))?;
 
-    let mut file = tokio::fs::File::create(&output_path)
+    // Download beside the target and rename at the end, so an interrupted
+    // download never looks like a complete model.
+    let partial_path = output_path.with_extension("gguf.part");
+    let mut file = tokio::fs::File::create(&partial_path)
         .await
         .map_err(EnhancementError::IoError)?;
     let mut stream = response.bytes_stream();
@@ -236,6 +246,11 @@ async fn download_enhancement_gguf(model: &str) -> Result<PathBuf, EnhancementEr
             .await
             .map_err(EnhancementError::IoError)?;
     }
+    file.flush().await.map_err(EnhancementError::IoError)?;
+    drop(file);
+    tokio::fs::rename(&partial_path, &output_path)
+        .await
+        .map_err(EnhancementError::IoError)?;
 
     Ok(output_path)
 }

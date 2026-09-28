@@ -25,4 +25,4 @@ pub mod viewport;
 pub mod widgets;
 pub mod window;
 
-pub use app::{run, run_with_audio_data};
+pub use app::{run_with_audio_data, UiHandles};

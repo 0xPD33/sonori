@@ -9,94 +9,94 @@ use tokio::time::{sleep, Duration};
 use zbus::zvariant::OwnedValue;
 
 use sonori::config::ShortcutMode;
+use sonori::hotkey::{HotkeyState, SharedHotkeyState};
+use sonori::ipc::AppCommand;
 use speechcore::{ManualSessionCommand, TranscriptionMode};
+
+const TOGGLE_ID: &str = "toggle_manual";
+const CANCEL_ID: &str = "cancel_session";
+const PASTE_LAST_ID: &str = "paste_last";
+const MAGIC_MODE_ID: &str = "toggle_magic_mode";
 
 /// Manages global shortcuts through the XDG Desktop Portal.
 ///
-/// This struct keeps the portal session alive and handles:
-/// - Session lifecycle management
-/// - Shortcut binding (one attempt only - respects user declining permission)
-/// - Shortcut activation with token extraction
-/// - Portal signal monitoring (Activated, Deactivated, ShortcutsChanged)
-/// - Clean shutdown
+/// The session binds once. It binds again only when the portal drops a session
+/// that worked (e.g. the portal restarted), so a declined dialog is never repeated.
 pub struct GlobalShortcutsManager {
     accelerator: String,
     shortcut_mode: ShortcutMode,
     manual_session_tx: mpsc::Sender<ManualSessionCommand>,
+    app_tx: mpsc::UnboundedSender<AppCommand>,
     transcription_mode: Arc<AtomicU8>,
-    recording: Arc<AtomicBool>,
     running: Arc<AtomicBool>,
+    state: SharedHotkeyState,
 }
 
 impl GlobalShortcutsManager {
-    /// Create a new global shortcuts manager
-    pub fn new(
-        accelerator: String,
-        shortcut_mode: ShortcutMode,
-        manual_session_tx: mpsc::Sender<ManualSessionCommand>,
-        transcription_mode: Arc<AtomicU8>,
-        recording: Arc<AtomicBool>,
-        running: Arc<AtomicBool>,
-    ) -> Self {
-        Self {
-            accelerator,
-            shortcut_mode,
-            manual_session_tx,
-            transcription_mode,
-            recording,
-            running,
+    /// Run the global shortcuts listener
+    pub async fn run(self) -> Result<()> {
+        loop {
+            *self.state.write() = HotkeyState::Pending;
+            match self.run_session().await {
+                Ok(true) => {
+                    eprintln!("Global shortcuts portal session ended; binding again");
+                    sleep(Duration::from_secs(2)).await;
+                }
+                Ok(false) => return Ok(()),
+                Err(e) => {
+                    *self.state.write() = HotkeyState::Unavailable {
+                        reason: format!("{e:#}"),
+                    };
+                    return Err(e);
+                }
+            }
         }
     }
 
-    /// Run the global shortcuts listener
-    pub async fn run(self) -> Result<()> {
-        // Try once to bind shortcuts - no retries
-        // If the user declines the portal dialog, we shouldn't keep asking them
-        self.run_session().await
-    }
-
-    /// Run a single session with the portal
-    async fn run_session(&self) -> Result<()> {
+    /// Runs one portal session. Returns whether the portal ended it (bind again)
+    /// rather than the app shutting down.
+    async fn run_session(&self) -> Result<bool> {
         let normalized_accelerator = normalize_accelerator_for_portal(&self.accelerator);
 
         let gs = GlobalShortcuts::new()
             .await
-            .context("Failed to connect to GlobalShortcuts portal")?;
+            .context("no GlobalShortcuts portal")?;
 
         // Create a session - this must be kept alive for the shortcuts to work
         let session = gs
             .create_session()
             .await
-            .context("Failed to create global shortcuts session")?;
+            .context("could not create a portal session")?;
 
-        // Bind our shortcut
-        let shortcut = NewShortcut::new("toggle_manual", "Toggle Manual Transcription Session")
-            .preferred_trigger(Some(normalized_accelerator.as_str()));
+        let shortcuts = [
+            NewShortcut::new(TOGGLE_ID, "Toggle Manual Transcription Session")
+                .preferred_trigger(Some(normalized_accelerator.as_str())),
+            NewShortcut::new(CANCEL_ID, "Cancel Transcription Session"),
+            NewShortcut::new(PASTE_LAST_ID, "Paste Last Transcript"),
+            NewShortcut::new(MAGIC_MODE_ID, "Toggle Magic Mode"),
+        ];
 
-        let request = gs
-            .bind_shortcuts(&session, &[shortcut], None)
+        let response = gs
+            .bind_shortcuts(&session, &shortcuts, None)
             .await
-            .context("Failed to bind shortcuts")?;
-
-        let response = request
+            .context("the portal refused the bind request")?
             .response()
-            .context("Failed to get bind shortcuts response")?;
+            .context("the bind request was declined")?;
 
-        // Check what was actually bound
-        let shortcuts = response.shortcuts();
-
-        let bound_exists = shortcuts.iter().any(|s| s.id() == "toggle_manual");
-
-        if !bound_exists {
-            // User likely declined the portal dialog or binding was rejected
+        let Some(bound) = response.shortcuts().iter().find(|s| s.id() == TOGGLE_ID) else {
             eprintln!(
                 "Shortcut '{}' was not bound by portal - user may have declined permission",
                 normalized_accelerator
             );
-            return Err(anyhow::anyhow!(
-                "Shortcut binding was not approved by user or portal"
-            ));
-        }
+            return Err(anyhow::anyhow!("the shortcut was not approved"));
+        };
+        let trigger = if bound.trigger_description().is_empty() {
+            normalized_accelerator.clone()
+        } else {
+            bound.trigger_description().to_string()
+        };
+        println!("Global shortcut bound: {}", trigger);
+        *self.state.write() = HotkeyState::Bound { trigger };
 
         // Listen to all portal signals
         let mut activated_stream = gs
@@ -109,42 +109,44 @@ impl GlobalShortcutsManager {
             .await
             .context("Failed to subscribe to Deactivated signal")?;
 
-        let mut shortcuts_changed_stream = gs
-            .receive_shortcuts_changed()
-            .await
-            .context("Failed to subscribe to ShortcutsChanged signal")?;
-
-        // Process signals concurrently - keep session alive until app stops running
-        loop {
+        // Process signals concurrently - keep session alive until app stops running.
+        // A stream that ends means the portal went away.
+        let portal_ended = loop {
             if !self.running.load(Ordering::Relaxed) {
-                break;
+                break false;
             }
 
             tokio::select! {
-                Some(activated) = activated_stream.next() => {
-                    self.handle_activated(activated).await;
-                }
-                Some(deactivated) = deactivated_stream.next() => {
-                    self.handle_deactivated(deactivated).await;
-                }
-                Some(changed) = shortcuts_changed_stream.next() => {
-                    self.handle_shortcuts_changed(changed).await;
-                }
+                activated = activated_stream.next() => match activated {
+                    Some(activated) => self.handle_activated(activated).await,
+                    None => break true,
+                },
+                deactivated = deactivated_stream.next() => match deactivated {
+                    Some(deactivated) => self.handle_deactivated(deactivated).await,
+                    None => break true,
+                },
                 _ = sleep(Duration::from_millis(100)) => {
                     // Periodic wake-up to check shutdown flag
                 }
             }
-        }
+        };
 
         // Keep the session alive until we exit
         drop(session);
 
-        Ok(())
+        Ok(portal_ended)
     }
 
     /// Handle shortcut activation (key pressed)
     async fn handle_activated(&self, activated: ashpd::desktop::global_shortcuts::Activated) {
-        if activated.shortcut_id() != "toggle_manual" {
+        let app_command = match activated.shortcut_id() {
+            TOGGLE_ID | CANCEL_ID => None,
+            PASTE_LAST_ID => Some(AppCommand::PasteLast),
+            MAGIC_MODE_ID => Some(AppCommand::ToggleMagicMode),
+            _ => return,
+        };
+        if let Some(command) = app_command {
+            let _ = self.app_tx.send(command);
             return;
         }
 
@@ -159,20 +161,11 @@ impl GlobalShortcutsManager {
             return;
         }
 
-        let command = match self.shortcut_mode {
-            ShortcutMode::Toggle => {
-                // Toggle: start if not recording, stop if recording
-                let is_recording = self.recording.load(Ordering::Relaxed);
-                if is_recording {
-                    ManualSessionCommand::StopSession { responder: None }
-                } else {
-                    ManualSessionCommand::StartSession { responder: None }
-                }
-            }
-            ShortcutMode::PushToTalk => {
-                // Push-to-talk: always start on press
-                ManualSessionCommand::StartSession { responder: None }
-            }
+        let command = match (activated.shortcut_id(), self.shortcut_mode) {
+            (CANCEL_ID, _) => ManualSessionCommand::CancelSession { responder: None },
+            (_, ShortcutMode::Toggle) => ManualSessionCommand::Toggle,
+            // Push-to-talk: always start on press
+            (_, ShortcutMode::PushToTalk) => ManualSessionCommand::StartSession { responder: None },
         };
 
         if let Err(e) = self.manual_session_tx.send(command).await {
@@ -182,7 +175,7 @@ impl GlobalShortcutsManager {
 
     /// Handle shortcut deactivation (key released)
     async fn handle_deactivated(&self, deactivated: ashpd::desktop::global_shortcuts::Deactivated) {
-        if deactivated.shortcut_id() != "toggle_manual" {
+        if deactivated.shortcut_id() != TOGGLE_ID {
             return;
         }
 
@@ -201,14 +194,6 @@ impl GlobalShortcutsManager {
         if let Err(e) = self.manual_session_tx.send(command).await {
             eprintln!("Failed to send stop command: {}", e);
         }
-    }
-
-    /// Handle shortcuts changed notification
-    async fn handle_shortcuts_changed(
-        &self,
-        _changed: ashpd::desktop::global_shortcuts::ShortcutsChanged,
-    ) {
-        // Nothing to do when shortcuts change
     }
 }
 
@@ -263,23 +248,24 @@ fn normalize_accelerator_for_portal(accelerator: &str) -> String {
     normalized
 }
 
-/// Legacy function for backwards compatibility - spawns the manager in a task
 pub async fn run_listener(
     accelerator: &str,
     shortcut_mode: ShortcutMode,
     manual_session_tx: mpsc::Sender<ManualSessionCommand>,
-    transcription_mode_ref: Arc<std::sync::atomic::AtomicU8>,
-    recording: Arc<AtomicBool>,
+    app_tx: mpsc::UnboundedSender<AppCommand>,
+    transcription_mode: Arc<AtomicU8>,
     running: Arc<AtomicBool>,
+    state: SharedHotkeyState,
 ) -> Result<()> {
-    let manager = GlobalShortcutsManager::new(
-        accelerator.to_string(),
+    GlobalShortcutsManager {
+        accelerator: accelerator.to_string(),
         shortcut_mode,
         manual_session_tx,
-        transcription_mode_ref,
-        recording,
+        app_tx,
+        transcription_mode,
         running,
-    );
-
-    manager.run().await
+        state,
+    }
+    .run()
+    .await
 }

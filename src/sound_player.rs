@@ -22,11 +22,7 @@ impl SoundPlayer {
         let volume = Arc::new(Mutex::new(config.volume));
 
         // Use a dedicated blocking thread for sound playback (CPAL streams are not Send)
-        std::thread::spawn(move || {
-            if let Err(e) = Self::run(sound_rx) {
-                eprintln!("Sound playback unavailable: {}", e);
-            }
-        });
+        std::thread::spawn(move || Self::run(sound_rx));
 
         Ok(Arc::new(Self {
             sound_tx,
@@ -56,7 +52,43 @@ impl SoundPlayer {
     // idle. Per-cue streams lost the cue when the sink (Bluetooth) had more latency than
     // the stream lifetime, because closing an ALSA PCM discards unplayed audio.
     // Upgrade path: pause the stream after N seconds of silence if idle CPU matters.
-    fn run(sound_rx: mpsc::Receiver<(SoundType, f32)>) -> Result<()> {
+    //
+    // A stream that reports an error (device unplugged, audio server restart) is
+    // rebuilt on the next cue, as is one that could not open at all.
+    fn run(sound_rx: mpsc::Receiver<(SoundType, f32)>) {
+        let failed = Arc::new(AtomicBool::new(false));
+        // Open at startup, so a slow sink is awake before the first cue.
+        let mut output = Self::open_output(failed.clone())
+            .map_err(|e| eprintln!("Sound playback unavailable: {}", e))
+            .ok();
+
+        while let Ok((sound_type, volume)) = sound_rx.recv() {
+            if failed.swap(false, Ordering::Relaxed) {
+                output = None;
+            }
+            if output.is_none() {
+                match Self::open_output(failed.clone()) {
+                    Ok(opened) => output = Some(opened),
+                    Err(e) => {
+                        eprintln!("Sound playback unavailable: {}", e);
+                        continue;
+                    }
+                }
+            }
+            if let Some(output) = &output {
+                let mut pending = output.queue.lock();
+                pending.extend(
+                    output
+                        .generator
+                        .generate(sound_type)
+                        .iter()
+                        .map(|s| s * volume),
+                );
+            }
+        }
+    }
+
+    fn open_output(failed: Arc<AtomicBool>) -> Result<CueOutput> {
         let host = cpal::default_host();
         let device = host
             .default_output_device()
@@ -76,25 +108,32 @@ impl SoundPlayer {
                 // try_lock: never block the audio thread; a missed period plays silence.
                 let mut pending = queue_cb.try_lock();
                 for frame in data.chunks_mut(channels) {
-                    let sample = pending
-                        .as_mut()
-                        .and_then(|q| q.pop_front())
-                        .unwrap_or(0.0);
+                    let sample = pending.as_mut().and_then(|q| q.pop_front()).unwrap_or(0.0);
                     frame.fill(sample);
                 }
             },
-            |err| eprintln!("Audio stream error: {}", err),
+            move |err| {
+                if !failed.swap(true, Ordering::Relaxed) {
+                    eprintln!("Audio stream error: {}; reopening on the next cue", err);
+                }
+            },
             None,
         )?;
         stream.play()?;
 
-        while let Ok((sound_type, volume)) = sound_rx.recv() {
-            let mut pending = queue.lock();
-            pending.extend(generator.generate(sound_type).iter().map(|s| s * volume));
-        }
-
-        Ok(())
+        Ok(CueOutput {
+            _stream: stream,
+            queue,
+            generator,
+        })
     }
+}
+
+/// An open output stream and the queue its callback plays from.
+struct CueOutput {
+    _stream: cpal::Stream,
+    queue: Arc<Mutex<VecDeque<f32>>>,
+    generator: SoundGenerator,
 }
 
 impl FeedbackSink for SoundPlayer {

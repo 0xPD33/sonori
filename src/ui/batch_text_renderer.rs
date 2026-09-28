@@ -35,11 +35,9 @@ impl BatchTextRenderer {
         size: PhysicalSize<u32>,
         surface_format: wgpu::TextureFormat,
     ) -> Self {
-        let mut font_system = FontSystem::new();
+        // Parses all system fonts; slow, and far slower in debug builds.
+        let font_system = FontSystem::new();
         let swash_cache = SwashCache::new();
-
-        // Keep settings/menu text on the same system font path as transcript text.
-        font_system.db_mut().load_system_fonts();
 
         let cache_ref = Cache::new(&device);
         let viewport = Viewport::new(&device, &cache_ref);

@@ -47,8 +47,44 @@ pub fn paste_via_keystroke(paste_shortcut: &str) -> Result<(), String> {
     }
 }
 
+/// Type text into the focused window (wtype → dotool fallback chain). The text
+/// goes over stdin, never argv, for the same reason as `copy_to_clipboard`.
+pub fn type_text(text: &str) -> Result<(), String> {
+    // Typing takes a few ms per character, so long text needs a longer deadline.
+    let timeout = HELPER_TIMEOUT + Duration::from_millis(10 * text.chars().count() as u64);
+    let mut wtype = Command::new("wtype");
+    wtype.arg("-");
+    match run_helper_with_timeout(wtype, "wtype", Some(text.as_bytes()), timeout) {
+        Ok(()) => Ok(()),
+        Err(wtype_err) => {
+            // dotool reads one command per line, so each newline becomes an Enter.
+            let script = text
+                .split('\n')
+                .map(|line| format!("type {line}\n"))
+                .collect::<Vec<_>>()
+                .join("key enter\n");
+            run_helper_with_timeout(
+                Command::new("dotool"),
+                "dotool",
+                Some(script.as_bytes()),
+                timeout,
+            )
+            .map_err(|dotool_err| format!("wtype ({wtype_err}); dotool ({dotool_err})"))
+        }
+    }
+}
+
 /// Spawn a helper, optionally feed it stdin, and wait for it under a deadline.
-fn run_helper(mut cmd: Command, name: &str, stdin_data: Option<&[u8]>) -> Result<(), String> {
+fn run_helper(cmd: Command, name: &str, stdin_data: Option<&[u8]>) -> Result<(), String> {
+    run_helper_with_timeout(cmd, name, stdin_data, HELPER_TIMEOUT)
+}
+
+fn run_helper_with_timeout(
+    mut cmd: Command,
+    name: &str,
+    stdin_data: Option<&[u8]>,
+    timeout: Duration,
+) -> Result<(), String> {
     let stdin_cfg = if stdin_data.is_some() {
         Stdio::piped()
     } else {
@@ -77,7 +113,7 @@ fn run_helper(mut cmd: Command, name: &str, stdin_data: Option<&[u8]>) -> Result
         }
     }
 
-    let status = wait_with_timeout(&mut child, name)?;
+    let status = wait_with_timeout(&mut child, name, timeout)?;
     if status.success() {
         Ok(())
     } else {
@@ -87,8 +123,12 @@ fn run_helper(mut cmd: Command, name: &str, stdin_data: Option<&[u8]>) -> Result
 
 /// ponytail: poll rather than spawn a waiter thread. 10ms granularity is well
 /// under what a paste needs, and these helpers normally exit in single digits.
-fn wait_with_timeout(child: &mut Child, name: &str) -> Result<ExitStatus, String> {
-    let deadline = Instant::now() + HELPER_TIMEOUT;
+fn wait_with_timeout(
+    child: &mut Child,
+    name: &str,
+    timeout: Duration,
+) -> Result<ExitStatus, String> {
+    let deadline = Instant::now() + timeout;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => return Ok(status),
@@ -96,7 +136,7 @@ fn wait_with_timeout(child: &mut Child, name: &str) -> Result<ExitStatus, String
                 if Instant::now() >= deadline {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(format!("{name} timed out after {HELPER_TIMEOUT:?}"));
+                    return Err(format!("{name} timed out after {timeout:?}"));
                 }
                 std::thread::sleep(Duration::from_millis(10));
             }
@@ -131,7 +171,7 @@ mod tests {
             .expect("sleep should be available");
 
         let started = Instant::now();
-        let err = wait_with_timeout(&mut child, "sleep").unwrap_err();
+        let err = wait_with_timeout(&mut child, "sleep", HELPER_TIMEOUT).unwrap_err();
 
         assert!(err.contains("timed out"), "unexpected error: {err}");
         assert!(started.elapsed() < HELPER_TIMEOUT * 2);

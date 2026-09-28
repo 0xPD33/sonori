@@ -6,7 +6,8 @@ use winit::keyboard::{Key, NamedKey};
 use super::batch_text_renderer::{BatchTextRenderer, TextItem};
 use super::widgets::{Select, SelectOption, Slider, Toggle, WidgetRenderer};
 use crate::config::{
-    AppConfig, ShortcutMode, SpectrogramSkin, VadSensitivity, VisualThemePreset, WindowPosition,
+    AppConfig, OutputMode, ShortcutMode, SpectrogramSkin, VadSensitivity, VisualThemePreset,
+    WindowPosition,
 };
 use speechcore::BackendType;
 
@@ -49,6 +50,7 @@ enum DropdownId {
     VadSensitivity,
     ShortcutMode,
     PasteShortcut,
+    OutputMode,
     Vsync,
     VisualTheme,
     SpectrogramSkin,
@@ -94,7 +96,7 @@ pub struct SettingsPanel {
     volume_slider: Slider,
 
     // Behavior tab widgets
-    auto_paste_toggle: Toggle,
+    output_mode_select: Select,
     clear_on_session_toggle: Toggle,
     post_processing_toggle: Toggle,
     typewriter_toggle: Toggle,
@@ -127,6 +129,9 @@ pub struct SettingsPanel {
 
     window_width: u32,
     window_height: u32,
+
+    /// Hotkey state, config path and IPC commands, shown on the Behavior tab.
+    pub info_text: String,
 }
 
 const CONTENT_Y: f32 = 42.0;
@@ -135,6 +140,14 @@ const ROW_HEIGHT: f32 = 26.0;
 const SPACING: f32 = 6.0;
 const APPLY_BUTTON_HEIGHT: f32 = 28.0;
 const TOOLTIP_DELAY_MS: u128 = 150;
+
+fn output_mode_index(mode: OutputMode) -> usize {
+    match mode {
+        OutputMode::Paste => 0,
+        OutputMode::Type => 1,
+        OutputMode::Clipboard => 2,
+    }
+}
 
 fn default_width(window_width: u32) -> f32 {
     window_width as f32 - 28.0
@@ -412,7 +425,28 @@ impl SettingsPanel {
         );
 
         // Behavior tab widgets
-        let auto_paste_toggle = Toggle::new("Auto-paste", true, WIDGET_X, CONTENT_Y, w, ROW_HEIGHT);
+        let output_mode_select = Select::new(
+            "Output",
+            vec![
+                SelectOption {
+                    label: "Paste".into(),
+                    value: "Paste".into(),
+                },
+                SelectOption {
+                    label: "Type".into(),
+                    value: "Type".into(),
+                },
+                SelectOption {
+                    label: "Clipboard only".into(),
+                    value: "Clipboard".into(),
+                },
+            ],
+            0,
+            WIDGET_X,
+            CONTENT_Y,
+            w,
+            ROW_HEIGHT,
+        );
         let clear_on_session_toggle = Toggle::new(
             "Clear on new session",
             true,
@@ -677,7 +711,7 @@ impl SettingsPanel {
             sound_toggle,
             volume_slider,
 
-            auto_paste_toggle,
+            output_mode_select,
             clear_on_session_toggle,
             post_processing_toggle,
             typewriter_toggle,
@@ -705,6 +739,7 @@ impl SettingsPanel {
 
             window_width: size.width,
             window_height: size.height,
+            info_text: String::new(),
         }
     }
 
@@ -742,7 +777,6 @@ impl SettingsPanel {
             || self.english_only_toggle.is_animating()
             || self.gpu_toggle.is_animating()
             || self.sound_toggle.is_animating()
-            || self.auto_paste_toggle.is_animating()
             || self.clear_on_session_toggle.is_animating()
             || self.post_processing_toggle.is_animating()
             || self.typewriter_toggle.is_animating()
@@ -770,6 +804,7 @@ impl SettingsPanel {
             DropdownId::VadSensitivity => &self.vad_sensitivity_select,
             DropdownId::ShortcutMode => &self.shortcut_mode_select,
             DropdownId::PasteShortcut => &self.paste_shortcut_select,
+            DropdownId::OutputMode => &self.output_mode_select,
             DropdownId::Vsync => &self.vsync_select,
             DropdownId::VisualTheme => &self.visual_theme_select,
             DropdownId::SpectrogramSkin => &self.spectrogram_skin_select,
@@ -785,6 +820,7 @@ impl SettingsPanel {
             DropdownId::VadSensitivity => &mut self.vad_sensitivity_select,
             DropdownId::ShortcutMode => &mut self.shortcut_mode_select,
             DropdownId::PasteShortcut => &mut self.paste_shortcut_select,
+            DropdownId::OutputMode => &mut self.output_mode_select,
             DropdownId::Vsync => &mut self.vsync_select,
             DropdownId::VisualTheme => &mut self.visual_theme_select,
             DropdownId::SpectrogramSkin => &mut self.spectrogram_skin_select,
@@ -814,6 +850,8 @@ impl SettingsPanel {
                     Some(DropdownId::ShortcutMode)
                 } else if self.paste_shortcut_select.hit_select_box(x, y) {
                     Some(DropdownId::PasteShortcut)
+                } else if self.output_mode_select.hit_select_box(x, y) {
+                    Some(DropdownId::OutputMode)
                 } else {
                     None
                 }
@@ -894,7 +932,7 @@ impl SettingsPanel {
             || self.vad_sensitivity_select.has_changed()
             || self.sound_toggle.has_changed()
             || self.volume_slider.has_changed()
-            || self.auto_paste_toggle.has_changed()
+            || self.output_mode_select.has_changed()
             || self.clear_on_session_toggle.has_changed()
             || self.post_processing_toggle.has_changed()
             || self.typewriter_toggle.has_changed()
@@ -972,8 +1010,8 @@ impl SettingsPanel {
             }
             SettingsTab::Behavior => {
                 tip!(
-                    self.auto_paste_toggle.y,
-                    "Paste transcript into the focused app"
+                    self.output_mode_select.y,
+                    "Paste, type, or only copy each transcript"
                 );
                 tip!(
                     self.clear_on_session_toggle.y,
@@ -1065,8 +1103,8 @@ impl SettingsPanel {
         self.volume_slider.value = config.sound_config.volume;
 
         // Behavior
-        self.auto_paste_toggle
-            .set_value(config.portal_config.enable_xdg_portal);
+        self.output_mode_select.selected_index =
+            output_mode_index(config.portal_config.output_mode);
         self.clear_on_session_toggle
             .set_value(config.manual_mode_config.clear_on_new_session);
         self.post_processing_toggle
@@ -1167,7 +1205,7 @@ impl SettingsPanel {
         }
         if let Some(_idx) = self.language_select.take_changed() {
             config.general_config.language = self.language_select.selected_value().to_string();
-            needs_backend_reload = true;
+            // Applies without a reload: the app watches the applied config.
             any_changed = true;
         }
         if let Some(val) = self.gpu_toggle.take_changed() {
@@ -1198,8 +1236,12 @@ impl SettingsPanel {
             any_changed = true;
         }
 
-        if let Some(val) = self.auto_paste_toggle.take_changed() {
-            config.portal_config.enable_xdg_portal = val;
+        if let Some(idx) = self.output_mode_select.take_changed() {
+            config.portal_config.output_mode = match idx {
+                1 => OutputMode::Type,
+                2 => OutputMode::Clipboard,
+                _ => OutputMode::Paste,
+            };
             any_changed = true;
         }
         if let Some(val) = self.clear_on_session_toggle.take_changed() {
@@ -1320,7 +1362,7 @@ impl SettingsPanel {
         self.vad_sensitivity_select.clear_changed();
         self.sound_toggle.clear_changed();
         self.volume_slider.clear_changed();
-        self.auto_paste_toggle.clear_changed();
+        self.output_mode_select.clear_changed();
         self.clear_on_session_toggle.clear_changed();
         self.post_processing_toggle.clear_changed();
         self.typewriter_toggle.clear_changed();
@@ -1417,10 +1459,10 @@ impl SettingsPanel {
 
         // Behavior tab
         y = CONTENT_Y;
-        self.auto_paste_toggle.x = x;
-        self.auto_paste_toggle.y = y;
-        self.auto_paste_toggle.width = w;
-        self.auto_paste_toggle.height = ROW_HEIGHT;
+        self.output_mode_select.x = x;
+        self.output_mode_select.y = y;
+        self.output_mode_select.width = w;
+        self.output_mode_select.height = ROW_HEIGHT;
         y += step;
         self.clear_on_session_toggle.x = x;
         self.clear_on_session_toggle.y = y;
@@ -1670,7 +1712,7 @@ impl SettingsPanel {
                 if !widget_clicked && self.handle_select_click(DropdownId::PasteShortcut, x, y) {
                     widget_clicked = true;
                 }
-                if !widget_clicked && self.auto_paste_toggle.handle_click(x, y) {
+                if !widget_clicked && self.handle_select_click(DropdownId::OutputMode, x, y) {
                     widget_clicked = true;
                 }
                 if !widget_clicked && self.clear_on_session_toggle.handle_click(x, y) {
@@ -1739,6 +1781,7 @@ impl SettingsPanel {
             SettingsTab::Behavior => {
                 self.shortcut_mode_select.handle_mouse_move(x, y);
                 self.paste_shortcut_select.handle_mouse_move(x, y);
+                self.output_mode_select.handle_mouse_move(x, y);
             }
             SettingsTab::Display => {
                 self.vsync_select.handle_mouse_move(x, y);
@@ -1781,7 +1824,6 @@ impl SettingsPanel {
         self.english_only_toggle.update_animation();
         self.gpu_toggle.update_animation();
         self.sound_toggle.update_animation();
-        self.auto_paste_toggle.update_animation();
         self.clear_on_session_toggle.update_animation();
         self.post_processing_toggle.update_animation();
         self.typewriter_toggle.update_animation();
@@ -1814,6 +1856,7 @@ impl SettingsPanel {
         self.vad_sensitivity_select.set_expanded(false);
         self.shortcut_mode_select.set_expanded(false);
         self.paste_shortcut_select.set_expanded(false);
+        self.output_mode_select.set_expanded(false);
         self.vsync_select.set_expanded(false);
         self.visual_theme_select.set_expanded(false);
         self.spectrogram_skin_select.set_expanded(false);
@@ -1878,9 +1921,9 @@ impl SettingsPanel {
                 self.volume_slider.mark_changed();
             }
             SettingsTab::Behavior => {
-                self.auto_paste_toggle
-                    .set_value(defaults.portal_config.enable_xdg_portal);
-                self.auto_paste_toggle.mark_changed();
+                self.output_mode_select.selected_index =
+                    output_mode_index(defaults.portal_config.output_mode);
+                self.output_mode_select.mark_changed();
                 self.clear_on_session_toggle
                     .set_value(defaults.manual_mode_config.clear_on_new_session);
                 self.clear_on_session_toggle.mark_changed();
@@ -2333,12 +2376,12 @@ impl SettingsPanel {
                     encoder,
                     view,
                     queue,
-                    row_y(self.auto_paste_toggle.y),
+                    row_y(self.output_mode_select.y),
                     window_width,
                     window_height,
                 );
-                self.auto_paste_toggle.render_at(
-                    row_y(self.auto_paste_toggle.y),
+                self.output_mode_select.render_at(
+                    row_y(self.output_mode_select.y),
                     encoder,
                     view,
                     &self.widget_renderer,
@@ -2680,6 +2723,17 @@ impl SettingsPanel {
                     scale: 1.0,
                     color: text_color,
                     max_width: btn_width,
+                });
+            }
+
+            if self.active_tab == SettingsTab::Behavior && !self.info_text.is_empty() {
+                text_items.push(TextItem {
+                    text: self.info_text.clone(),
+                    x: WIDGET_X,
+                    y: buttons_y + APPLY_BUTTON_HEIGHT + 14.0,
+                    scale: 1.0,
+                    color: [0.55, 0.55, 0.6, 1.0],
+                    max_width: w,
                 });
             }
         }

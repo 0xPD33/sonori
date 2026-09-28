@@ -23,6 +23,9 @@ pub struct TextRenderer {
     _cache_ref: Cache,
     viewport: Viewport,
     cached_layout: Option<CachedTextLayout>,
+    /// Last `measure_text` input and result; the status bar measures the same
+    /// text every frame, and reshaping it each time costs more than drawing it.
+    cached_measure: Option<(String, f32, f32)>,
 }
 
 struct CachedTextLayout {
@@ -41,11 +44,9 @@ impl TextRenderer {
         surface_format: wgpu::TextureFormat,
     ) -> Self {
         // Create font system and cache
+        // Parses all system fonts; slow, and far slower in debug builds.
         let mut font_system = FontSystem::new();
         let cache = SwashCache::new();
-
-        // Load system fonts so SansSerif resolves the same way as the rest of the UI.
-        font_system.db_mut().load_system_fonts();
 
         // Create a cache for the TextAtlas
         let cache_ref = Cache::new(&device);
@@ -83,6 +84,7 @@ impl TextRenderer {
             _cache_ref: cache_ref,
             viewport,
             cached_layout: None,
+            cached_measure: None,
         }
     }
 
@@ -106,12 +108,18 @@ impl TextRenderer {
             },
         );
         self.cached_layout = None;
+        self.cached_measure = None;
     }
 
     /// Measure the rendered width of text at a given scale (single line, no wrapping)
     pub fn measure_text(&mut self, text: &str, scale: f32) -> f32 {
         if text.is_empty() {
             return 0.0;
+        }
+        if let Some((cached_text, cached_scale, width)) = &self.cached_measure {
+            if cached_text == text && *cached_scale == scale {
+                return *width;
+            }
         }
         self.cached_layout = None;
         self.buffer.lines.clear();
@@ -126,11 +134,14 @@ impl TextRenderer {
             Shaping::Advanced,
         );
         self.buffer.shape_until_scroll(&mut self.font_system, true);
-        self.buffer
+        let width = self
+            .buffer
             .layout_runs()
             .map(|run| run.line_w)
             .next()
-            .unwrap_or(0.0)
+            .unwrap_or(0.0);
+        self.cached_measure = Some((text.to_string(), scale, width));
+        width
     }
 
     /// Render text at a specific position with proper wrapping and clipping
