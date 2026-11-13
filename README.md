@@ -87,20 +87,30 @@ Real-time or on-demand transcription, entirely on your device.
 
 ## Installation
 
+Prebuilt files are on the [Releases page](https://github.com/0xPD33/sonori/releases/latest). Before each release, CI starts both of them on Ubuntu 24.04, Debian stable, Fedora, and Arch.
+
+They bring ONNX Runtime, PortAudio, OpenSSL 3, and JACK with them. Your system must supply:
+- a Vulkan driver for your GPU and the Vulkan loader (`libvulkan1`, `vulkan-loader`, or `vulkan-icd-loader`)
+- ALSA (`libasound2t64`, `alsa-lib`), which every desktop install has
+- `wl-clipboard`, and `wtype` or `dotool`, for copy and auto-paste
+
 ### AppImage (Recommended)
 
 ```bash
-# Download from GitHub Releases
 chmod +x Sonori-*-x86_64.AppImage
 ./Sonori-*-x86_64.AppImage
 ```
+
+An AppImage mounts itself with FUSE 2 (`libfuse2t64` on Debian/Ubuntu, `fuse-libs` on Fedora, `fuse2` on Arch). Without it, start the AppImage with `--appimage-extract-and-run`.
 
 ### Release Tarball
 
 ```bash
 tar -xzf sonori-*-x86_64-linux.tar.gz
-./sonori-*/sonori
+./sonori-*-x86_64-linux/sonori
 ```
+
+The tarball also holds the desktop file and the icons in `share/`.
 
 ### NixOS
 
@@ -109,7 +119,7 @@ tar -xzf sonori-*-x86_64-linux.tar.gz
 nix run github:0xPD33/sonori
 
 # Install to profile
-nix profile install github:0xPD33/sonori
+nix profile add github:0xPD33/sonori
 ```
 
 Or add to your flake:
@@ -122,11 +132,11 @@ Or add to your flake:
 
 ### Building from Source
 
-Sonori depends on [**speechcore**](https://github.com/0xPD33/speechcore) (the shared speech-to-text runtime), pulled in automatically as a git dependency by Cargo — no manual checkout needed. The system dependencies below cover both crates.
+Sonori depends on [**speechcore**](https://github.com/0xPD33/speechcore) (the shared speech-to-text runtime). Cargo fetches it as a git dependency, so you need no manual checkout. The system dependencies below cover both crates.
 
-**Prerequisites:** [Rust](https://rustup.rs/) and distribution-specific dependencies.
+**Prerequisites:** [rustup](https://rustup.rs/). It installs the Rust version that `rust-toolchain.toml` pins.
 
-**Debian/Ubuntu, Fedora, Arch, and their derivatives:**
+**Debian/Ubuntu, Fedora, Arch, and their derivatives (Omarchy, Manjaro, Pop!_OS, ...):**
 
 ```bash
 git clone https://github.com/0xPD33/sonori
@@ -137,13 +147,14 @@ cargo build --release
 ./target/release/sonori
 ```
 
-CI builds with this script on Ubuntu 24.04, Debian stable, Fedora, and Arch. On other distros, install the equivalents of the packages that the script lists.
+CI builds with this script on Ubuntu 24.04, Debian stable, Fedora, and Arch, and repeats the build every week. On other distros, install the equivalents of the packages that the script lists.
 
 <details>
 <summary><strong>NixOS</strong></summary>
 
 ```bash
 nix develop  # All dependencies included
+cargo build --release
 ```
 </details>
 
@@ -151,7 +162,7 @@ nix develop  # All dependencies included
 
 **NixOS:** Automatic via Nix flake.
 
-**Other distributions:**
+**Other distributions:** run this from a source checkout. It installs the desktop file, the AppStream metadata, and the icons. The desktop file starts `sonori`, so put the binary on your `PATH`.
 ```bash
 ./install-desktop.sh --user        # User installation (recommended)
 sudo ./install-desktop.sh --system # System-wide installation
@@ -248,8 +259,7 @@ Sonori uses `zwlr_layer_shell_v1` for the transparent overlay.
 
 Required for UI rendering and optional GPU-accelerated transcription.
 
-- Install Vulkan libraries: `vulkan-loader`, `vulkan-headers`
-- Vendor-specific packages may be needed (e.g., `mesa-vulkan-drivers` on Ubuntu)
+- Install the Vulkan loader and the driver for your GPU: `mesa-vulkan-drivers` on Debian/Ubuntu and Fedora; `vulkan-radeon`, `vulkan-intel`, or `nvidia-utils` on Arch
 - Test with: `vulkaninfo` or `vkcube`
 - For GPU transcription: enable `gpu_enabled = true` in `[backend_config]`
 
