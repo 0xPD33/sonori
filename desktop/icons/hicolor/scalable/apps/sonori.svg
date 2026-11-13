@@ -1,36 +1,66 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Placeholder icon for Sonori - Replace with your own design -->
-<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="256" height="256" viewBox="0 0 256 256">
+  <title>Sonori</title>
+  <desc>A polished silver spectrogram on a frosted white glass tile.</desc>
   <defs>
-    <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#4A90E2;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#357ABD;stop-opacity:1" />
+    <linearGradient id="glass" x1="48" y1="16" x2="204" y2="236" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffffff"/>
+      <stop offset="0.45" stop-color="#edf3f9"/>
+      <stop offset="1" stop-color="#d1dce8"/>
     </linearGradient>
-  </defs>
-
-  <!-- Background circle -->
-  <circle cx="128" cy="128" r="120" fill="url(#grad1)" />
-
-  <!-- Microphone icon representing speech/audio -->
-  <g transform="translate(128, 128)">
-    <!-- Microphone body -->
-    <rect x="-20" y="-50" width="40" height="60" rx="20" fill="white" opacity="0.95"/>
-
-    <!-- Microphone stand -->
-    <line x1="0" y1="10" x2="0" y2="50" stroke="white" stroke-width="6" opacity="0.95"/>
-    <line x1="-25" y1="50" x2="25" y2="50" stroke="white" stroke-width="6" opacity="0.95"/>
-
-    <!-- Waveform lines (representing transcription) -->
-    <g opacity="0.8">
-      <line x1="-45" y1="-10" x2="-45" y2="10" stroke="white" stroke-width="3"/>
-      <line x1="-35" y1="-20" x2="-35" y2="20" stroke="white" stroke-width="3"/>
-      <line x1="35" y1="-15" x2="35" y2="15" stroke="white" stroke-width="3"/>
-      <line x1="45" y1="-25" x2="45" y2="25" stroke="white" stroke-width="3"/>
+    <linearGradient id="rim" x2="0.25" y2="1">
+      <stop stop-color="#ffffff"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0.6"/>
+      <stop offset="1" stop-color="#abb5c3" stop-opacity="0.65"/>
+    </linearGradient>
+    <linearGradient id="silver">
+      <stop stop-color="#9aa5b3"/>
+      <stop offset="0.18" stop-color="#e4eaf1"/>
+      <stop offset="0.36" stop-color="#ffffff"/>
+      <stop offset="0.64" stop-color="#d5dce5"/>
+      <stop offset="1" stop-color="#8c98a8"/>
+    </linearGradient>
+    <linearGradient id="reflection" x1="0" y1="64" x2="0" y2="184" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffffff" stop-opacity="0.85"/>
+      <stop offset="0.42" stop-color="#ffffff" stop-opacity="0.05"/>
+      <stop offset="0.48" stop-color="#6a778b" stop-opacity="0.20"/>
+      <stop offset="0.64" stop-color="#ffffff" stop-opacity="0.2"/>
+      <stop offset="1" stop-color="#5b697e" stop-opacity="0.28"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="112" y1="16" x2="128" y2="156" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffffff" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.25"/>
+    </linearGradient>
+    <linearGradient id="edge" x1="26" y1="28" x2="222" y2="222" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffffff"/>
+      <stop offset="0.35" stop-color="#ffffff" stop-opacity="0.2"/>
+      <stop offset="0.65" stop-color="#90a8c3" stop-opacity="0.3"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.95"/>
+    </linearGradient>
+    <linearGradient id="caustic" x1="42" y1="210" x2="216" y2="210" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="170%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="2.5"/>
+    </filter>
+    <g id="wave">
+      <rect x="68" y="106" width="16" height="36" rx="8"/>
+      <rect x="94" y="86" width="16" height="76" rx="8"/>
+      <rect x="120" y="66" width="16" height="116" rx="8"/>
+      <rect x="146" y="90" width="16" height="68" rx="8"/>
+      <rect x="172" y="108" width="16" height="32" rx="8"/>
     </g>
-  </g>
-
-  <!-- Text element hint -->
-  <text x="128" y="235" font-family="sans-serif" font-size="16" fill="white" text-anchor="middle" opacity="0.7">
-    TRANSCRIBE
-  </text>
+  </defs>
+  <rect x="16" y="20" width="224" height="224" rx="54" fill="#718096" opacity="0.16"/>
+  <rect x="16" y="12" width="224" height="224" rx="54" fill="url(#glass)" fill-opacity="0.97"/>
+  <rect x="17" y="13" width="222" height="222" rx="53" fill="none" stroke="url(#rim)" stroke-width="2"/>
+  <rect x="21" y="17" width="214" height="214" rx="49" fill="none" stroke="url(#edge)" stroke-width="3"/>
+  <path d="M70 20h116c26 0 46 20 46 46v20C174 70 87 90 24 142V66c0-26 20-46 46-46Z" fill="url(#sheen)"/>
+  <path d="M26 88V67c0-24 20-44 44-44h80" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-opacity="0.85"/>
+  <path d="M38 194c10 19 23 28 44 28h92c20 0 35-10 44-27" fill="none" stroke="url(#caustic)" stroke-width="4" stroke-linecap="round"/>
+  <use xlink:href="#wave" transform="translate(0 4)" fill="#69798f" opacity="0.25" filter="url(#shadow)"/>
+  <use xlink:href="#wave" fill="url(#silver)" stroke="#8e9aaa" stroke-opacity="0.25" stroke-width="0.75"/>
+  <use xlink:href="#wave" fill="url(#reflection)"/>
 </svg>
