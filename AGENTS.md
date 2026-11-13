@@ -14,9 +14,7 @@
 
 ### Prerequisites by Platform
 - **NixOS**: `nix develop` provides all dependencies (Vulkan, CPAL, portaudio, OpenBLAS, shaderc, vulkan-headers, etc.)
-- **Ubuntu/Debian**: Requires `libvulkan-dev vulkan-headers libopenblas-dev shaderc` plus audio libs
-- **Fedora/RHEL**: Requires `vulkan-loader-devel vulkan-headers openblas-devel shaderc` plus audio libs
-- **Arch**: `vulkan-headers blas shaderc` plus portaudio
+- **Debian/Ubuntu, Fedora, Arch**: `scripts/install-deps.sh` installs everything, and `export $(scripts/install-deps.sh --env)` sets the build variables. CI, the release workflow, and the README all use this script, so change package lists only there.
 
 ### Build Commands
 - `nix develop` drops you into a shell with all dependencies aligned with CI expectations.

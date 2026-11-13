@@ -4,6 +4,7 @@
 # two: flake.lock froze "beta" at a January build while CI kept pulling the
 # live channel, so clippy passed locally and failed on the runner.
 # Bump deliberately, and run `nix flake update rust-overlay` alongside it.
+# The workflows in .github/workflows/ pin the same version; bump them too.
 channel = "1.97.1"
 components = ["rustfmt", "clippy", "rust-src"]
 targets = []

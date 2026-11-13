@@ -1,0 +1,77 @@
+name: Distros
+
+# Rolling distros and nixpkgs-unstable break the build without any change in
+# this repo, so this also runs weekly. GitHub emails the last editor of the
+# cron line when a scheduled run fails.
+on:
+  schedule:
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - flake.nix
+      - flake.lock
+      - rust-toolchain.toml
+      - scripts/install-deps.sh
+      - .github/workflows/distros.yml
+
+concurrency:
+  group: distros-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build (${{ matrix.image }})
+    runs-on: ubuntu-24.04
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # ci.yml already covers Ubuntu 24.04 on the bare runner.
+        image:
+          - debian:stable
+          - fedora:latest
+          - archlinux:latest
+
+    # No rust-cache: three full target dirs would evict the ci.yml cache, and
+    # a clean build is the more honest test.
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          bash scripts/install-deps.sh
+          bash scripts/install-deps.sh --env >> "$GITHUB_ENV"
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.97.1"
+
+      - name: Build
+        run: cargo build --locked
+
+      - name: Smoke test
+        run: ./target/debug/sonori --help
+
+  nix:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v31
+
+      # Pushes test the pinned flake.lock; scheduled and manual runs test
+      # what a fresh `nix flake update` would give.
+      - name: Update flake inputs
+        if: github.event_name != 'push'
+        run: nix flake update
+
+      - name: Build
+        run: nix build -L --no-link

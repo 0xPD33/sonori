@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="desktop/icons/hicolor/256x256/apps/sonori.png" alt="Sonori icon" width="128" height="128">
+
 # Sonori
 
 **Local AI speech transcription with a transparent overlay for Linux**
@@ -124,73 +126,18 @@ Sonori depends on [**speechcore**](https://github.com/0xPD33/speechcore) (the sh
 
 **Prerequisites:** [Rust](https://rustup.rs/) and distribution-specific dependencies.
 
-<details>
-<summary><strong>Ubuntu/Debian 24.04+</strong></summary>
+**Debian/Ubuntu, Fedora, Arch, and their derivatives:**
 
 ```bash
-# Install system dependencies
-sudo apt-get update
-sudo apt-get install -y build-essential portaudio19-dev libclang-dev pkg-config \
-  libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev \
-  libasound2-dev libssl-dev libfftw3-dev curl cmake libvulkan-dev libopenblas-dev glslc
-
-# Install ONNX Runtime (not in repos)
-ONNX_VERSION=1.22.0
-wget https://github.com/microsoft/onnxruntime/releases/download/v${ONNX_VERSION}/onnxruntime-linux-x64-${ONNX_VERSION}.tgz
-tar -xzf onnxruntime-linux-x64-${ONNX_VERSION}.tgz
-sudo cp -r onnxruntime-linux-x64-${ONNX_VERSION}/include/* /usr/local/include/
-sudo cp -r onnxruntime-linux-x64-${ONNX_VERSION}/lib/* /usr/local/lib/
-sudo mkdir -p /usr/local/lib64
-sudo cp -r onnxruntime-linux-x64-${ONNX_VERSION}/lib/* /usr/local/lib64/
-echo "/usr/local/lib" | sudo tee /etc/ld.so.conf.d/onnxruntime.conf
-echo "/usr/local/lib64" | sudo tee -a /etc/ld.so.conf.d/onnxruntime.conf
-sudo ldconfig
+git clone https://github.com/0xPD33/sonori
+cd sonori
+scripts/install-deps.sh             # distro packages + ONNX Runtime 1.22.0 in /usr/local (uses sudo)
+export $(scripts/install-deps.sh --env)
+cargo build --release
+./target/release/sonori
 ```
 
-Set environment variables before building:
-```bash
-export BLAS_INCLUDE_DIRS=/usr/include/x86_64-linux-gnu
-export OPENBLAS_PATH=/usr
-export ORT_STRATEGY=system
-export ORT_LIB_LOCATION=/usr/local/lib
-```
-</details>
-
-<details>
-<summary><strong>Fedora/RHEL</strong></summary>
-
-```bash
-sudo dnf install gcc gcc-c++ portaudio-devel clang-devel pkg-config \
-  libxkbcommon-devel wayland-devel libX11-devel libXcursor-devel libXi-devel libXrandr-devel \
-  alsa-lib-devel openssl-devel fftw-devel curl cmake vulkan-loader-devel vulkan-headers \
-  openblas-devel shaderc onnxruntime-devel
-```
-
-Set environment variables before building:
-```bash
-export BLAS_INCLUDE_DIRS=/usr/include/openblas
-export OPENBLAS_PATH=/usr
-export ORT_STRATEGY=system
-```
-</details>
-
-<details>
-<summary><strong>Arch/Manjaro</strong></summary>
-
-```bash
-sudo pacman -S base-devel portaudio clang pkgconf \
-  libxkbcommon wayland libx11 libxcursor libxi libxrandr alsa-lib openssl fftw curl cmake \
-  vulkan-headers vulkan-tools openblas shaderc
-# Install onnxruntime from AUR (e.g., yay -S onnxruntime)
-```
-
-Set environment variables before building:
-```bash
-export BLAS_INCLUDE_DIRS=/usr/include/openblas
-export OPENBLAS_PATH=/usr
-export ORT_STRATEGY=system
-```
-</details>
+CI builds with this script on Ubuntu 24.04, Debian stable, Fedora, and Arch. On other distros, install the equivalents of the packages that the script lists.
 
 <details>
 <summary><strong>NixOS</strong></summary>
@@ -199,15 +146,6 @@ export ORT_STRATEGY=system
 nix develop  # All dependencies included
 ```
 </details>
-
-**Build:**
-```bash
-git clone https://github.com/0xPD33/sonori
-cd sonori
-# Ensure environment variables are set (see distro-specific instructions above)
-cargo build --release
-./target/release/sonori
-```
 
 ### Desktop Integration
 
