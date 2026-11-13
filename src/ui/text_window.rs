@@ -102,6 +102,18 @@ impl TextWindow {
         self.text_renderer.trim_atlas();
     }
 
+    /// Height of `text` as `render` wraps it in a text area `text_area_width` wide.
+    pub fn text_height(
+        &mut self,
+        text: &str,
+        text_area_width: u32,
+        text_scale: f32,
+        text_color: [f32; 4],
+    ) -> f32 {
+        self.text_renderer
+            .text_height(text, text_scale, text_color, text_area_width)
+    }
+
     pub fn render(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,

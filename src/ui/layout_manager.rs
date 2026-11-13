@@ -1,5 +1,8 @@
 use super::scrollbar::SCROLLBAR_WIDTH;
 
+/// Space above the first line and below the last line of the transcript.
+pub const TEXT_PADDING: f32 = 4.0;
+
 pub struct LayoutManager {
     pub window_width: u32,
     pub window_height: u32,
@@ -64,7 +67,7 @@ impl LayoutManager {
         let text_x = self.left_margin;
 
         // Apply scroll offset to text position
-        let text_y = 4.0 - scroll_offset;
+        let text_y = TEXT_PADDING - scroll_offset;
 
         (text_x, text_y)
     }

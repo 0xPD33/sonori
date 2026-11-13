@@ -144,25 +144,22 @@ impl TextRenderer {
         width
     }
 
-    /// Render text at a specific position with proper wrapping and clipping
-    pub fn render_text(
-        &mut self,
-        view: &TextureView,
-        encoder: &mut wgpu::CommandEncoder,
-        text: &str,
-        x: f32,
-        y: f32,
-        scale: f32,
-        color: [f32; 4],
-        area_width: u32,
-        _area_height: u32,
-        clip_rect: Option<(u32, u32, u32, u32)>,
-    ) {
+    /// Height of `text` wrapped to `area_width`, as `render_text` lays it out.
+    /// It shapes with the same cache key, so a frame that measures and then
+    /// renders the same text shapes it once.
+    pub fn text_height(&mut self, text: &str, scale: f32, color: [f32; 4], area_width: u32) -> f32 {
         if text.is_empty() {
-            return;
+            return 0.0;
         }
+        self.layout_text(text, scale, color, area_width);
+        self.buffer
+            .layout_runs()
+            .last()
+            .map_or(0.0, |run| run.line_top + run.line_height)
+    }
 
-        let font_size = 10.0 * scale; // Reduced from 12.0 to 10.0 for smaller text
+    fn layout_text(&mut self, text: &str, scale: f32, color: [f32; 4], area_width: u32) -> Color {
+        let font_size = 10.0 * scale;
         let metrics = Metrics::new(font_size, font_size * 1.1);
 
         let text_color_rgba = [
@@ -178,8 +175,7 @@ impl TextRenderer {
             text_color_rgba[3],
         );
 
-        // Set the buffer width to match the text area width for proper wrapping
-        // But allow unlimited height for scrolling
+        // Wrap at the text area width, with unlimited height for scrolling.
         let buffer_width = area_width as f32 - (LEFT_MARGIN + RIGHT_MARGIN);
         let needs_layout = self.cached_layout.as_ref().is_none_or(|cached| {
             cached.text != text
@@ -207,6 +203,28 @@ impl TextRenderer {
                 color: text_color_rgba,
             });
         }
+        text_color
+    }
+
+    /// Render text at a specific position with proper wrapping and clipping
+    pub fn render_text(
+        &mut self,
+        view: &TextureView,
+        encoder: &mut wgpu::CommandEncoder,
+        text: &str,
+        x: f32,
+        y: f32,
+        scale: f32,
+        color: [f32; 4],
+        area_width: u32,
+        _area_height: u32,
+        clip_rect: Option<(u32, u32, u32, u32)>,
+    ) {
+        if text.is_empty() {
+            return;
+        }
+
+        let text_color = self.layout_text(text, scale, color, area_width);
 
         self.viewport.update(
             &self.queue,

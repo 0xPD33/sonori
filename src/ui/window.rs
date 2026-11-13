@@ -12,7 +12,7 @@ use winit::{
 use super::button_panel::ButtonPanel;
 use super::buttons::ButtonManager;
 use super::event_handler::EventHandler;
-use super::layout_manager::LayoutManager;
+use super::layout_manager::{LayoutManager, TEXT_PADDING};
 use super::loading_animation::LoadingAnimation;
 use super::render_pipeline::RenderPipelines;
 use super::scroll_state::ScrollState;
@@ -364,7 +364,7 @@ impl WindowState {
         let scrollbar = Scrollbar::new(&device, &config, &render_pipelines.hover_bind_group_layout);
 
         // Create text processor with default values
-        let text_processor = TextProcessor::new(8.0, 20.0, 4.0);
+        let text_processor = TextProcessor::new(20.0);
 
         // Create layout manager
         let layout_manager = LayoutManager::new(
@@ -865,38 +865,6 @@ impl WindowState {
         // Update text processor metrics to match actual rendered font size
         self.text_processor.update_metrics(text_scale);
 
-        // Calculate text layout using the text processor
-        let layout_info = self.text_processor.calculate_layout(
-            &display_text,
-            self.config.width as f32,
-            text_area_height as f32,
-        );
-
-        let need_scrollbar = layout_info.need_scrollbar;
-
-        // Set text area width based on whether scrollbar is needed
-        let text_area_width = self
-            .layout_manager
-            .calculate_text_area_width(need_scrollbar);
-
-        // Update scroll state
-        self.scroll_state
-            .set_max_scroll_offset(layout_info.max_scroll_offset);
-        self.scroll_state.auto_scroll = self.event_handler.auto_scroll;
-
-        // Update with auto-scroll animation
-        let scrolling = self.scroll_state.update_with_auto_scroll();
-
-        // Sync scrollbar state
-        self.scrollbar.max_scroll_offset = self.scroll_state.max_scroll_offset;
-        self.scrollbar.scroll_offset = self.scroll_state.scroll_offset;
-        self.scrollbar.auto_scroll = self.scroll_state.auto_scroll;
-
-        // Get text position from the layout manager
-        let (text_x, text_y) = self
-            .layout_manager
-            .get_text_position(self.scroll_state.scroll_offset);
-
         // Get current transcription mode
         let transcription_mode = speechcore::TranscriptionMode::from_u8(
             self.transcription_mode_ref
@@ -960,6 +928,40 @@ impl WindowState {
         } else {
             self.ui_config.effective_idle_color()
         };
+
+        // Scroll over the text as it is drawn, so the range ends at its last line.
+        // Measure at last frame's width first: in the steady state that layout is
+        // the one render reuses, so the text is shaped once per change.
+        let visible_height = text_area_height.saturating_sub(self.gap) as f32;
+        let mut need_scrollbar = self.scroll_state.needs_scrollbar();
+        let mut text_area_width;
+        let mut max_scroll_offset;
+        loop {
+            text_area_width = self
+                .layout_manager
+                .calculate_text_area_width(need_scrollbar);
+            let text_height =
+                self.text_window
+                    .text_height(render_text, text_area_width, text_scale, text_color);
+            max_scroll_offset = (text_height + 2.0 * TEXT_PADDING - visible_height).max(0.0);
+            // A scrollbar narrows the text, so its need never flips back.
+            if (max_scroll_offset > 0.0) == need_scrollbar {
+                break;
+            }
+            need_scrollbar = !need_scrollbar;
+        }
+
+        self.scroll_state.set_max_scroll_offset(max_scroll_offset);
+        self.scroll_state.auto_scroll = self.event_handler.auto_scroll;
+        let scrolling = self.scroll_state.update_with_auto_scroll();
+
+        self.scrollbar.max_scroll_offset = self.scroll_state.max_scroll_offset;
+        self.scrollbar.scroll_offset = self.scroll_state.scroll_offset;
+        self.scrollbar.auto_scroll = self.scroll_state.auto_scroll;
+
+        let (text_x, text_y) = self
+            .layout_manager
+            .get_text_position(self.scroll_state.scroll_offset);
 
         // Render loading animation if processing, otherwise render text
         if should_show_animation {
