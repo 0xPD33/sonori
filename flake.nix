@@ -28,6 +28,12 @@
                   final.protobuf
                   final.abseil-cpp
                 ];
+                # nixpkgs abseil uses std::*_ordering, which needs C++20. The
+                # hard-coded set() ignores a -DCMAKE_CXX_STANDARD flag.
+                postPatch = (old.postPatch or "") + ''
+                  substituteInPlace CMakeLists.txt \
+                    --replace-fail "set(CMAKE_CXX_STANDARD 17)" "set(CMAKE_CXX_STANDARD 20)"
+                '';
                 cmakeFlags = (old.cmakeFlags or []) ++ [
                   # Use modern CMake provider flags (replaces legacy SPM_USE_BUILTIN_PROTOBUF)
                   "-DSPM_PROTOBUF_PROVIDER=package"
@@ -201,6 +207,7 @@
               openblas.dev
               onnxruntime
               protobuf  # Ensure consistent protobuf version across all C++ libs
+              oniguruma # nixpkgs' cargo hook makes onig_sys (tokenizers) link the system copy
             ];
 
             # Use system ONNX Runtime for Silero VAD
