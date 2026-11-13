@@ -9,15 +9,8 @@ permissions:
   contents: write
 
 jobs:
-  build-and-release:
+  build:
     runs-on: ubuntu-24.04
-
-    env:
-      BLAS_INCLUDE_DIRS: /usr/include/x86_64-linux-gnu
-      OPENBLAS_PATH: /usr
-      ORT_STRATEGY: system
-      ORT_LIB_LOCATION: /usr/local/lib
-      ONNX_VERSION: "1.22.0"
 
     steps:
       - name: Checkout code
@@ -25,8 +18,11 @@ jobs:
         with:
           fetch-depth: 0  # Fetch all history for git-cliff to access previous tags
 
+      # Pinned like ci.yml, so a release builds with the compiler that CI tested.
       - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.97.1"
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -46,49 +42,11 @@ jobs:
           path: target
           key: ${{ runner.os }}-cargo-target-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Install Linux dependencies
+      - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            portaudio19-dev \
-            libclang-dev \
-            pkg-config \
-            libxkbcommon-dev \
-            libwayland-dev \
-            libx11-dev \
-            libxcursor-dev \
-            libxi-dev \
-            libxrandr-dev \
-            libasound2-dev \
-            libssl-dev \
-            libfftw3-dev \
-            curl \
-            cmake \
-            libvulkan-dev \
-            libopenblas-dev \
-            glslc \
-            patchelf \
-            file \
-            libfuse2
-
-      - name: Install ONNX Runtime
-        run: |
-          wget https://github.com/microsoft/onnxruntime/releases/download/v${ONNX_VERSION}/onnxruntime-linux-x64-${ONNX_VERSION}.tgz
-          tar -xzf onnxruntime-linux-x64-${ONNX_VERSION}.tgz
-          sudo cp -r onnxruntime-linux-x64-${ONNX_VERSION}/include/* /usr/local/include/
-          sudo cp -r onnxruntime-linux-x64-${ONNX_VERSION}/lib/* /usr/local/lib/
-          # Also copy to lib64 for linker compatibility
-          sudo mkdir -p /usr/local/lib64
-          sudo cp -r onnxruntime-linux-x64-${ONNX_VERSION}/lib/* /usr/local/lib64/
-          # Update ldconfig
-          echo "/usr/local/lib" | sudo tee /etc/ld.so.conf.d/onnxruntime.conf
-          echo "/usr/local/lib64" | sudo tee -a /etc/ld.so.conf.d/onnxruntime.conf
-          sudo ldconfig
-          # Keep the extracted directory for bundling
-          echo "ONNX_LIB_DIR=$(pwd)/onnxruntime-linux-x64-${ONNX_VERSION}/lib" >> $GITHUB_ENV
-          # Set library path for build
-          echo "LIBRARY_PATH=/usr/local/lib:/usr/local/lib64:${LIBRARY_PATH}" >> $GITHUB_ENV
+          scripts/install-deps.sh
+          scripts/install-deps.sh --env >> "$GITHUB_ENV"
+          sudo apt-get install -y patchelf file libfuse2
 
       - name: Install git-cliff
         run: |
@@ -122,8 +80,13 @@ jobs:
           # Copy documentation
           cp README.md LICENSE CONFIGURATION.md "${ARCHIVE_NAME}/"
 
+          mkdir -p "${ARCHIVE_NAME}/share/applications" "${ARCHIVE_NAME}/share/icons" "${ARCHIVE_NAME}/share/metainfo"
+          cp desktop/dev.sonori.desktop "${ARCHIVE_NAME}/share/applications/"
+          cp -R desktop/icons/hicolor "${ARCHIVE_NAME}/share/icons/"
+          cp desktop/dev.sonori.metainfo.xml "${ARCHIVE_NAME}/share/metainfo/"
+
           # Bundle ONNX Runtime libraries
-          cp -P ${ONNX_LIB_DIR}/libonnxruntime.so* "${ARCHIVE_NAME}/lib/"
+          cp -P /usr/local/lib/libonnxruntime.so* "${ARCHIVE_NAME}/lib/"
 
           # Bundle other required libraries that may not be on all systems
           # OpenBLAS
@@ -143,6 +106,7 @@ jobs:
             '' \
             '# Add bundled libraries to LD_LIBRARY_PATH' \
             'export LD_LIBRARY_PATH="${SCRIPT_DIR}/lib:${LD_LIBRARY_PATH}"' \
+            'export XDG_DATA_DIRS="${SCRIPT_DIR}/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"' \
             '' \
             '# Execute the actual binary' \
             'exec "${SCRIPT_DIR}/sonori.bin" "$@"' \
@@ -163,7 +127,7 @@ jobs:
           mkdir -p "${APPDIR}/usr/bin"
           mkdir -p "${APPDIR}/usr/lib"
           mkdir -p "${APPDIR}/usr/share/applications"
-          mkdir -p "${APPDIR}/usr/share/icons/hicolor/scalable/apps"
+          mkdir -p "${APPDIR}/usr/share/icons"
           mkdir -p "${APPDIR}/usr/share/metainfo"
 
           # Copy binary
@@ -172,8 +136,8 @@ jobs:
           # Copy desktop file and icon
           cp desktop/dev.sonori.desktop "${APPDIR}/usr/share/applications/"
           cp desktop/dev.sonori.desktop "${APPDIR}/sonori.desktop"
-          cp desktop/icons/hicolor/scalable/apps/sonori.svg "${APPDIR}/usr/share/icons/hicolor/scalable/apps/"
-          cp desktop/icons/hicolor/scalable/apps/sonori.svg "${APPDIR}/sonori.svg"
+          cp -R desktop/icons/hicolor "${APPDIR}/usr/share/icons/"
+          cp desktop/icons/hicolor/512x512/apps/sonori.png "${APPDIR}/sonori.png"
           cp desktop/dev.sonori.metainfo.xml "${APPDIR}/usr/share/metainfo/"
 
           # Fix desktop file Exec line for AppImage
@@ -181,7 +145,7 @@ jobs:
           sed -i 's|TryExec=sonori|TryExec=sonori|g' "${APPDIR}/sonori.desktop"
 
           # Bundle ONNX Runtime
-          cp -P ${ONNX_LIB_DIR}/libonnxruntime.so* "${APPDIR}/usr/lib/"
+          cp -P /usr/local/lib/libonnxruntime.so* "${APPDIR}/usr/lib/"
 
           # Bundle other libraries
           cp -P /usr/lib/x86_64-linux-gnu/libopenblas.so* "${APPDIR}/usr/lib/" 2>/dev/null || true
@@ -214,7 +178,7 @@ jobs:
             --appdir "${APPDIR}" \
             --executable target/release/sonori \
             --desktop-file desktop/dev.sonori.desktop \
-            --icon-file desktop/icons/hicolor/scalable/apps/sonori.svg \
+            --icon-file desktop/icons/hicolor/512x512/apps/sonori.png \
             --output appimage || {
               # If linuxdeploy fails, create AppImage manually with appimagetool
               echo "linuxdeploy failed, trying manual AppImage creation..."
@@ -230,7 +194,6 @@ jobs:
           echo "APPIMAGE_NAME=Sonori-${VERSION}-x86_64.AppImage" >> $GITHUB_ENV
 
       - name: Generate release notes
-        id: release_notes
         run: |
           VERSION=${{ steps.get_version.outputs.VERSION }}
           PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
@@ -244,7 +207,6 @@ jobs:
 
           # Build release notes
           {
-            echo "RELEASE_NOTES<<EOF"
             echo "## Sonori v${VERSION}"
             echo ""
             echo "### Installation"
@@ -273,17 +235,62 @@ jobs:
             echo "### Changes"
             echo ""
             echo "${CHANGELOG}"
-            echo "EOF"
-          } >> $GITHUB_OUTPUT
+          } > release-notes.md
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+      - name: Upload release files
+        uses: actions/upload-artifact@v4
         with:
-          files: |
+          name: release
+          if-no-files-found: error
+          path: |
             ${{ env.ARCHIVE_NAME }}.tar.gz
             ${{ env.APPIMAGE_NAME }}
-          body: ${{ steps.release_notes.outputs.RELEASE_NOTES }}
+            release-notes.md
+
+  # A release goes out only when both artifacts start on each distro. This
+  # catches libraries that the bundles miss and that the build host happened to have.
+  smoke-test:
+    name: smoke test (${{ matrix.image }})
+    needs: build
+    runs-on: ubuntu-24.04
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - ubuntu:24.04
+          - debian:stable
+          - fedora:latest
+          - archlinux:latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+
+      - name: Run the AppImage
+        run: |
+          chmod +x Sonori-*.AppImage
+          ./Sonori-*.AppImage --appimage-extract-and-run --help
+
+      - name: Run the tarball
+        run: |
+          tar -xzf sonori-*-x86_64-linux.tar.gz
+          ./sonori-*-x86_64-linux/sonori --help
+
+  release:
+    needs: smoke-test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            sonori-*-x86_64-linux.tar.gz
+            Sonori-*-x86_64.AppImage
+          body_path: release-notes.md
           draft: false
           prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

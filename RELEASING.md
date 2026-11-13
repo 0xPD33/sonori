@@ -40,10 +40,10 @@ cargo install git-cliff  # For automatic changelog generation
 ## What Happens Next
 
 When the tag is pushed to GitHub, the `.github/workflows/release.yml` workflow automatically:
-- Builds the release binary
-- Runs tests
+- Builds the release binary, the tarball, and the AppImage
 - Generates a changelog from commits using git-cliff
-- Creates a GitHub release with artifacts and formatted release notes
+- Runs both artifacts with `--help` on Ubuntu, Debian, Fedora, and Arch containers
+- Creates a GitHub release with artifacts and formatted release notes, only if every smoke test passes
 
 ## Configuration
 
