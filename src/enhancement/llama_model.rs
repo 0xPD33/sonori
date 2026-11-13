@@ -1,16 +1,9 @@
-// ponytail: token_to_str/Special are deprecated in favour of token_to_piece,
-// which takes an `&mut encoding_rs::Decoder` that llama-cpp-2 does not
-// re-export. Migrating means taking a direct encoding_rs dependency and
-// keeping its version in lockstep with llama-cpp-2's. Do that when the
-// deprecated calls are actually removed, not before.
-#![allow(deprecated)]
-
 use super::EnhancementError;
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::model::{AddBos, LlamaModel, Special};
+use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::sampling::LlamaSampler;
 use std::num::NonZeroU32;
 use std::path::Path;
@@ -109,12 +102,8 @@ impl LlamaCppModel {
 
         // Tokenize the prompt
         let start = Instant::now();
-        let tokens = self
-            .model
-            .str_to_token(&prompt, AddBos::Always)
-            .map_err(|e| {
-                EnhancementError::InferenceError(format!("Failed to tokenize: {:?}", e))
-            })?;
+        let vocab = self.model.vocab();
+        let tokens = vocab.tokenize(prompt.as_bytes(), true, true);
 
         // Create batch and add tokens
         let mut batch = LlamaBatch::new(self.context_size as usize, 1);
@@ -162,15 +151,13 @@ impl LlamaCppModel {
             sampler.accept(token);
 
             // Check for end of generation
-            if self.model.is_eog_token(token) {
+            if vocab.is_eog(token) {
                 break;
             }
 
             // Decode token to string to check for stop sequences
-            let token_str = self
-                .model
-                .token_to_str(token, Special::Tokenize)
-                .unwrap_or_default();
+            let piece = vocab.token_to_piece(token, true, None);
+            let token_str = String::from_utf8_lossy(&piece);
 
             if token_str.contains("<|im_end|>") || token_str.contains("<|endoftext|>") {
                 break;
@@ -190,13 +177,12 @@ impl LlamaCppModel {
             })?;
         }
 
-        // Convert tokens to string
-        let mut result = String::new();
+        // Decode the bytes as a whole: one UTF-8 character can span two tokens.
+        let mut bytes = Vec::new();
         for token in &output_tokens {
-            if let Ok(s) = self.model.token_to_str(*token, Special::Tokenize) {
-                result.push_str(&s);
-            }
+            bytes.extend(vocab.token_to_piece(*token, true, None));
         }
+        let result = String::from_utf8_lossy(&bytes);
 
         let decode_elapsed = decode_start.elapsed();
         let token_count = output_tokens.len();

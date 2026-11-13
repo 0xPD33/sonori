@@ -84,6 +84,7 @@
               sentencepiece
               openblas  # For whisper.cpp optimization
               vulkan-headers  # For whisper.cpp Vulkan compilation
+              spirv-headers  # llama.cpp Vulkan backend
               shaderc  # Provides glslc shader compiler for Vulkan
               rust-analyzer-unwrapped
               wtype
@@ -140,7 +141,7 @@
               lockFile = ./Cargo.lock;
               outputHashes = {
                 "dpi-0.1.2" = "sha256-7DW0eaqJ5S0ixl4aio+cAE8qnq77tT9yzbemJJOGDX0=";
-                "speechcore-0.2.0" = "sha256-dt6l0jrDNH61AsA9EuyFYUKuSWA9/OdmpfjcFTiwkWo=";
+                "speechcore-0.3.0" = "sha256-XVWmmfm+0mNDqRnXw7FGTHP9j/P1eUQtlAZG5qHykyc=";
               };
             };
 
@@ -203,6 +204,7 @@
               dotool
               vulkan-loader
               vulkan-headers
+              spirv-headers  # llama.cpp Vulkan backend
               openblas
               openblas.dev
               onnxruntime
@@ -254,9 +256,9 @@
               mkdir -p $out/share/metainfo
               install -m 644 ${./desktop/dev.sonori.metainfo.xml} $out/share/metainfo/
 
-              # Install icon
-              mkdir -p $out/share/icons/hicolor/scalable/apps
-              install -m 644 ${./desktop/icons/hicolor/scalable/apps/sonori.svg} $out/share/icons/hicolor/scalable/apps/
+              # Install icons
+              mkdir -p $out/share/icons
+              cp -R ${./desktop/icons/hicolor} $out/share/icons/hicolor
             '';
 
             meta = with pkgs.lib; {
