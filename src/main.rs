@@ -482,7 +482,7 @@ async fn run_gui_mode(
     // without a restart.
     let (config_tx, config_rx) = tokio::sync::watch::channel(app_config.clone());
 
-    let (final_tx, final_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let (final_tx, final_rx) = tokio::sync::mpsc::unbounded_channel::<FinalTranscript>();
     // Single bounded queue for clipboard/paste work.
     let (output_tx, output_rx) = tokio::sync::mpsc::channel::<Output>(128);
 
@@ -662,7 +662,7 @@ async fn run_gui_mode(
 /// so the broadcast channel cannot lag and drop final transcripts.
 async fn consume_transcripts(
     mut transcript_rx: tokio::sync::broadcast::Receiver<speechcore::TranscriptionMessage>,
-    final_tx: tokio::sync::mpsc::UnboundedSender<String>,
+    final_tx: tokio::sync::mpsc::UnboundedSender<FinalTranscript>,
     transcript_history: Arc<parking_lot::RwLock<String>>,
     audio_visualization_data: Arc<parking_lot::RwLock<speechcore::AudioVisualizationData>>,
 ) {
@@ -697,15 +697,24 @@ async fn consume_transcripts(
             continue;
         }
 
-        if final_tx.send(message.text).is_err() {
+        let final_transcript = FinalTranscript {
+            text: message.text,
+            session_id: message.session_id,
+        };
+        if final_tx.send(final_transcript).is_err() {
             break;
         }
     }
 }
 
+struct FinalTranscript {
+    text: String,
+    session_id: Option<String>,
+}
+
 /// Runs Magic Mode, then commits each final transcript in arrival order.
 async fn finalize_transcripts(
-    mut final_rx: tokio::sync::mpsc::UnboundedReceiver<String>,
+    mut final_rx: tokio::sync::mpsc::UnboundedReceiver<FinalTranscript>,
     magic_mode_enhancer: Option<Arc<sonori::enhancement::MagicModeEnhancer>>,
     transcript_history: Arc<parking_lot::RwLock<String>>,
     audio_visualization_data: Arc<parking_lot::RwLock<speechcore::AudioVisualizationData>>,
@@ -713,27 +722,30 @@ async fn finalize_transcripts(
     config_rx: tokio::sync::watch::Receiver<AppConfig>,
     output_tx: tokio::sync::mpsc::Sender<Output>,
 ) {
-    // clear_on_new_session empties the history, so it alone cannot tell
-    // whether this dictation follows an earlier one in the same text field.
-    let mut pasted_before = false;
+    // Session of the last pasted segment. Real-time segments share one session,
+    // and so do the parts of a long manual recording. Each new manual recording
+    // gets its own, and may go to another text field.
+    let mut last_session: Option<Option<String>> = None;
 
-    while let Some(mut transcription) = final_rx.recv().await {
+    while let Some(FinalTranscript {
+        text: mut transcription,
+        session_id,
+    }) = final_rx.recv().await
+    {
         if let Some(enhancer) = &magic_mode_enhancer {
             let raw_transcription = transcription.clone();
             let enhancer = Arc::clone(enhancer);
             match tokio::task::spawn_blocking(move || enhancer.enhance(&raw_transcription)).await {
                 Ok(Ok(enhanced)) => {
-                    if !enhanced.trim().is_empty() {
-                        transcription = enhanced;
+                    let enhanced = enhanced.trim();
+                    if !enhanced.is_empty() {
+                        transcription = enhanced.to_string();
                     }
                 }
                 Ok(Err(e)) => eprintln!("Magic Mode enhancement failed: {e}"),
                 Err(e) => eprintln!("Magic Mode enhancement worker failed: {e}"),
             }
         }
-
-        // Check if this is the first segment before updating history
-        let history_len_before = transcript_history.read().len();
 
         let updated_transcript = {
             let mut history = transcript_history.write();
@@ -763,13 +775,13 @@ async fn finalize_transcripts(
             eprintln!("Failed to save transcript history: {}", e);
         }
 
-        // Forward chunk to clipboard and portal workers with leading space (except for first segment)
-        let segment_with_space = if history_len_before > 0 || pasted_before {
+        // A segment that continues the last pasted session needs a space.
+        let segment_with_space = if last_session.as_ref() == Some(&session_id) {
             format!(" {}", transcription)
         } else {
             transcription
         };
-        pasted_before = true;
+        last_session = Some(session_id);
         let output = Output {
             text: segment_with_space,
             mode: output_mode,
