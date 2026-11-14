@@ -159,3 +159,58 @@ impl GpuQuadRenderer {
         &self.pipeline
     }
 }
+
+/// Opens the device every Sonori surface shares. The settings panel uses push
+/// constants, so any device that may host it needs them.
+pub fn request_device(adapter: &wgpu::Adapter) -> Result<(wgpu::Device, wgpu::Queue), String> {
+    pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: None,
+        required_features: wgpu::Features::PUSH_CONSTANTS,
+        required_limits: wgpu::Limits {
+            max_push_constant_size: 128,
+            ..wgpu::Limits::default()
+        },
+        memory_hints: wgpu::MemoryHints::default(),
+        trace: wgpu::Trace::Off,
+    }))
+    .map_err(|e| {
+        format!("Failed to open the GPU device ({e}). Check that Vulkan drivers are installed.")
+    })
+}
+
+/// The one GPU instance and device of the app; every window draws with it.
+/// Windows come and go as the display mode changes. When each had its own
+/// Vulkan instance, dropping one crashed the NVIDIA driver in another's present.
+#[derive(Clone)]
+pub struct Gpu {
+    pub instance: wgpu::Instance,
+    pub adapter: wgpu::Adapter,
+    pub device: wgpu::Device,
+    pub queue: wgpu::Queue,
+}
+
+impl Gpu {
+    pub fn new() -> Result<Self, String> {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            ..Default::default()
+        });
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::default(),
+            compatible_surface: None,
+            force_fallback_adapter: false,
+        }))
+        .map_err(|e| {
+            format!("No suitable GPU adapter found ({e}). Sonori needs Vulkan drivers.")
+        })?;
+        let (device, queue) = request_device(&adapter)?;
+        // A drawing bug must not end the dictation app.
+        device.on_uncaptured_error(Box::new(|e| eprintln!("GPU error: {e}")));
+        Ok(Self {
+            instance,
+            adapter,
+            device,
+            queue,
+        })
+    }
+}

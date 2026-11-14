@@ -1,0 +1,1665 @@
+//! Cursor mode: a spectrogram ring at the mouse pointer and a short-lived bubble.
+//! See `docs/design/cursor-mode.md`.
+
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use parking_lot::RwLock;
+use speechcore::{AudioVisualizationData, BackendStatus, BackendStatusState, ProcessingState};
+use winit::cursor::CursorIcon;
+use winit::dpi::{LogicalSize, PhysicalSize};
+use winit::event::WindowEvent;
+use winit::event_loop::ActiveEventLoop;
+use winit::platform::wayland::{Anchor, KeyboardInteractivity, Layer, WindowAttributesWayland};
+use winit::window::{Window, WindowAttributes, WindowId};
+
+use super::shapes::{glass, Shape, ShapeRenderer, Spring, OUTLINE, SILVER_BAR};
+use super::text_renderer::{Label, TextRenderer};
+use crate::config::{AppConfig, CursorBubble, DisplayMode, OutputMode};
+
+mod menu;
+use crate::ipc::AppCommand;
+pub(crate) use menu::PRESETS;
+use menu::{MenuAction, MenuState, QuickMenu};
+
+/// How the output worker delivered a transcript.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DeliveryOutcome {
+    Pasted,
+    Typed,
+    Copied,
+    /// The message says what failed and where the text went.
+    Failed(String),
+}
+
+/// The latest delivered transcript. `seq` grows with each delivery, so the UI
+/// can tell a new delivery from one it already showed. `received` counts final
+/// transcripts on their way to delivery, so the UI knows a paste is coming.
+#[derive(Debug, Clone, Default)]
+pub struct Delivery {
+    pub received: u64,
+    pub seq: u64,
+    pub text: String,
+    pub outcome: Option<DeliveryOutcome>,
+}
+
+impl Delivery {
+    pub fn record(&mut self, text: String, outcome: DeliveryOutcome) {
+        self.seq += 1;
+        self.text = text;
+        self.outcome = Some(outcome);
+    }
+}
+
+pub type SharedDelivery = Arc<RwLock<Delivery>>;
+
+/// Lets IPC open and close the cursor-mode menu and see whether it is open,
+/// and ask for the Settings window.
+#[derive(Debug, Default)]
+pub struct MenuControl {
+    request: AtomicU8,
+    open: AtomicBool,
+    /// Cursor mode is active, so a held hotkey opens the menu.
+    available: AtomicBool,
+    settings: AtomicBool,
+}
+
+const MENU_OPEN: u8 = 1;
+const MENU_CLOSE: u8 = 2;
+
+impl MenuControl {
+    pub fn request_open(&self) {
+        self.request.store(MENU_OPEN, Ordering::Relaxed);
+    }
+
+    pub fn request_close(&self) {
+        self.request.store(MENU_CLOSE, Ordering::Relaxed);
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.open.load(Ordering::Relaxed)
+    }
+
+    pub fn is_available(&self) -> bool {
+        self.available.load(Ordering::Relaxed)
+    }
+
+    pub fn set_available(&self, available: bool) {
+        self.available.store(available, Ordering::Relaxed);
+    }
+
+    pub fn request_settings(&self) {
+        self.settings.store(true, Ordering::Relaxed);
+    }
+
+    pub fn take_settings_request(&self) -> bool {
+        self.settings.swap(false, Ordering::Relaxed)
+    }
+}
+
+pub type SharedMenuControl = Arc<MenuControl>;
+
+/// A setting changed from the menu; the app applies and saves it.
+#[derive(Debug, Clone)]
+pub enum MenuChange {
+    Language(String),
+    Output(OutputMode),
+    Bubble(CursorBubble),
+    Display(DisplayMode),
+    /// Needs a model reload.
+    Model {
+        backend: speechcore::BackendType,
+        model: String,
+    },
+}
+
+impl MenuChange {
+    pub fn apply(&self, config: &mut AppConfig) {
+        match self {
+            MenuChange::Language(code) => config.general_config.language = code.clone(),
+            MenuChange::Output(mode) => config.portal_config.output_mode = *mode,
+            MenuChange::Bubble(bubble) => config.ui_config.cursor_bubble = *bubble,
+            MenuChange::Display(mode) => config.ui_config.display_mode = *mode,
+            MenuChange::Model { backend, model } => {
+                config.backend_config.backend = *backend;
+                config.general_config.model = model.clone();
+            }
+        }
+    }
+}
+
+const BARS: usize = 9;
+/// Audio frames kept; the outer bars echo the centre bar a few frames later.
+/// One band per bar pair, mirrored from the centre: low frequencies in the middle,
+/// higher ones outwards. Ranges in Hz, chosen for speech.
+const BANDS: [(f32, f32); BARS / 2 + 1] = [
+    (80.0, 300.0),
+    (300.0, 700.0),
+    (700.0, 1500.0),
+    (1500.0, 3000.0),
+    (3000.0, 6000.0),
+];
+const FFT_SIZE: usize = 512;
+/// speechcore captures at 16 kHz.
+const SAMPLE_RATE: f32 = 16_000.0;
+/// Tile size while recording, in logical px; it shrinks to `TILE_DONE` after the stop.
+const TILE_W: f32 = 100.0;
+const TILE_H: f32 = 64.0;
+const TILE_DONE: f32 = 0.88;
+/// Corner radius, bar width, and bar spacing relative to the tile height.
+const TILE_CORNER: f32 = 0.3;
+const BAR_WIDTH: f32 = 0.078;
+const BAR_PITCH: f32 = 0.14;
+/// Tallest height of each bar relative to the tile height: a bell, a little
+/// lopsided like the icon.
+const BAR_PROFILE: [f32; BARS] = [0.26, 0.38, 0.52, 0.66, 0.76, 0.64, 0.50, 0.36, 0.24];
+/// Share of its profile a bar shows at rest, so a quiet tile still looks like the icon.
+const BAR_REST: f32 = 0.22;
+/// The middle of the pointer arrow, relative to its tip.
+const POINTER_OFFSET: (f32, f32) = (7.0, 11.0);
+const FADE_IN: Duration = Duration::from_millis(110);
+const FADE_OUT: Duration = Duration::from_millis(220);
+/// The bubble flies into the pointer, then a small burst marks where the text went.
+const TELEPORT: Duration = Duration::from_millis(260);
+const BURST: Duration = Duration::from_millis(260);
+/// Word fade-in: each word fades over `WORD_FADE`, starting up to 30 ms after the
+/// last one; all words have started within `REVEAL_SPAN`.
+const WORD_FADE: Duration = Duration::from_millis(180);
+const WORD_STAGGER: Duration = Duration::from_millis(30);
+const REVEAL_SPAN: Duration = Duration::from_millis(500);
+const TEXT_COLOR: [f32; 3] = [0.17, 0.2, 0.26];
+const CANCEL_FADE: Duration = Duration::from_millis(170);
+const FLASH: Duration = Duration::from_millis(480);
+const BUBBLE_FADE_IN: Duration = Duration::from_millis(120);
+const ERROR_SHOWN: Duration = Duration::from_secs(4);
+/// Without a sign of transcription this long after the stop, the session was cancelled.
+const CANCEL_DETECT: Duration = Duration::from_millis(700);
+const BUBBLE_MAX_WIDTH: f32 = 420.0;
+const BUBBLE_FONT_SCALE: f32 = 1.4;
+const TIMER_FONT_SCALE: f32 = 1.1;
+const BUBBLE_MAX_CHARS: usize = 170;
+
+#[derive(Debug, Clone)]
+enum Phase {
+    Hidden,
+    Recording {
+        since: Instant,
+    },
+    Processing {
+        since: Instant,
+        transcription_seen: bool,
+        /// Last time the transcriber was busy; it can go idle between chunks.
+        last_busy: Instant,
+    },
+    Done {
+        since: Instant,
+        until: Instant,
+    },
+    Error {
+        since: Instant,
+        until: Instant,
+    },
+    Cancelled {
+        since: Instant,
+    },
+    Menu {
+        since: Instant,
+    },
+}
+
+/// What the bubble shows, laid out once when the text changes.
+struct Bubble {
+    body: String,
+    /// How the text was delivered; shown dimmer, after the words.
+    note: String,
+    error: bool,
+    size: (f32, f32),
+}
+
+const MAX_SHAPES: usize = 128;
+/// Lowest peak the level is measured against, so room noise stays small.
+const PEAK_FLOOR: f32 = 0.02;
+/// Half the side of the input-region gap that follows the pointer, in logical px.
+/// Inside the gap, clicks reach the apps below; leaving it reports the pointer.
+const GAP: f32 = 34.0;
+/// Space between the pointer and the tile edge, in logical px.
+const COMPANION_GAP: f32 = 16.0;
+/// Soft spring with a little overshoot: the tile trails the pointer and settles in
+/// about 0.6 s.
+const COMPANION_STIFFNESS: f32 = 60.0;
+const COMPANION_DAMPING: f32 = 13.0;
+/// Without a pointer report this long into a session, the tile shows at the bottom.
+const POINTER_WAIT: Duration = Duration::from_millis(400);
+
+struct Renderer {
+    shapes: ShapeRenderer,
+    text: TextRenderer,
+    /// Size `text` is laid out for; outputs may differ in size.
+    text_size: PhysicalSize<u32>,
+    format: wgpu::TextureFormat,
+}
+
+/// One full-screen layer on one output.
+struct OutputSurface {
+    surface: wgpu::Surface<'static>,
+    config: wgpu::SurfaceConfiguration,
+    // Dropped after `surface`, which borrows it.
+    window: Arc<dyn Window>,
+    /// Centre of the input-region gap, in physical px; `None` takes the whole output.
+    gap: Option<(f32, f32)>,
+    /// The input region must be set again and committed with the next frame.
+    region_dirty: bool,
+    /// The surface showed a frame since its content last changed.
+    settled: bool,
+}
+
+/// Shared state the overlay reads every frame.
+pub struct CursorOverlayHandles {
+    pub recording: Arc<AtomicBool>,
+    pub audio_data: Arc<RwLock<AudioVisualizationData>>,
+    pub backend_status: Option<Arc<RwLock<BackendStatus>>>,
+    pub delivery: SharedDelivery,
+    pub magic_mode_enabled: Option<Arc<AtomicBool>>,
+    pub manual_session_sender: Option<tokio::sync::mpsc::Sender<speechcore::ManualSessionCommand>>,
+    pub app_tx: tokio::sync::mpsc::UnboundedSender<AppCommand>,
+    pub menu: SharedMenuControl,
+}
+
+pub struct CursorOverlay {
+    pub instance: wgpu::Instance,
+    pub adapter: wgpu::Adapter,
+    pub device: wgpu::Device,
+    pub queue: wgpu::Queue,
+    renderer: Option<Renderer>,
+    surfaces: Vec<OutputSurface>,
+    /// The surface on the output that has the pointer; the tile draws there.
+    active: Option<WindowId>,
+    handles: CursorOverlayHandles,
+    error_color: [f32; 4],
+    language: String,
+    output_mode: OutputMode,
+    cursor_bubble: CursorBubble,
+    display_mode: DisplayMode,
+    backend: speechcore::BackendType,
+    model: String,
+    menu: Option<QuickMenu>,
+    config_changes: Vec<MenuChange>,
+    settings_requested: bool,
+    phase: Phase,
+    /// Last pointer position on the active surface, in physical pixels.
+    pointer: Option<(f32, f32)>,
+    /// Tile centre, trailing the pointer; frozen when recording stops.
+    anchor: Option<(f32, f32)>,
+    anchor_velocity: (f32, f32),
+    last_draw: Instant,
+    fft: Arc<dyn rustfft::Fft<f32>>,
+    fft_buffer: Vec<rustfft::num_complex::Complex<f32>>,
+    /// Shape of the newest spectrum per band, 0..1 relative to the loudest band.
+    spectrum: [f32; BANDS.len()],
+    /// Level of the newest audio, refreshed every frame while recording.
+    live: f32,
+    bars: [Spring; BARS],
+    tile_scale: Spring,
+    tile_size: Spring,
+    bubble_lift: Spring,
+    bubble_since: Instant,
+    /// Loudest recent level; bars show levels relative to it, so any mic gain moves them.
+    peak: f32,
+    seen_seq: u64,
+    /// Delivery and received counts when recording stopped.
+    stop_seq: u64,
+    stop_received: u64,
+    session_start: Instant,
+    texts: Vec<String>,
+    outcome: Option<DeliveryOutcome>,
+    bubble: Option<Bubble>,
+    started: Instant,
+}
+
+/// The overlay goes away when the display mode changes, also with the menu open.
+/// A stale open flag would make IPC treat every hotkey press as "close the menu".
+impl Drop for CursorOverlay {
+    fn drop(&mut self) {
+        self.handles.menu.open.store(false, Ordering::Relaxed);
+    }
+}
+
+impl CursorOverlay {
+    pub fn new(
+        handles: CursorOverlayHandles,
+        config: &AppConfig,
+        gpu: super::gpu_utils::Gpu,
+    ) -> Result<Self, String> {
+        let super::gpu_utils::Gpu {
+            instance,
+            adapter,
+            device,
+            queue,
+        } = gpu;
+        let seen_seq = handles.delivery.read().seq;
+        let now = Instant::now();
+        Ok(Self {
+            instance,
+            adapter,
+            device,
+            queue,
+            renderer: None,
+            surfaces: Vec::new(),
+            active: None,
+            handles,
+            error_color: config.ui_config.effective_recording_indicator_color(),
+            language: config.general_config.language.clone(),
+            output_mode: config.portal_config.output_mode,
+            cursor_bubble: config.ui_config.cursor_bubble,
+            display_mode: config.ui_config.display_mode,
+            backend: config.backend_config.backend,
+            model: config.general_config.model.clone(),
+            menu: None,
+            config_changes: Vec::new(),
+            settings_requested: false,
+            phase: Phase::Hidden,
+            pointer: None,
+            anchor: None,
+            anchor_velocity: (0.0, 0.0),
+            last_draw: now,
+            fft: rustfft::FftPlanner::new().plan_fft_forward(FFT_SIZE),
+            fft_buffer: vec![rustfft::num_complex::Complex::new(0.0, 0.0); FFT_SIZE],
+            spectrum: [0.0; BANDS.len()],
+            live: 0.0,
+            bars: [Spring::default(); BARS],
+            tile_scale: Spring::at(1.0),
+            tile_size: Spring::at(1.0),
+            bubble_lift: Spring::default(),
+            bubble_since: now,
+            peak: PEAK_FLOOR,
+            seen_seq,
+            stop_seq: seen_seq,
+            stop_received: 0,
+            session_start: now,
+            texts: Vec::new(),
+            outcome: None,
+            bubble: None,
+            started: now,
+        })
+    }
+
+    pub fn apply_config(&mut self, config: &AppConfig) {
+        self.error_color = config.ui_config.effective_recording_indicator_color();
+        self.language = config.general_config.language.clone();
+        self.output_mode = config.portal_config.output_mode;
+        self.cursor_bubble = config.ui_config.cursor_bubble;
+        self.display_mode = config.ui_config.display_mode;
+        self.backend = config.backend_config.backend;
+        self.model = config.general_config.model.clone();
+    }
+
+    /// Settings the menu changed since the last call.
+    pub fn take_config_changes(&mut self) -> Vec<MenuChange> {
+        std::mem::take(&mut self.config_changes)
+    }
+
+    /// Whether the menu asked to open the Settings window since the last call.
+    pub fn take_settings_request(&mut self) -> bool {
+        std::mem::take(&mut self.settings_requested)
+    }
+
+    pub fn owns(&self, window_id: WindowId) -> bool {
+        self.surfaces.iter().any(|s| s.window.id() == window_id)
+    }
+
+    /// Follows the session state. Called on every event-loop wake-up.
+    pub fn poll(&mut self, event_loop: &dyn ActiveEventLoop) {
+        self.advance(Instant::now());
+        let wants_surfaces = !matches!(self.phase, Phase::Hidden);
+        if wants_surfaces && self.surfaces.is_empty() {
+            if let Err(e) = self.open_surfaces(event_loop) {
+                eprintln!("Cursor overlay: {e}");
+                self.surfaces.clear();
+                self.phase = Phase::Hidden;
+            }
+        } else if !wants_surfaces && !self.surfaces.is_empty() {
+            self.surfaces.clear();
+            self.active = None;
+            self.pointer = None;
+            self.anchor = None;
+        }
+        for output in &self.surfaces {
+            if self.active == Some(output.window.id()) || !output.settled {
+                output.window.request_redraw();
+            }
+        }
+    }
+
+    pub fn handle_event(&mut self, window_id: WindowId, event: WindowEvent) {
+        match event {
+            WindowEvent::PointerEntered { position, .. }
+            | WindowEvent::PointerMoved { position, .. } => {
+                self.pointer_seen(window_id, (position.x as f32, position.y as f32));
+            }
+            WindowEvent::PointerButton {
+                state: winit::event::ElementState::Pressed,
+                ..
+            } if matches!(self.phase, Phase::Menu { .. }) => self.menu_click(window_id),
+            WindowEvent::SurfaceResized(size) => self.resize(window_id, size),
+            WindowEvent::RedrawRequested => {
+                self.advance(Instant::now());
+                self.draw(window_id);
+                if let Some(output) = self.surfaces.iter().find(|s| s.window.id() == window_id) {
+                    if self.active == Some(window_id) || !output.settled {
+                        output.window.request_redraw();
+                    }
+                }
+            }
+            // The compositor closed the surface (e.g. its output went away).
+            WindowEvent::CloseRequested => {
+                self.surfaces.retain(|s| s.window.id() != window_id);
+                if self.active == Some(window_id) {
+                    self.active = None;
+                    self.pointer = None;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The pointer left the gap (or reached this output). While recording, the gap
+    /// moves under it, so the pointer is over the apps again and clicks reach them.
+    fn pointer_seen(&mut self, window_id: WindowId, position: (f32, f32)) {
+        if let (Phase::Menu { .. }, Some(menu)) = (&self.phase, self.menu.as_mut()) {
+            self.pointer = Some(position);
+            menu.pointer(window_id, position);
+            if menu.window() == Some(window_id) {
+                self.active = Some(window_id);
+            }
+            return;
+        }
+        let switched = self.active != Some(window_id);
+        self.active = Some(window_id);
+        self.pointer = Some(position);
+        if switched {
+            self.anchor = None;
+        }
+        if !matches!(self.phase, Phase::Recording { .. }) {
+            return;
+        }
+        for output in &mut self.surfaces {
+            let gap = (output.window.id() == window_id).then_some(position);
+            if output.gap != gap {
+                output.gap = gap;
+                output.region_dirty = true;
+                output.settled = false;
+                output.window.request_redraw();
+            }
+        }
+    }
+
+    fn enter(&mut self, phase: Phase) {
+        let capture = |p: &Phase| matches!(p, Phase::Recording { .. } | Phase::Menu { .. });
+        let was_capturing = capture(&self.phase);
+        let capturing = capture(&phase);
+        self.phase = phase;
+        self.handles
+            .menu
+            .open
+            .store(matches!(self.phase, Phase::Menu { .. }), Ordering::Relaxed);
+        if !matches!(self.phase, Phase::Menu { .. }) {
+            self.menu = None;
+        }
+        // The menu takes the whole output, so the recording gap must go too.
+        if capturing != was_capturing || matches!(self.phase, Phase::Menu { .. }) {
+            for output in &mut self.surfaces {
+                output.gap = None;
+                output.region_dirty = true;
+                output.settled = false;
+                output.window.request_redraw();
+            }
+        }
+    }
+
+    /// While recording, the surface takes pointer input everywhere except the gap;
+    /// with the menu open, everywhere; otherwise nowhere. The region applies with
+    /// the next commit.
+    fn apply_region(output: &mut OutputSurface, capture: bool) {
+        if !output.region_dirty {
+            return;
+        }
+        output.region_dirty = false;
+        if !capture {
+            let _ = output.window.set_cursor_hittest(false);
+            return;
+        }
+        let Some(wayland) = output.window.cast_ref::<winit::platform::wayland::Window>() else {
+            let _ = output.window.set_cursor_hittest(true);
+            return;
+        };
+        let Some((x, y)) = output.gap else {
+            wayland.set_region(None);
+            return;
+        };
+        let Ok(region) = wayland.create_region() else {
+            return;
+        };
+        let sf = output.window.scale_factor() as f32;
+        let size = output.window.surface_size();
+        region.add(
+            0,
+            0,
+            (size.width as f32 / sf).ceil() as i32,
+            (size.height as f32 / sf).ceil() as i32,
+        );
+        region.subtract(
+            (x / sf - GAP).round() as i32,
+            (y / sf - GAP).round() as i32,
+            (2.0 * GAP) as i32,
+            (2.0 * GAP) as i32,
+        );
+        wayland.set_region(Some(&region));
+    }
+
+    /// Moves the phase on from the shared session state.
+    fn advance(&mut self, now: Instant) {
+        let recording = self.handles.recording.load(Ordering::Relaxed);
+        let processing_state = self.handles.audio_data.read().processing_state;
+        match self.handles.menu.request.swap(0, Ordering::Relaxed) {
+            MENU_OPEN => {
+                self.enter(Phase::Menu { since: now });
+                let mut menu = QuickMenu::new(now);
+                // Open at once where the pointer was last seen, without waiting for motion.
+                if let (Some(window_id), Some(position)) = (self.active, self.pointer) {
+                    menu.pointer(window_id, position);
+                }
+                self.menu = Some(menu);
+            }
+            MENU_CLOSE if matches!(self.phase, Phase::Menu { .. }) => self.close_menu(now),
+            _ => {}
+        }
+        self.collect_deliveries(now);
+
+        match self.phase.clone() {
+            Phase::Recording { .. } if !recording => {
+                self.stop_seq = self.seen_seq;
+                self.stop_received = self.handles.delivery.read().received;
+                self.enter(Phase::Processing {
+                    since: now,
+                    transcription_seen: false,
+                    last_busy: now,
+                });
+            }
+            Phase::Recording { .. } => {}
+            // A cancel from the overlay fades out even if the flag still lags.
+            Phase::Cancelled { since } => {
+                if now >= since + CANCEL_FADE {
+                    self.enter(Phase::Hidden);
+                }
+            }
+            // The session the held hotkey started may still be winding down.
+            Phase::Menu { since } => {
+                if recording && now >= since + Duration::from_millis(1500) {
+                    self.start_session(now);
+                } else if self.menu.as_ref().is_none_or(|menu| menu.closed(now)) {
+                    self.enter(Phase::Hidden);
+                }
+            }
+            _ if recording => self.start_session(now),
+            Phase::Hidden => {}
+            Phase::Processing {
+                since,
+                mut transcription_seen,
+                mut last_busy,
+            } => {
+                // Only `Transcribing` counts: `Completed` can linger from the last session.
+                let transcribing = processing_state == ProcessingState::Transcribing;
+                if transcribing {
+                    transcription_seen = true;
+                    last_busy = now;
+                }
+                let idle = transcription_seen && !transcribing;
+                // A transcript arrived that is not pasted yet (Magic Mode, a slow paste).
+                let received = self.handles.delivery.read().received - self.stop_received;
+                let delivered = self.seen_seq - self.stop_seq;
+                let pending = received > delivered;
+                if processing_state == ProcessingState::Error {
+                    let message = self
+                        .recent_error()
+                        .unwrap_or_else(|| "Transcription failed".to_string());
+                    self.show_error(message, now);
+                } else if idle && !pending && delivered > 0 {
+                    // Transcribed and pasted.
+                    self.show_result(now);
+                } else if idle && now >= last_busy + self.delivery_wait(pending) {
+                    // Idle this long with nothing delivered: silence. Leave quietly.
+                    if self.texts.is_empty() {
+                        self.enter(Phase::Cancelled { since: now });
+                    } else {
+                        self.show_result(now);
+                    }
+                } else if !transcription_seen && now >= since + CANCEL_DETECT {
+                    self.enter(Phase::Cancelled { since: now });
+                } else {
+                    self.phase = Phase::Processing {
+                        since,
+                        transcription_seen,
+                        last_busy,
+                    };
+                }
+            }
+            Phase::Done { until, .. } => {
+                if now >= until + TELEPORT + BURST {
+                    self.enter(Phase::Hidden);
+                }
+            }
+            Phase::Error { until, .. } => {
+                if now >= until + FADE_OUT {
+                    self.enter(Phase::Hidden);
+                }
+            }
+        }
+    }
+
+    fn start_session(&mut self, now: Instant) {
+        self.session_start = now;
+        self.texts.clear();
+        self.outcome = None;
+        self.bubble = None;
+        self.spectrum = [0.0; BANDS.len()];
+        self.live = 0.0;
+        self.bars = [Spring::default(); BARS];
+        self.tile_scale = Spring::at(0.72);
+        self.tile_size = Spring::at(1.0);
+        self.peak = PEAK_FLOOR;
+        self.enter(Phase::Recording { since: now });
+    }
+
+    /// Long recordings deliver finished chunks while recording, so collect from the start.
+    fn collect_deliveries(&mut self, now: Instant) {
+        let delivery = self.handles.delivery.read();
+        if delivery.seq == self.seen_seq {
+            return;
+        }
+        self.seen_seq = delivery.seq;
+        let in_session = !matches!(self.phase, Phase::Hidden | Phase::Cancelled { .. });
+        if !in_session {
+            return;
+        }
+        if !delivery.text.is_empty() {
+            self.texts.push(delivery.text.clone());
+        }
+        self.outcome = delivery.outcome.clone();
+        drop(delivery);
+        // A late chunk (e.g. after Magic Mode) extends a bubble already shown.
+        if matches!(self.phase, Phase::Done { .. }) {
+            self.show_result(now);
+        }
+    }
+
+    /// How long after transcription Sonori waits for the paste. Without a
+    /// transcript on its way, the session produced no text.
+    fn delivery_wait(&self, pending: bool) -> Duration {
+        match (pending, self.magic_mode_active()) {
+            (false, _) => Duration::from_millis(1500),
+            (true, false) => Duration::from_secs(15),
+            (true, true) => Duration::from_secs(60),
+        }
+    }
+
+    fn recent_error(&self) -> Option<String> {
+        let status = self.handles.backend_status.as_ref()?.read();
+        let (message, at) = status.last_error.as_ref()?;
+        (*at >= self.session_start).then(|| message.clone())
+    }
+
+    fn show_result(&mut self, now: Instant) {
+        let text = self.texts.join(" ");
+        if text.is_empty() {
+            self.enter(Phase::Cancelled { since: now });
+            return;
+        }
+        let words = text.split_whitespace().count() as u64;
+        if self.cursor_bubble == CursorBubble::Off {
+            self.bubble = None;
+            self.phase = Phase::Done {
+                since: now,
+                until: now,
+            };
+            return;
+        }
+        let (note, error) = match &self.outcome {
+            Some(DeliveryOutcome::Pasted) | None => ("Pasted".to_string(), false),
+            Some(DeliveryOutcome::Typed) => ("Typed".to_string(), false),
+            Some(DeliveryOutcome::Copied) => ("Copied".to_string(), false),
+            Some(DeliveryOutcome::Failed(message)) => (message.clone(), true),
+        };
+        let unit = if words == 1 { "word" } else { "words" };
+        self.set_bubble(
+            shorten(&text, BUBBLE_MAX_CHARS),
+            format!("{note} · {words} {unit}"),
+            error,
+        );
+        let since = match self.phase {
+            Phase::Done { since, .. } => since,
+            _ => now,
+        };
+        let life = match self.cursor_bubble {
+            CursorBubble::Long => Duration::from_millis((6000 + 60 * words).min(15_000)),
+            _ => Duration::from_millis((1200 + 30 * words).min(4000)),
+        };
+        self.phase = Phase::Done {
+            since,
+            until: now + life,
+        };
+    }
+
+    fn show_error(&mut self, message: String, now: Instant) {
+        self.set_bubble(message, String::new(), true);
+        self.enter(Phase::Error {
+            since: now,
+            until: now + ERROR_SHOWN,
+        });
+    }
+
+    fn set_bubble(&mut self, body: String, note: String, error: bool) {
+        if self.bubble.is_none() {
+            self.bubble_since = Instant::now();
+            self.bubble_lift = Spring::at(6.0);
+        }
+        let text = if note.is_empty() {
+            body.clone()
+        } else {
+            format!("{body}\n{note}")
+        };
+        let size = self.measure_bubble(&text);
+        self.bubble = Some(Bubble {
+            body,
+            note,
+            error,
+            size,
+        });
+    }
+
+    fn scale(&self) -> f32 {
+        self.surfaces
+            .iter()
+            .find(|s| Some(s.window.id()) == self.active)
+            .or(self.surfaces.first())
+            .map_or(1.0, |s| s.window.scale_factor() as f32)
+    }
+
+    fn measure_bubble(&mut self, text: &str) -> (f32, f32) {
+        let sf = self.scale();
+        let pad = (13.0 * sf, 10.0 * sf);
+        let Some(renderer) = self.renderer.as_mut() else {
+            return (BUBBLE_MAX_WIDTH * sf, 60.0 * sf);
+        };
+        let scale = BUBBLE_FONT_SCALE * sf;
+        let widest = text
+            .lines()
+            .map(|line| renderer.text.measure_text(line, scale))
+            .fold(0.0, f32::max);
+        let inner = (widest + 2.0).min(BUBBLE_MAX_WIDTH * sf - 2.0 * pad.0);
+        let height = renderer
+            .text
+            .text_height(text, scale, [1.0; 4], text_area_width(inner));
+        (inner + 2.0 * pad.0, height + 2.0 * pad.1)
+    }
+
+    /// One layer per output, so the ring can follow the pointer to any monitor.
+    fn open_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) -> Result<(), String> {
+        let outputs: Vec<Option<u64>> = {
+            let ids: Vec<u64> = event_loop
+                .available_monitors()
+                .map(|m| m.native_id())
+                .collect();
+            if ids.is_empty() {
+                vec![None]
+            } else {
+                ids.into_iter().map(Some).collect()
+            }
+        };
+        for output in outputs {
+            self.open_surface(event_loop, output)?;
+        }
+        Ok(())
+    }
+
+    fn open_surface(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        output: Option<u64>,
+    ) -> Result<(), String> {
+        let mut attrs = WindowAttributes::default()
+            .with_title("Sonori Cursor")
+            .with_decorations(false)
+            .with_transparent(true)
+            // Zero means "fill the anchored edges".
+            .with_surface_size(LogicalSize::new(0, 0))
+            .with_cursor(CursorIcon::Default);
+        let mut wayland = WindowAttributesWayland::default()
+            .with_layer_shell()
+            .with_layer(Layer::Overlay)
+            .with_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT)
+            .with_exclusive_zone(-1)
+            .with_keyboard_interactivity(KeyboardInteractivity::None);
+        if let Some(output) = output {
+            wayland = wayland.with_output(output);
+        }
+        attrs = attrs.with_platform_attributes(Box::new(wayland));
+
+        let window: Arc<dyn Window> = Arc::from(
+            event_loop
+                .create_window(attrs)
+                .map_err(|e| format!("failed to create the layer surface: {e}"))?,
+        );
+        let surface = self
+            .instance
+            .create_surface(window.clone())
+            .map_err(|e| format!("failed to create a GPU surface: {e}"))?;
+        let caps = surface.get_capabilities(&self.adapter);
+        // One renderer draws on every output, so all surfaces share its format.
+        // Non-sRGB, so blending matches the compositor's and colours are sRGB values.
+        let format = self
+            .renderer
+            .as_ref()
+            .map(|r| r.format)
+            .into_iter()
+            .chain([
+                wgpu::TextureFormat::Bgra8Unorm,
+                wgpu::TextureFormat::Rgba8Unorm,
+            ])
+            .find(|f| caps.formats.contains(f))
+            .ok_or_else(|| format!("no 8-bit surface format among {:?}", caps.formats))?;
+        let alpha_mode = [
+            wgpu::CompositeAlphaMode::PreMultiplied,
+            wgpu::CompositeAlphaMode::PostMultiplied,
+            wgpu::CompositeAlphaMode::Inherit,
+        ]
+        .into_iter()
+        .find(|m| caps.alpha_modes.contains(m))
+        .unwrap_or(caps.alpha_modes[0]);
+        let size = window.surface_size();
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            width: size.width.max(1),
+            height: size.height.max(1),
+            present_mode: wgpu::PresentMode::Fifo,
+            alpha_mode,
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+        surface.configure(&self.device, &config);
+
+        if self.renderer.as_ref().is_none_or(|r| r.format != format) {
+            if !self.surfaces.is_empty() {
+                return Err(format!(
+                    "outputs need different surface formats ({format:?})"
+                ));
+            }
+            self.renderer = Some(Renderer::new(&self.device, &self.queue, format, size));
+        }
+        window.request_redraw();
+        self.surfaces.push(OutputSurface {
+            surface,
+            config,
+            window,
+            gap: None,
+            region_dirty: true,
+            settled: false,
+        });
+        Ok(())
+    }
+
+    fn resize(&mut self, window_id: WindowId, size: PhysicalSize<u32>) {
+        let Some(output) = self
+            .surfaces
+            .iter_mut()
+            .find(|s| s.window.id() == window_id)
+        else {
+            return;
+        };
+        if size.width == 0 || size.height == 0 {
+            return;
+        }
+        output.config.width = size.width;
+        output.config.height = size.height;
+        output.surface.configure(&self.device, &output.config);
+        output.region_dirty = true;
+        output.settled = false;
+    }
+
+    /// Advances bar, ring, and bubble motion by `dt` seconds.
+    fn update_motion(&mut self, now: Instant, dt: f32, recording: bool) {
+        self.live = if recording { self.mic_level() } else { 0.0 };
+        if recording {
+            self.update_spectrum();
+        }
+        let t = now.duration_since(self.started).as_secs_f32();
+        let loading = self.backend_loading();
+        for i in 0..BARS {
+            let fi = i as f32;
+            let target = match self.phase {
+                Phase::Recording { .. } if loading => BAR_REST * (0.7 + 0.3 * (2.5 * t).sin()),
+                Phase::Recording { .. } => {
+                    // Loudness sets the height, the spectrum sets the shape. A faint sway
+                    // keeps the two halves of a pair from moving in lockstep.
+                    let shape = self.spectrum[i.abs_diff(BARS / 2)];
+                    let sway = 0.96 + 0.04 * (2.3 * t + 1.9 * fi).sin();
+                    BAR_REST + (1.0 - BAR_REST) * self.live * shape * sway
+                }
+                // A soft wave runs across the bars while Sonori works.
+                Phase::Processing { .. } => {
+                    BAR_REST * 0.6 + 0.3 * (5.0 * t - 0.7 * fi).sin().max(0.0)
+                }
+                _ => BAR_REST,
+            };
+            let bar = &mut self.bars[i];
+            // Quick, slightly springy rise; calm, critically damped fall.
+            if target > bar.x {
+                bar.step(target, 520.0, 30.0, dt);
+            } else {
+                bar.step(target, 150.0, 24.5, dt);
+            }
+            bar.x = bar.x.max(0.0);
+        }
+        let size = if recording { 1.0 } else { TILE_DONE };
+        self.tile_size.step(size, 380.0, 28.0, dt);
+        self.tile_scale.step(1.0, 380.0, 28.0, dt);
+        self.bubble_lift.step(0.0, 300.0, 28.0, dt);
+    }
+
+    /// Energy per band of the newest 32 ms, relative to the loudest band. A tilt of
+    /// +3 dB per octave offsets the natural fall-off of speech, so high bands move too.
+    fn update_spectrum(&mut self) {
+        {
+            let data = self.handles.audio_data.read();
+            let tail = &data.samples[data.samples.len().saturating_sub(FFT_SIZE)..];
+            let n = tail.len();
+            for (i, slot) in self.fft_buffer.iter_mut().enumerate() {
+                let sample = if i < n { tail[i] } else { 0.0 };
+                let hann =
+                    0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / (FFT_SIZE - 1) as f32).cos();
+                *slot = rustfft::num_complex::Complex::new(sample * hann, 0.0);
+            }
+        }
+        self.fft.process(&mut self.fft_buffer);
+        let bin_hz = SAMPLE_RATE / FFT_SIZE as f32;
+        let mut energy = [0.0f32; BANDS.len()];
+        for (band, (lo, hi)) in BANDS.iter().enumerate() {
+            let first = (lo / bin_hz).round() as usize;
+            let last = ((hi / bin_hz).round() as usize).clamp(first + 1, FFT_SIZE / 2);
+            let bins = &self.fft_buffer[first..last];
+            let mean = bins.iter().map(|c| c.norm()).sum::<f32>() / bins.len() as f32;
+            let centre = (lo * hi).sqrt();
+            energy[band] = mean * (centre / 300.0).sqrt();
+        }
+        let loudest = energy.iter().copied().fold(1e-9, f32::max);
+        for (shape, e) in self.spectrum.iter_mut().zip(energy) {
+            *shape = (e / loudest).powf(0.6);
+        }
+    }
+
+    /// RMS of the newest samples relative to the recent peak, with a noise gate.
+    fn mic_level(&mut self) -> f32 {
+        let rms = {
+            let data = self.handles.audio_data.read();
+            let tail = &data.samples[data.samples.len().saturating_sub(512)..];
+            if tail.is_empty() {
+                return 0.0;
+            }
+            (tail.iter().map(|s| s * s).sum::<f32>() / tail.len() as f32).sqrt()
+        };
+        self.peak = (self.peak * 0.985).max(rms).max(PEAK_FLOOR);
+        let level = ((rms / self.peak - 0.08) / 0.92).clamp(0.0, 1.0);
+        level.powf(0.7)
+    }
+
+    fn draw(&mut self, window_id: WindowId) {
+        let now = Instant::now();
+        let recording = matches!(self.phase, Phase::Recording { .. });
+        let Some(index) = self
+            .surfaces
+            .iter()
+            .position(|s| s.window.id() == window_id)
+        else {
+            return;
+        };
+        let size = PhysicalSize::new(
+            self.surfaces[index].config.width,
+            self.surfaces[index].config.height,
+        );
+        let width = size.width as f32;
+        let height = size.height as f32;
+        let sf = self.surfaces[index].window.scale_factor() as f32;
+
+        // No pointer report yet: after a short wait, use the bottom of the first output.
+        if self.active.is_none() && recording {
+            if let Phase::Recording { since } = self.phase {
+                if now >= since + POINTER_WAIT {
+                    self.active = Some(window_id);
+                    self.anchor = Some((width / 2.0, height - 140.0 * sf));
+                }
+            }
+        }
+        let is_active = self.active == Some(window_id);
+        if is_active {
+            let dt = now.duration_since(self.last_draw).as_secs_f32().min(0.1);
+            self.last_draw = now;
+            self.update_motion(now, dt, recording);
+            let follow = recording || matches!(self.phase, Phase::Cancelled { .. });
+            if let (true, Some((px, py))) = (follow, self.pointer) {
+                let pointer = (px + POINTER_OFFSET.0 * sf, py + POINTER_OFFSET.1 * sf);
+                let target = self.companion_target(now, pointer, sf, width, height);
+                match self.anchor {
+                    None => {
+                        self.anchor = Some(target);
+                        self.anchor_velocity = (0.0, 0.0);
+                    }
+                    Some((ax, ay)) => {
+                        let mut x = Spring {
+                            x: ax,
+                            v: self.anchor_velocity.0,
+                        };
+                        let mut y = Spring {
+                            x: ay,
+                            v: self.anchor_velocity.1,
+                        };
+                        x.step(target.0, COMPANION_STIFFNESS, COMPANION_DAMPING, dt);
+                        y.step(target.1, COMPANION_STIFFNESS, COMPANION_DAMPING, dt);
+                        self.anchor = Some((x.x, y.x));
+                        self.anchor_velocity = (x.v, y.v);
+                    }
+                }
+            }
+        }
+        if let Some(renderer) = self.renderer.as_mut() {
+            if renderer.text_size != size {
+                renderer.text.resize(size);
+                renderer.text_size = size;
+            }
+        }
+        let menu_open = self.menu.as_ref().is_some_and(|m| !m.is_closing());
+        let capture = recording || (matches!(self.phase, Phase::Menu { .. }) && menu_open);
+        Self::apply_region(&mut self.surfaces[index], capture);
+
+        let (cx, cy) = self.anchor.unwrap_or((-1000.0, -1000.0));
+        let menu = matches!(self.phase, Phase::Menu { .. });
+        let visible = !menu && is_active && self.anchor.is_some();
+        let timer_label = self.timer_label(now).map(|label| {
+            let w = self
+                .renderer
+                .as_mut()
+                .map_or(0.0, |r| r.text.measure_text(&label, TIMER_FONT_SCALE * sf));
+            (label, w)
+        });
+        let menu_here = menu && self.menu.as_ref().and_then(|m| m.window()) == Some(window_id);
+        let mut scene = if visible {
+            self.build_scene(now, cx, cy, sf, width, timer_label)
+        } else {
+            Scene::default()
+        };
+        if menu_here {
+            let state = self.menu_state();
+            if let (Some(menu), Some(renderer)) = (self.menu.as_mut(), self.renderer.as_mut()) {
+                menu.build(
+                    &state,
+                    now,
+                    sf,
+                    (width, height),
+                    &mut renderer.text,
+                    &mut scene.shapes,
+                    &mut scene.labels,
+                );
+            }
+        }
+        let is_active = is_active || menu_here;
+        let shapes = scene.shapes;
+
+        let output = &mut self.surfaces[index];
+        let frame = match output.surface.get_current_texture() {
+            Ok(frame) => frame,
+            Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
+                output.surface.configure(&self.device, &output.config);
+                return;
+            }
+            Err(_) => return,
+        };
+        output.settled = !is_active;
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let Some(renderer) = self.renderer.as_mut() else {
+            return;
+        };
+
+        let count = shapes.len().min(MAX_SHAPES);
+        renderer.shapes.upload(
+            &self.device,
+            &self.queue,
+            [width, height],
+            now.duration_since(self.started).as_secs_f32(),
+            &shapes[..count],
+        );
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Cursor Overlay Encoder"),
+            });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Cursor Overlay Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            renderer.shapes.draw(&mut pass, 0..count as u32);
+        }
+
+        if let Some((text, x, y, scale, alpha)) = scene.timer {
+            renderer.text.render_text(
+                &view,
+                &mut encoder,
+                &text,
+                x,
+                y,
+                scale,
+                [0.17, 0.2, 0.26, alpha],
+                text_area_width(200.0 * sf),
+                (40.0 * sf) as u32,
+                None,
+            );
+        } else if let (Some((x, y, alpha)), Some(bubble)) = (scene.bubble_text, &self.bubble) {
+            let pad = (13.0 * sf, 10.0 * sf);
+            let elapsed = now.duration_since(self.bubble_since);
+            let spans = reveal_spans(bubble, elapsed, alpha);
+            renderer.text.render_spans(
+                &view,
+                &mut encoder,
+                &spans,
+                x + pad.0,
+                y + pad.1,
+                BUBBLE_FONT_SCALE * sf,
+                1.1,
+                text_area_width(bubble.size.0 - 2.0 * pad.0),
+            );
+        }
+
+        renderer
+            .text
+            .render_labels(&view, &mut encoder, &scene.labels);
+
+        self.queue.submit(Some(encoder.finish()));
+        frame.present();
+        renderer.text.trim_atlas();
+    }
+
+    /// Where the ring rests: beside the pointer, below and to the right unless an
+    /// edge is near, drifting slowly around that spot.
+    fn companion_target(
+        &self,
+        now: Instant,
+        pointer: (f32, f32),
+        sf: f32,
+        width: f32,
+        height: f32,
+    ) -> (f32, f32) {
+        use std::f32::consts::FRAC_PI_4;
+        let t = now.duration_since(self.started).as_secs_f32();
+        let dist = (0.6 * TILE_W + COMPANION_GAP) * sf * (1.0 + 0.05 * (0.9 * t).sin());
+        let reach = dist + (0.6 * TILE_W + 12.0) * sf;
+        let right = pointer.0 + reach < width;
+        let below = pointer.1 + reach < height;
+        let base = match (right, below) {
+            (true, true) => FRAC_PI_4,
+            (false, true) => 3.0 * FRAC_PI_4,
+            (true, false) => -FRAC_PI_4,
+            (false, false) => -3.0 * FRAC_PI_4,
+        };
+        let drift = 0.45 * (0.5 * t).sin() + 0.2 * (0.23 * t + 1.0).sin();
+        let angle = base + drift;
+        (
+            pointer.0 + dist * angle.cos(),
+            pointer.1 + dist * angle.sin(),
+        )
+    }
+
+    /// Starts the close animation; clicks pass through to the apps at once.
+    fn close_menu(&mut self, now: Instant) {
+        let Some(menu) = self.menu.as_mut() else {
+            return;
+        };
+        menu.close(now);
+        self.handles.menu.open.store(false, Ordering::Relaxed);
+        for output in &mut self.surfaces {
+            output.region_dirty = true;
+            output.settled = false;
+            output.window.request_redraw();
+        }
+    }
+
+    fn menu_state(&self) -> MenuState {
+        // Moonshine accepts "base" and "moonshine-base" for the same model.
+        let model = self.model.strip_prefix("moonshine-").unwrap_or(&self.model);
+        MenuState {
+            language: self.language.clone(),
+            magic: self.magic_mode_active(),
+            output: self.output_mode,
+            display: self.display_mode,
+            preset: PRESETS
+                .iter()
+                .position(|p| p.backend == self.backend && p.model == model),
+        }
+    }
+
+    /// A click acts on the menu; a click outside closes it.
+    fn menu_click(&mut self, window_id: WindowId) {
+        let Some(position) = self.pointer else {
+            return;
+        };
+        let state = self.menu_state();
+        let Some(menu) = self.menu.as_mut() else {
+            return;
+        };
+        let now = Instant::now();
+        match menu.click(window_id, position, &state) {
+            None => {}
+            Some(MenuAction::Close) => self.close_menu(now),
+            Some(MenuAction::ToggleMagic) => {
+                let _ = self.handles.app_tx.send(AppCommand::ToggleMagicMode);
+            }
+            Some(MenuAction::OpenSettings) => {
+                self.settings_requested = true;
+                self.close_menu(now);
+            }
+            Some(MenuAction::Change(change)) => {
+                // Show the change at once; the app saves it and applies it everywhere.
+                match &change {
+                    MenuChange::Language(code) => self.language = code.clone(),
+                    MenuChange::Output(mode) => self.output_mode = *mode,
+                    MenuChange::Bubble(bubble) => self.cursor_bubble = *bubble,
+                    MenuChange::Display(mode) => self.display_mode = *mode,
+                    MenuChange::Model { backend, model } => {
+                        self.backend = *backend;
+                        self.model = model.clone();
+                    }
+                }
+                self.config_changes.push(change);
+            }
+        }
+    }
+
+    /// Shapes and text placement for one frame of the active output.
+    fn build_scene(
+        &self,
+        now: Instant,
+        cx: f32,
+        cy: f32,
+        sf: f32,
+        width: f32,
+        timer_label: Option<(String, f32)>,
+    ) -> Scene {
+        let mut scene = Scene::default();
+        let since_phase = |since: Instant| now.duration_since(since).as_secs_f32();
+
+        // Tile opacity, extra exit scale, edge glow, and sideways shake, per phase.
+        let (alpha, exit_scale, glow, shake) = match &self.phase {
+            Phase::Hidden => return scene,
+            Phase::Recording { since } => {
+                let t = (since_phase(*since) / FADE_IN.as_secs_f32()).min(1.0);
+                (1.0 - (1.0 - t) * (1.0 - t), 1.0, 0.0, 0.0)
+            }
+            Phase::Processing { .. } => (1.0, 1.0, 0.0, 0.0),
+            Phase::Done { since, .. } => {
+                let t = (since_phase(*since) / FLASH.as_secs_f32()).min(1.0);
+                (1.0 - t, 1.0 + 0.06 * t, 1.0 - t, 0.0)
+            }
+            Phase::Error { since, until } => {
+                let el = since_phase(*since);
+                let q = (el / FLASH.as_secs_f32()).min(1.0);
+                let shake = (1.0 - q) * 5.0 * sf * (el * 62.0).sin();
+                (self.fade_out(now, *until), 1.0, 0.0, shake)
+            }
+            Phase::Cancelled { since } => {
+                let t = (since_phase(*since) / CANCEL_FADE.as_secs_f32()).min(1.0);
+                (1.0 - t * t, 1.0 - 0.12 * t * t, 0.0, 0.0)
+            }
+            Phase::Menu { .. } => return scene,
+        };
+        let k = self.tile_size.x * sf * self.tile_scale.x * exit_scale;
+        let (tw, th) = (TILE_W * k, TILE_H * k);
+        let tx = cx + shake;
+        if alpha > 0.0 {
+            scene.shapes.push(glass(
+                tx,
+                cy,
+                tw / 2.0,
+                th / 2.0,
+                TILE_CORNER * th,
+                14.0 * sf,
+                0.62,
+                glow,
+                alpha,
+            ));
+            if matches!(self.phase, Phase::Error { .. }) {
+                let mut red = self.error_color;
+                red[3] = 0.7 * alpha;
+                scene.shapes.push(Shape {
+                    rect: [tx - tw / 2.0, cy - th / 2.0, tw, th],
+                    color: [0.0; 4],
+                    params: [OUTLINE, TILE_CORNER * th, 1.5 * sf, 0.0],
+                    extra: red,
+                });
+            }
+            let bar_w = BAR_WIDTH * th;
+            let margin = 2.0 * sf;
+            for (i, bar) in self.bars.iter().enumerate() {
+                let x = tx + (i as f32 - (BARS / 2) as f32) * BAR_PITCH * th;
+                let h = (BAR_PROFILE[i] * th * bar.x.min(1.2)).max(bar_w);
+                scene.shapes.push(Shape {
+                    rect: [
+                        x - bar_w / 2.0 - margin,
+                        cy - h / 2.0 - margin,
+                        bar_w + 2.0 * margin,
+                        h + 2.0 * margin,
+                    ],
+                    color: [1.0, 1.0, 1.0, alpha],
+                    params: [SILVER_BAR, 0.0, margin, 0.0],
+                    extra: [0.0; 4],
+                });
+            }
+        }
+        if let Some((label, label_w)) = timer_label {
+            self.add_timer(&mut scene, label, label_w, cx, cy + th / 2.0, sf, alpha);
+        }
+        if matches!(self.phase, Phase::Done { .. } | Phase::Error { .. }) {
+            self.add_bubble(&mut scene, now, cx, cy, sf, width);
+        }
+        scene
+    }
+
+    /// Opacity that falls from 1 to 0 over `FADE_OUT` after `until`.
+    fn fade_out(&self, now: Instant, until: Instant) -> f32 {
+        if now <= until {
+            1.0
+        } else {
+            (1.0 - (now - until).as_secs_f32() / FADE_OUT.as_secs_f32()).max(0.0)
+        }
+    }
+
+    fn add_bubble(&self, scene: &mut Scene, now: Instant, cx: f32, cy: f32, sf: f32, width: f32) {
+        let Some(bubble) = &self.bubble else {
+            // Bubble off: only the burst at the pointer marks the delivery.
+            if let Phase::Done { until, .. } = self.phase {
+                let after = now.saturating_duration_since(until).as_secs_f32();
+                let target = self.pointer.unwrap_or((cx, cy));
+                add_burst(scene, target, after / BURST.as_secs_f32(), sf);
+            }
+            return;
+        };
+        let until = match self.phase {
+            Phase::Done { until, .. } | Phase::Error { until, .. } => until,
+            _ => return,
+        };
+        let fade_in = (now.duration_since(self.bubble_since).as_secs_f32()
+            / BUBBLE_FADE_IN.as_secs_f32())
+        .min(1.0);
+        let (bx, by) = bubble_origin(cx, cy, bubble.size, sf, width);
+        let by = by + self.bubble_lift.x * sf;
+        let (w, h) = bubble.size;
+
+        if matches!(self.phase, Phase::Done { .. }) {
+            // After its time, the bubble flies into the pointer and vanishes there.
+            let target = self.pointer.unwrap_or((cx, cy));
+            let after = now.saturating_duration_since(until).as_secs_f32();
+            let p = (after / TELEPORT.as_secs_f32()).min(1.0);
+            if p < 1.0 {
+                let e = p * p;
+                let (ox, oy) = (bx + w / 2.0, by + h / 2.0);
+                let (gx, gy) = (ox + (target.0 - ox) * e, oy + (target.1 - oy) * e);
+                let shrink = 1.0 - 0.96 * e;
+                let (hw, hh) = (w / 2.0 * shrink, h / 2.0 * shrink);
+                let glass_alpha = fade_in * (1.0 - 0.5 * e);
+                scene.shapes.push(glass(
+                    gx,
+                    gy,
+                    hw,
+                    hh,
+                    14.0 * sf * shrink,
+                    18.0 * sf,
+                    0.82,
+                    0.0,
+                    glass_alpha,
+                ));
+                let text_alpha = fade_in * (1.0 - smoothstep(0.0, 0.3, p));
+                if text_alpha > 0.0 {
+                    scene.bubble_text = Some((bx, by, text_alpha));
+                }
+            } else {
+                let q = (after - TELEPORT.as_secs_f32()) / BURST.as_secs_f32();
+                add_burst(scene, target, q, sf);
+            }
+            return;
+        }
+
+        let alpha = fade_in * self.fade_out(now, until);
+        scene.shapes.push(glass(
+            bx + w / 2.0,
+            by + h / 2.0,
+            w / 2.0,
+            h / 2.0,
+            14.0 * sf,
+            18.0 * sf,
+            0.82,
+            0.0,
+            alpha,
+        ));
+        if bubble.error {
+            let mut red = self.error_color;
+            red[3] = 0.6 * alpha;
+            scene.shapes.push(Shape {
+                rect: [bx, by, w, h],
+                color: [0.0; 4],
+                params: [OUTLINE, 14.0 * sf, 1.0 * sf, 0.0],
+                extra: red,
+            });
+        }
+        scene.bubble_text = Some((bx, by, alpha));
+    }
+
+    /// The pill text: elapsed time while recording, else what Sonori waits for.
+    fn timer_label(&self, now: Instant) -> Option<String> {
+        match self.phase {
+            Phase::Recording { .. } | Phase::Processing { .. } if self.backend_loading() => {
+                Some("Loading model…".to_string())
+            }
+            Phase::Recording { since } => {
+                let secs = now.duration_since(since).as_secs();
+                Some(format!("{}:{:02}", secs / 60, secs % 60))
+            }
+            Phase::Processing {
+                transcription_seen: true,
+                ..
+            } if self.magic_mode_active()
+                && self.handles.audio_data.read().processing_state
+                    != ProcessingState::Transcribing =>
+            {
+                Some("Polishing…".to_string())
+            }
+            Phase::Processing { .. } => Some("Transcribing…".to_string()),
+            _ => None,
+        }
+    }
+
+    fn magic_mode_active(&self) -> bool {
+        self.handles
+            .magic_mode_enabled
+            .as_ref()
+            .is_some_and(|m| m.load(Ordering::Relaxed))
+    }
+
+    fn backend_loading(&self) -> bool {
+        self.handles
+            .backend_status
+            .as_ref()
+            .is_some_and(|s| matches!(s.read().state, BackendStatusState::Loading(_)))
+    }
+
+    /// A glass pill under the tile, `top` being the tile's lowest point.
+    #[allow(clippy::too_many_arguments)]
+    fn add_timer(
+        &self,
+        scene: &mut Scene,
+        label: String,
+        text_w: f32,
+        cx: f32,
+        top: f32,
+        sf: f32,
+        alpha: f32,
+    ) {
+        let scale = TIMER_FONT_SCALE * sf;
+        let font_px = 10.0 * scale;
+        let w = text_w + 16.0 * sf;
+        let h = 20.0 * sf;
+        let y = top + 8.0 * sf;
+        scene.shapes.push(glass(
+            cx,
+            y + h / 2.0,
+            w / 2.0,
+            h / 2.0,
+            h / 2.0,
+            10.0 * sf,
+            0.75,
+            0.0,
+            alpha,
+        ));
+        let text_y = y + (h - font_px * 1.1) / 2.0;
+        scene.timer = Some((label, cx - text_w / 2.0, text_y, scale, 0.94 * alpha));
+    }
+}
+
+/// A small light ring and dot at `target`, `q` running from 0 to 1.
+fn add_burst(scene: &mut Scene, target: (f32, f32), q: f32, sf: f32) {
+    let q = q.clamp(0.0, 1.0);
+    let fade = (1.0 - q).powf(1.5);
+    let ring = (3.0 + 20.0 * q) * sf;
+    let dot = 4.0 * (1.0 - q) * sf;
+    for (radius, width, alpha) in [
+        (ring, (2.0 * (1.0 - q) + 0.5) * sf, fade),
+        (dot, dot, 1.0 - q),
+    ] {
+        if radius <= 0.0 {
+            continue;
+        }
+        scene.shapes.push(Shape {
+            rect: [
+                target.0 - radius,
+                target.1 - radius,
+                2.0 * radius,
+                2.0 * radius,
+            ],
+            color: [0.0; 4],
+            params: [OUTLINE, radius, width, 0.0],
+            extra: [0.95, 0.97, 1.0, alpha],
+        });
+    }
+}
+
+/// What one frame draws on the active output.
+#[derive(Default)]
+struct Scene {
+    shapes: Vec<Shape>,
+    /// Label, x, y, font scale, and opacity.
+    timer: Option<(String, f32, f32, f32, f32)>,
+    /// Bubble origin and text opacity.
+    bubble_text: Option<(f32, f32, f32)>,
+    /// Menu text, drawn in one batch.
+    labels: Vec<Label>,
+}
+
+/// The bubble text as spans whose words fade in one after another, then the note.
+fn reveal_spans(bubble: &Bubble, elapsed: Duration, alpha: f32) -> Vec<(&str, [f32; 4])> {
+    let words: Vec<&str> = bubble.body.split_inclusive(char::is_whitespace).collect();
+    let stagger = WORD_STAGGER
+        .as_secs_f32()
+        .min(REVEAL_SPAN.as_secs_f32() / words.len().max(1) as f32);
+    let fade = WORD_FADE.as_secs_f32();
+    let t = elapsed.as_secs_f32() - 0.08;
+    let color = |a: f32| [TEXT_COLOR[0], TEXT_COLOR[1], TEXT_COLOR[2], a * alpha];
+    let mut spans: Vec<(&str, [f32; 4])> = words
+        .iter()
+        .enumerate()
+        .map(|(i, word)| (*word, color(smoothstep(0.0, fade, t - i as f32 * stagger))))
+        .collect();
+    if !bubble.note.is_empty() {
+        let start = words.len() as f32 * stagger + 0.1;
+        let a = 0.55 * smoothstep(0.0, fade, t - start);
+        spans.push(("\n", color(a)));
+        spans.push((bubble.note.as_str(), color(a)));
+    }
+    spans
+}
+
+fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
+    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// `TextRenderer` wraps at the area width minus its fixed side margins.
+fn text_area_width(inner: f32) -> u32 {
+    (inner + super::window::LEFT_MARGIN + super::window::RIGHT_MARGIN).ceil() as u32
+}
+
+/// Up and to the right of the pointer; flipped at the right and top edges.
+fn bubble_origin(cx: f32, cy: f32, size: (f32, f32), sf: f32, width: f32) -> (f32, f32) {
+    let gap = 44.0 * sf;
+    let mut x = cx + gap;
+    let mut y = cy - gap - size.1;
+    if x + size.0 > width - 10.0 * sf {
+        x = cx - gap - size.0;
+    }
+    if y < 10.0 * sf {
+        y = cy + 34.0 * sf;
+    }
+    (x.max(10.0 * sf), y)
+}
+
+/// Cuts `text` at a word boundary so the bubble stays near three lines.
+fn shorten(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let cut: String = text.chars().take(max_chars).collect();
+    let cut = cut.rsplit_once(' ').map_or(cut.as_str(), |(head, _)| head);
+    format!("{cut}…")
+}
+
+impl Renderer {
+    fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        size: PhysicalSize<u32>,
+    ) -> Self {
+        let text = TextRenderer::with_color_mode(
+            Arc::new(device.clone()),
+            Arc::new(queue.clone()),
+            size,
+            format,
+            glyphon::ColorMode::Web,
+        );
+        Self {
+            shapes: ShapeRenderer::new(device, format),
+            text,
+            text_size: size,
+            format,
+        }
+    }
+}

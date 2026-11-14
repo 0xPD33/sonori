@@ -611,9 +611,14 @@ fn find_config_path() -> Option<std::path::PathBuf> {
     None
 }
 
+/// The config file Sonori reads and writes.
+pub fn config_path() -> Option<std::path::PathBuf> {
+    find_config_path().or_else(user_config_path)
+}
+
 /// The config file Sonori reads and writes, for display, with `~` for the home directory.
 pub fn config_path_for_display() -> String {
-    let Some(path) = find_config_path().or_else(user_config_path) else {
+    let Some(path) = config_path() else {
         return "none (set HOME)".to_string();
     };
     match std::env::var_os("HOME").and_then(|home| path.strip_prefix(home).ok()) {

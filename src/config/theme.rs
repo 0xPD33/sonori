@@ -113,6 +113,28 @@ pub enum SpectrogramSkin {
     Meter,
 }
 
+/// How long cursor mode shows the delivered text.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum CursorBubble {
+    /// No bubble; a short light burst at the pointer only.
+    Off,
+    /// About 1-4 s, by length.
+    #[default]
+    Brief,
+    /// About 6-15 s, by length, to read the text again.
+    Long,
+}
+
+/// How Sonori shows a manual session.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum DisplayMode {
+    /// The fixed overlay with transcript, buttons, and spectrogram.
+    #[default]
+    Overlay,
+    /// A ring at the mouse pointer and a short-lived bubble (experimental).
+    Cursor,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ResolvedVisualTheme {
     pub speaking_color: [f32; 4],
@@ -150,6 +172,12 @@ impl VisualThemePreset {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiConfig {
+    /// Fixed overlay or the experimental cursor ring
+    pub display_mode: DisplayMode,
+
+    /// How long cursor mode shows the delivered text
+    pub cursor_bubble: CursorBubble,
+
     /// Curated visual theme preset
     pub visual_theme: VisualThemePreset,
 
@@ -179,6 +207,8 @@ pub struct UiConfig {
 impl Default for UiConfig {
     fn default() -> Self {
         Self {
+            display_mode: DisplayMode::Overlay,
+            cursor_bubble: CursorBubble::Brief,
             visual_theme: VisualThemePreset::Focus,
             spectrogram_skin: SpectrogramSkin::Bars,
             font_size: 10.0,

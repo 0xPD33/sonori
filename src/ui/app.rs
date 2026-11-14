@@ -17,18 +17,21 @@ use winit::{
 
 use winit::platform::wayland::{Anchor, KeyboardInteractivity, Layer, WindowAttributesWayland};
 
-use super::settings_window::SettingsWindow;
+use super::cursor_overlay::{
+    CursorOverlay, CursorOverlayHandles, MenuChange, SharedDelivery, SharedMenuControl,
+};
+use super::settings_window::{surface_size, SettingsHandles, SettingsWindow};
 use super::window::WindowState;
 
 // Constants from window.rs
 use super::window::MARGIN;
-use crate::config::{AppConfig, CustomWindowPosition, DisplayConfig, WindowPosition};
+use crate::config::{AppConfig, CustomWindowPosition, DisplayConfig, DisplayMode, WindowPosition};
 use crate::hotkey::SharedHotkeyState;
 use crate::ipc::AppCommand;
 use speechcore::{AudioVisualizationData, BackendStatus};
 
 const DRAG_DEBUG_ENV: &str = "SONORI_DRAG_DEBUG";
-const DRAG_RAW_MOTION_SCALE: f64 = 1.25;
+pub(super) const DRAG_RAW_MOTION_SCALE: f64 = 1.25;
 const DRAG_CATCH_UP_FACTOR: f64 = 0.04;
 const DRAG_MAX_CATCH_UP_PX: f64 = 2.0;
 const DRAG_MAX_CATCH_UP_TO_RAW_RATIO: f64 = 0.25;
@@ -36,6 +39,8 @@ const DRAG_MAX_FRAME_DELTA_PX: f64 = 96.0;
 const DRAG_EDGE_INSET_PX: i32 = 32;
 /// How often an idle overlay checks shared state for changes to paint.
 const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(100);
+/// Cursor mode polls faster, because the ring must appear soon after the hotkey.
+const CURSOR_POLL_INTERVAL: Duration = Duration::from_millis(30);
 const ORPHAN_GRACE: Duration = Duration::from_secs(5);
 
 /// Everything the UI shares with the rest of the app.
@@ -55,6 +60,10 @@ pub struct UiHandles {
     pub config_tx: tokio::sync::watch::Sender<AppConfig>,
     pub app_tx: tokio::sync::mpsc::UnboundedSender<AppCommand>,
     pub hotkey_state: SharedHotkeyState,
+    /// Each delivered transcript, for the cursor-mode bubble.
+    pub delivery: SharedDelivery,
+    /// Opens the cursor-mode menu from IPC (a held hotkey or `sonori menu`).
+    pub menu: SharedMenuControl,
 }
 
 pub fn run_with_audio_data(handles: UiHandles) {
@@ -85,9 +94,14 @@ pub fn run_with_audio_data(handles: UiHandles) {
         hotkey_state: handles.hotkey_state,
         settings_window: None,
         settings_window_id: None,
+        settings_position: None,
         window_drag: None,
         orphaned_since: None,
         overlay_created: false,
+        delivery: handles.delivery,
+        menu: handles.menu,
+        cursor_overlay: None,
+        gpu: None,
     };
 
     event_loop
@@ -114,12 +128,20 @@ pub struct WindowApp {
     hotkey_state: SharedHotkeyState,
     pub settings_window: Option<SettingsWindow>,
     pub settings_window_id: Option<WindowId>,
+    /// Where the user last dragged Settings, in logical px; kept until Sonori quits.
+    settings_position: Option<(f64, f64)>,
     window_drag: Option<WindowDragState>,
     /// When the overlay was first seen without a live output; see `check_orphaned_windows`.
     orphaned_since: Option<Instant>,
     /// Whether an overlay was ever created. The first failure exits with a clear
     /// message; later ones (e.g. after output hotplug) are retried.
     overlay_created: bool,
+    delivery: SharedDelivery,
+    menu: SharedMenuControl,
+    /// Exists while cursor mode is active; see `cursor_mode_active`.
+    cursor_overlay: Option<CursorOverlay>,
+    /// Created on first use and shared by every window.
+    gpu: Option<super::gpu_utils::Gpu>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -172,50 +194,67 @@ impl WindowApp {
 
         let mut attrs = WindowAttributes::default()
             .with_title("Sonori Settings")
-            .with_surface_size(winit::dpi::LogicalSize::new(400, 500))
+            .with_surface_size(surface_size())
             .with_decorations(false)
-            .with_transparent(false)
-            .with_resizable(false);
+            .with_transparent(true)
+            .with_resizable(false)
+            .with_cursor(CursorIcon::Default);
 
         if event_loop.is_wayland() {
             // Must use layer-shell for the settings window too, because this winit
             // fork doesn't deliver pointer events to non-layer-shell windows.
-            // No anchor = compositor centers the surface.
-            // Keep keyboard focus on the user's active app so recording shortcuts
-            // do not cause the compositor to dismiss the settings layer surface.
-            let wayland_attrs = WindowAttributesWayland::default()
+            // No anchor = compositor centers the surface. On-demand keyboard
+            // focus lets the text fields take typing after a click.
+            let mut wayland_attrs = WindowAttributesWayland::default()
                 .with_layer_shell()
                 .with_layer(Layer::Overlay)
                 .with_exclusive_zone(-1)
-                .with_keyboard_interactivity(KeyboardInteractivity::None);
+                .with_keyboard_interactivity(KeyboardInteractivity::OnDemand);
+            if let Some((x, y)) = self.settings_position {
+                wayland_attrs = wayland_attrs
+                    .with_anchor(Anchor::TOP | Anchor::LEFT)
+                    .with_margin(y.round() as i32, 0, 0, x.round() as i32);
+            }
             attrs = attrs.with_platform_attributes(Box::new(wayland_attrs));
         }
+        // Window drags follow relative pointer motion.
+        event_loop.listen_device_events(DeviceEvents::Always);
 
-        // Get instance/device/queue/format from the main window to share GPU context
-        let (instance, adapter, device, queue, format) = match self.windows.values().next() {
-            Some(main_win) => (
-                &main_win.instance,
-                main_win.adapter.clone(),
-                main_win.device.clone(),
-                main_win.queue.clone(),
-                main_win.config.format,
-            ),
-            None => return,
+        let gpu = match self.shared_gpu() {
+            Ok(gpu) => gpu,
+            Err(e) => {
+                eprintln!("Settings window unavailable: {e}");
+                return;
+            }
         };
+        let (instance, adapter, device, queue) = (
+            &gpu.instance,
+            gpu.adapter.clone(),
+            gpu.device.clone(),
+            gpu.queue.clone(),
+        );
 
         match event_loop.create_window(attrs) {
             Ok(window) => {
+                let handles = SettingsHandles {
+                    backend_command_tx: self.backend_command_tx.clone(),
+                    backend_status: self.backend_status.clone(),
+                    hotkey_state: self.hotkey_state.clone(),
+                    app_tx: self.app_tx.clone(),
+                    recording: self.recording.clone(),
+                    audio_data: self.audio_data.clone(),
+                    magic_mode_enabled: self.magic_mode_enabled.clone(),
+                    transcription_mode: self.transcription_mode_ref.clone(),
+                };
                 let settings_win = match SettingsWindow::new(
                     window,
                     instance,
                     &adapter,
                     device,
                     queue,
-                    format,
                     &self.config,
-                    self.backend_command_tx.clone(),
-                    self.backend_status.clone(),
-                    self.hotkey_state.clone(),
+                    handles,
+                    self.settings_position,
                 ) {
                     Ok(settings_win) => settings_win,
                     Err(e) => {
@@ -230,6 +269,106 @@ impl WindowApp {
             Err(e) => {
                 eprintln!("Failed to create settings window: {}", e);
             }
+        }
+    }
+
+    fn shared_gpu(&mut self) -> Result<super::gpu_utils::Gpu, String> {
+        if let Some(gpu) = &self.gpu {
+            return Ok(gpu.clone());
+        }
+        let gpu = super::gpu_utils::Gpu::new()?;
+        self.gpu = Some(gpu.clone());
+        Ok(gpu)
+    }
+
+    /// Cursor mode needs layer shell and a session that ends, so it applies on
+    /// Wayland in manual mode only; otherwise the fixed overlay shows.
+    fn cursor_mode_active(&self, event_loop: &dyn ActiveEventLoop) -> bool {
+        self.config.ui_config.display_mode == DisplayMode::Cursor
+            && event_loop.is_wayland()
+            && speechcore::TranscriptionMode::from_u8(
+                self.transcription_mode_ref.load(Ordering::Relaxed),
+            ) == speechcore::TranscriptionMode::Manual
+    }
+
+    /// Swaps between the fixed overlay and the cursor overlay as the mode requires.
+    /// Returns whether cursor mode is active.
+    fn sync_display_mode(&mut self, event_loop: &dyn ActiveEventLoop) -> bool {
+        let active = self.cursor_mode_active(event_loop);
+        self.menu.set_available(active);
+        if !active {
+            self.cursor_overlay = None;
+            return false;
+        }
+        if !self.windows.is_empty() {
+            self.windows.clear();
+            self.window_drag = None;
+        }
+        if self.cursor_overlay.is_none() {
+            let (Some(recording), Some(audio_data)) = (&self.recording, &self.audio_data) else {
+                return false;
+            };
+            let handles = CursorOverlayHandles {
+                recording: recording.clone(),
+                audio_data: audio_data.clone(),
+                backend_status: self.backend_status.clone(),
+                delivery: self.delivery.clone(),
+                magic_mode_enabled: self.magic_mode_enabled.clone(),
+                manual_session_sender: self.manual_session_sender.clone(),
+                app_tx: self.app_tx.clone(),
+                menu: self.menu.clone(),
+            };
+            let overlay = self
+                .shared_gpu()
+                .and_then(|gpu| CursorOverlay::new(handles, &self.config, gpu));
+            match overlay {
+                Ok(overlay) => self.cursor_overlay = Some(overlay),
+                Err(e) => {
+                    // Fall back for this run, so the next poll does not retry.
+                    eprintln!("Cursor mode unavailable, using the overlay: {e}");
+                    self.config.ui_config.display_mode = DisplayMode::Overlay;
+                    self.menu.set_available(false);
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// Saves settings changed in the cursor-mode menu and opens Settings on request.
+    fn apply_cursor_menu_requests(&mut self, event_loop: &dyn ActiveEventLoop) {
+        if self.menu.take_settings_request() {
+            self.open_settings_window(event_loop);
+        }
+        let Some(overlay) = self.cursor_overlay.as_mut() else {
+            return;
+        };
+        let changes = overlay.take_config_changes();
+        let open_settings = overlay.take_settings_request();
+        for change in changes {
+            // Change only this field on disk, so other edits to the file survive.
+            let (mut on_disk, _) = crate::config::read_app_config_with_path();
+            change.apply(&mut on_disk);
+            if let Err(e) = crate::config::write_app_config(&on_disk) {
+                eprintln!("Failed to save a menu setting: {e}");
+                if let Some(status) = &self.backend_status {
+                    status
+                        .write()
+                        .report_error(format!("Setting not saved: {e}"));
+                }
+            }
+            let mut config = self.config.clone();
+            change.apply(&mut config);
+            if let (MenuChange::Model { .. }, Some(tx)) = (&change, &self.backend_command_tx) {
+                let _ = tx.send(speechcore::BackendCommand::Reload {
+                    backend_config: config.backend_config.clone(),
+                    model_name: config.general_config.model.clone(),
+                });
+            }
+            self.apply_runtime_config(event_loop, config);
+        }
+        if open_settings {
+            self.open_settings_window(event_loop);
         }
     }
 
@@ -466,6 +605,12 @@ impl WindowApp {
         let display_config = config.display_config.clone();
         let ui_config = config.ui_config.clone();
         self.config = config;
+        if let Some(overlay) = self.cursor_overlay.as_mut() {
+            overlay.apply_config(&self.config);
+        }
+        if let Some(settings) = self.settings_window.as_mut() {
+            settings.sync_config(&self.config);
+        }
 
         let physical_monitor_size = current_monitor_size(event_loop);
         let window_ids: Vec<WindowId> = self.windows.keys().copied().collect();
@@ -506,6 +651,28 @@ fn send_toggle(sender: &Option<tokio::sync::mpsc::Sender<speechcore::ManualSessi
     tokio::spawn(async move {
         if let Err(e) = sender.send(speechcore::ManualSessionCommand::Toggle).await {
             eprintln!("Failed to send toggle command: {}", e);
+        }
+    });
+}
+
+/// Flips between manual and realtime mode when no overlay window can do it.
+fn send_mode_switch(
+    sender: &Option<tokio::sync::mpsc::Sender<speechcore::ManualSessionCommand>>,
+    mode: &AtomicU8,
+) {
+    let Some(sender) = sender.clone() else {
+        return;
+    };
+    let new_mode = match speechcore::TranscriptionMode::from_u8(mode.load(Ordering::Relaxed)) {
+        speechcore::TranscriptionMode::RealTime => speechcore::TranscriptionMode::Manual,
+        speechcore::TranscriptionMode::Manual => speechcore::TranscriptionMode::RealTime,
+    };
+    tokio::spawn(async move {
+        if let Err(e) = sender
+            .send(speechcore::ManualSessionCommand::SwitchMode(new_mode))
+            .await
+        {
+            eprintln!("Failed to send mode switch command: {}", e);
         }
     });
 }
@@ -622,7 +789,7 @@ fn round_window_position(position: LogicalPosition<f64>) -> LogicalPosition<i32>
     LogicalPosition::new(position.x.round() as i32, position.y.round() as i32)
 }
 
-fn bounded_drag_catch_up(pointer_error: f64, raw_delta: f64) -> f64 {
+pub(super) fn bounded_drag_catch_up(pointer_error: f64, raw_delta: f64) -> f64 {
     if pointer_error == 0.0 || raw_delta == 0.0 || pointer_error.signum() != raw_delta.signum() {
         return 0.0;
     }
@@ -673,6 +840,9 @@ impl ApplicationHandler for WindowApp {
     ) {
         if let DeviceEvent::PointerMotion { delta } = event {
             self.queue_window_drag_raw_motion(delta);
+            if let Some(settings) = self.settings_window.as_mut() {
+                settings.raw_motion(delta);
+            }
         }
     }
 
@@ -693,7 +863,20 @@ impl ApplicationHandler for WindowApp {
 
         // An idle overlay renders no frames, so this wake-up is what notices new
         // transcripts, status changes, a lost overlay, or a cleared running flag.
-        event_loop.set_control_flow(ControlFlow::wait_duration(IDLE_POLL_INTERVAL));
+        let cursor_mode = self.sync_display_mode(event_loop);
+        let poll_interval = if cursor_mode {
+            CURSOR_POLL_INTERVAL
+        } else {
+            IDLE_POLL_INTERVAL
+        };
+        event_loop.set_control_flow(ControlFlow::wait_duration(poll_interval));
+        if let Some(overlay) = &mut self.cursor_overlay {
+            overlay.poll(event_loop);
+        }
+        self.apply_cursor_menu_requests(event_loop);
+        if let Some(settings) = self.settings_window.as_mut() {
+            settings.poll();
+        }
         self.check_orphaned_windows(event_loop);
         for window in self.windows.values() {
             if window.needs_redraw() {
@@ -704,7 +887,7 @@ impl ApplicationHandler for WindowApp {
         // can_create_surfaces() gives up silently when no monitor is advertised yet
         // (niri drops outputs while they are powered off), which would leave us
         // running headless forever. Retry until we actually have a window.
-        if self.windows.is_empty() {
+        if !cursor_mode && self.windows.is_empty() {
             self.can_create_surfaces(event_loop);
         }
 
@@ -723,6 +906,9 @@ impl ApplicationHandler for WindowApp {
                 }
                 crate::system_tray::TrayCommand::SwitchMode => {
                     // Switch between manual and real-time modes
+                    if self.windows.is_empty() {
+                        send_mode_switch(&self.manual_session_sender, &self.transcription_mode_ref);
+                    }
                     for window in self.windows.values_mut() {
                         window.toggle_mode();
                     }
@@ -742,6 +928,9 @@ impl ApplicationHandler for WindowApp {
     }
 
     fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
+        if self.cursor_mode_active(event_loop) {
+            return;
+        }
         let window_attributes = WindowAttributes::default()
             .with_decorations(false)
             .with_transparent(true);
@@ -760,6 +949,13 @@ impl ApplicationHandler for WindowApp {
             }
             .to_string();
             let model_name = self.config.general_config.model.clone();
+            let gpu = match self.shared_gpu() {
+                Ok(gpu) => gpu,
+                Err(e) => {
+                    eprintln!("{e}");
+                    return;
+                }
+            };
             let created = create_window(
                 event_loop,
                 window_attributes.with_title("Sonori"),
@@ -783,6 +979,7 @@ impl ApplicationHandler for WindowApp {
                 self.backend_command_tx.clone(),
                 self.app_tx.clone(),
                 self.hotkey_state.clone(),
+                gpu,
             );
             let mut window_state = match created {
                 Ok(window_state) => window_state,
@@ -821,70 +1018,68 @@ impl ApplicationHandler for WindowApp {
                 return;
             }
         }
+        if let Some(overlay) = self.cursor_overlay.as_mut() {
+            if overlay.owns(window_id) {
+                overlay.handle_event(window_id, event);
+                return;
+            }
+        }
         // Route events to settings window if it's the target
         if Some(window_id) == self.settings_window_id {
             let mut applied_config = None;
+            let mut mode_request = None;
             let mut close_settings = false;
 
             if let Some(sw) = &mut self.settings_window {
                 match event {
-                    WindowEvent::CloseRequested => {
-                        // Layer-shell compositors may emit CloseRequested when focus moves away
-                        // from the settings surface. Keep settings open unless the user closes it
-                        // explicitly with Escape or the in-window close button.
-                        sw.window.request_redraw();
-                    }
-                    WindowEvent::SurfaceResized(size) => {
-                        sw.resize(size.width, size.height);
-                    }
-                    WindowEvent::RedrawRequested => {
-                        sw.draw();
-                    }
-                    WindowEvent::KeyboardInput {
-                        event:
-                            KeyEvent {
-                                state: ElementState::Pressed,
-                                ref logical_key,
-                                physical_key: PhysicalKey::Code(key_code),
-                                ..
-                            },
-                        ..
-                    } => {
-                        if key_code == KeyCode::Escape {
-                            close_settings = true;
-                        } else {
-                            let shift = self.current_modifiers.state().shift_key();
-                            if sw.handle_key(logical_key, shift) {
-                                sw.window.request_redraw();
-                            }
-                        }
+                    // Layer-shell compositors may emit CloseRequested when focus moves
+                    // away from the settings surface. Keep settings open unless the
+                    // user closes it with Escape or the close button.
+                    WindowEvent::CloseRequested => sw.window.request_redraw(),
+                    WindowEvent::SurfaceResized(size) => sw.resize(size.width, size.height),
+                    WindowEvent::RedrawRequested => sw.draw(),
+                    WindowEvent::ModifiersChanged(modifiers) => self.current_modifiers = modifiers,
+                    WindowEvent::KeyboardInput { ref event, .. }
+                        if event.state == ElementState::Pressed =>
+                    {
+                        sw.key(event);
                     }
                     WindowEvent::PointerButton {
-                        state, position, ..
-                    } => {
+                        state,
+                        position,
+                        button,
+                        ..
+                    } if button.mouse_button() == MouseButton::Left => {
                         if state == ElementState::Pressed {
-                            sw.handle_click(position.x as f32, position.y as f32);
-                            applied_config = sw.take_applied_config();
-                            if sw.close_requested() {
-                                close_settings = true;
-                            }
-                        } else if state == ElementState::Released {
-                            sw.handle_mouse_release();
+                            sw.press(position);
+                        } else {
+                            sw.release();
                         }
                     }
-                    WindowEvent::PointerMoved { position, .. } => {
-                        sw.handle_mouse_move(position.x as f32, position.y as f32);
-                    }
+                    WindowEvent::PointerMoved { position, .. } => sw.pointer_moved(position),
+                    WindowEvent::PointerLeft { .. } => sw.pointer_left(),
+                    WindowEvent::MouseWheel { delta, .. } => sw.scroll(delta),
                     _ => {}
                 }
+                applied_config = sw.take_applied_config();
+                mode_request = sw.take_mode_request();
+                close_settings = sw.close_requested();
             }
 
             if close_settings {
-                self.settings_window = None;
+                if let Some(sw) = self.settings_window.take() {
+                    self.settings_position = sw.position();
+                }
                 self.settings_window_id = None;
             }
             if let Some(config) = applied_config {
                 self.apply_runtime_config(event_loop, config);
+            }
+            let current = speechcore::TranscriptionMode::from_u8(
+                self.transcription_mode_ref.load(Ordering::Relaxed),
+            );
+            if mode_request.is_some_and(|mode| mode != current) {
+                send_mode_switch(&self.manual_session_sender, &self.transcription_mode_ref);
             }
             return;
         }
@@ -1038,6 +1233,7 @@ fn create_window(
     backend_command_tx: Option<tokio::sync::mpsc::UnboundedSender<speechcore::BackendCommand>>,
     app_tx: tokio::sync::mpsc::UnboundedSender<AppCommand>,
     hotkey_state: SharedHotkeyState,
+    gpu: super::gpu_utils::Gpu,
 ) -> Result<WindowState, String> {
     // Get monitor dimensions from video mode
     let monitor_size = monitor_mode.size();
@@ -1149,5 +1345,6 @@ fn create_window(
         backend_command_tx,
         app_tx,
         hotkey_state,
+        gpu,
     )
 }

@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 /// Hard deadline for the external clipboard/paste helpers. Without it a hung
 /// wtype/dotool blocks the paste worker for the rest of the session.
 const HELPER_TIMEOUT: Duration = Duration::from_secs(2);
+const CLIPBOARD_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Simple Wayland connection for clipboard operations
 pub struct WlCopy;
@@ -17,7 +18,14 @@ impl WlCopy {
     /// just dictated to every process on the machine. Stdin also copies the
     /// text verbatim, where argv mode appends a trailing newline.
     pub fn copy_to_clipboard(text: &str) -> Result<(), String> {
-        run_helper(Command::new("wl-copy"), "wl-copy", Some(text.as_bytes()))
+        // On a fully loaded machine wl-copy took over 2 s to set the selection,
+        // and the transcript was not pasted.
+        run_helper_with_timeout(
+            Command::new("wl-copy"),
+            "wl-copy",
+            Some(text.as_bytes()),
+            CLIPBOARD_TIMEOUT,
+        )
     }
 }
 

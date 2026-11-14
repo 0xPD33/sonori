@@ -56,6 +56,10 @@ enum Command {
         /// Language code
         code: String,
     },
+    /// Open or close the cursor-mode menu
+    Menu,
+    /// Open the Settings window
+    Settings,
 }
 
 #[derive(Parser)]
@@ -486,11 +490,13 @@ async fn run_gui_mode(
     // Single bounded queue for clipboard/paste work.
     let (output_tx, output_rx) = tokio::sync::mpsc::channel::<Output>(128);
 
+    let delivery = ui::SharedDelivery::default();
     tokio::spawn(consume_transcripts(
         transcript_rx,
         final_tx,
         transcript_history.clone(),
         audio_visualization_data.clone(),
+        delivery.clone(),
     ));
     tokio::spawn(finalize_transcripts(
         final_rx,
@@ -501,11 +507,13 @@ async fn run_gui_mode(
         config_rx.clone(),
         output_tx.clone(),
     ));
+    let menu = ui::SharedMenuControl::default();
     tokio::spawn(output_worker(
         output_rx,
         app_config.portal_config.enable_xdg_portal,
         config_rx.clone(),
         backend_status.clone(),
+        delivery.clone(),
     ));
 
     let (app_tx, app_rx) = tokio::sync::mpsc::unbounded_channel::<AppCommand>();
@@ -626,6 +634,7 @@ async fn run_gui_mode(
             running.clone(),
             backend_status.clone(),
             hotkey_state.clone(),
+            menu.clone(),
         );
         tokio::spawn(async move {
             if let Err(e) = ipc_server.run().await {
@@ -649,6 +658,8 @@ async fn run_gui_mode(
         config_tx,
         app_tx,
         hotkey_state,
+        delivery,
+        menu,
     });
 
     // UI has exited, perform cleanup
@@ -665,6 +676,7 @@ async fn consume_transcripts(
     final_tx: tokio::sync::mpsc::UnboundedSender<FinalTranscript>,
     transcript_history: Arc<parking_lot::RwLock<String>>,
     audio_visualization_data: Arc<parking_lot::RwLock<speechcore::AudioVisualizationData>>,
+    delivery: ui::SharedDelivery,
 ) {
     loop {
         let message = match transcript_rx.recv().await {
@@ -697,6 +709,7 @@ async fn consume_transcripts(
             continue;
         }
 
+        delivery.write().received += 1;
         let final_transcript = FinalTranscript {
             text: message.text,
             session_id: message.session_id,
@@ -819,6 +832,7 @@ async fn output_worker(
     enable_portal: bool,
     config_rx: tokio::sync::watch::Receiver<AppConfig>,
     status: Arc<parking_lot::RwLock<speechcore::BackendStatus>>,
+    delivery: ui::SharedDelivery,
 ) {
     let portal = if enable_portal {
         match portal_input::PortalInput::new().await {
@@ -837,57 +851,68 @@ async fn output_worker(
 
     while let Some(Output { text, mode }) = output_rx.recv().await {
         let paste_shortcut = config_rx.borrow().portal_config.paste_shortcut.clone();
-        let with_shift = paste_shortcut != "ctrl_v";
-        let shortcut_label = if with_shift { "Ctrl+Shift+V" } else { "Ctrl+V" };
-
-        if mode == OutputMode::Type {
-            let typed_text = text.clone();
-            let typed = tokio::task::spawn_blocking(move || copy::type_text(&typed_text))
-                .await
-                .unwrap_or_else(|e| Err(e.to_string()));
-            let Err(e) = typed else {
-                continue;
-            };
-            eprintln!("Typing failed: {}", e);
-            // Fall through to the clipboard, so the text is not lost.
-            let copied = copy_to_clipboard(text).await;
-            status.write().report_error(match copied {
-                Ok(()) => format!("Typing failed; copied — press {shortcut_label}"),
-                Err(e) => format!("Typing and clipboard copy failed: {e}"),
-            });
-            continue;
+        let shown = text.trim().to_string();
+        let outcome = deliver(text, mode, portal.as_ref(), paste_shortcut).await;
+        if let ui::DeliveryOutcome::Failed(message) = &outcome {
+            status.write().report_error(message.clone());
         }
+        delivery.write().record(shown, outcome);
+    }
+}
 
-        if let Err(e) = copy_to_clipboard(text).await {
-            eprintln!("Clipboard copy failed: {}", e);
-            status
-                .write()
-                .report_error(format!("Clipboard copy failed: {e}"));
-            continue;
+/// Puts one transcript where `mode` says and reports how that went.
+async fn deliver(
+    text: String,
+    mode: OutputMode,
+    portal: Option<&portal_input::PortalInput>,
+    paste_shortcut: String,
+) -> ui::DeliveryOutcome {
+    use ui::DeliveryOutcome::{Copied, Failed, Pasted, Typed};
+    let with_shift = paste_shortcut != "ctrl_v";
+    let shortcut_label = if with_shift { "Ctrl+Shift+V" } else { "Ctrl+V" };
+
+    if mode == OutputMode::Type {
+        let typed_text = text.clone();
+        let typed = tokio::task::spawn_blocking(move || copy::type_text(&typed_text))
+            .await
+            .unwrap_or_else(|e| Err(e.to_string()));
+        let Err(e) = typed else {
+            return Typed;
+        };
+        eprintln!("Typing failed: {}", e);
+        // Fall through to the clipboard, so the text is not lost.
+        return Failed(match copy_to_clipboard(text).await {
+            Ok(()) => format!("Typing failed; copied — press {shortcut_label}"),
+            Err(e) => format!("Typing and clipboard copy failed: {e}"),
+        });
+    }
+
+    if let Err(e) = copy_to_clipboard(text).await {
+        eprintln!("Clipboard copy failed: {}", e);
+        return Failed(format!("Clipboard copy failed: {e}"));
+    }
+    if mode == OutputMode::Clipboard {
+        return Copied;
+    }
+
+    // Give clipboard managers a short moment before paste injection.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    if let Some(portal) = portal {
+        match portal.paste(with_shift).await {
+            Ok(()) => return Pasted,
+            Err(e) => eprintln!("Portal paste failed: {}; trying wtype/dotool", e),
         }
-        if mode == OutputMode::Clipboard {
-            continue;
-        }
+    }
 
-        // Give clipboard managers a short moment before paste injection.
-        tokio::time::sleep(Duration::from_millis(50)).await;
-
-        if let Some(portal) = portal.as_ref() {
-            match portal.paste(with_shift).await {
-                Ok(()) => continue,
-                Err(e) => eprintln!("Portal paste failed: {}; trying wtype/dotool", e),
-            }
-        }
-
-        let pasted =
-            tokio::task::spawn_blocking(move || copy::paste_via_keystroke(&paste_shortcut))
-                .await
-                .unwrap_or_else(|e| Err(e.to_string()));
-        if let Err(e) = pasted {
+    let pasted = tokio::task::spawn_blocking(move || copy::paste_via_keystroke(&paste_shortcut))
+        .await
+        .unwrap_or_else(|e| Err(e.to_string()));
+    match pasted {
+        Ok(()) => Pasted,
+        Err(e) => {
             eprintln!("Paste failed: {}", e);
-            status
-                .write()
-                .report_error(format!("Copied, paste failed — press {shortcut_label}"));
+            Failed(format!("Copied, paste failed — press {shortcut_label}"))
         }
     }
 }
@@ -983,6 +1008,8 @@ async fn handle_ipc_command(cmd: Command) -> anyhow::Result<()> {
         Command::PasteLast => IpcCommand::PasteLast,
         Command::Magic => IpcCommand::ToggleMagic,
         Command::Language { code } => IpcCommand::Language { code },
+        Command::Menu => IpcCommand::Menu,
+        Command::Settings => IpcCommand::Settings,
     };
 
     match ipc::send_command(ipc_cmd).await {

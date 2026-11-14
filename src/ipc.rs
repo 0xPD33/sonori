@@ -17,6 +17,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
 
 use crate::hotkey::{HotkeyState, SharedHotkeyState};
+use crate::ui::cursor_overlay::SharedMenuControl;
 use speechcore::{BackendStatus, BackendStatusState, ManualSessionCommand, TranscriptionMode};
 
 /// App-level actions that IPC, global shortcuts and the UI share.
@@ -54,6 +55,25 @@ pub enum IpcCommand {
     ToggleMagic,
     /// Set the transcription language (e.g. "en", "de")
     Language { code: String },
+    /// Open or close the cursor-mode menu
+    Menu,
+    /// Open the Settings window
+    Settings,
+}
+
+/// niri and other compositors repeat a held key binding about every 40 ms after a
+/// delay of about 600 ms. Toggles closer together than this are key repeats.
+const KEY_REPEAT_GAP: Duration = Duration::from_millis(200);
+/// A stop this soon after a start may be the first repeat of a held key.
+const HOLD_WINDOW: Duration = Duration::from_millis(1200);
+
+/// Tells a held hotkey (a stream of key-repeat toggles) from single presses.
+#[derive(Default)]
+struct ToggleTracker {
+    last: Option<std::time::Instant>,
+    started: Option<std::time::Instant>,
+    holding: bool,
+    pending_stop: Option<tokio::task::JoinHandle<()>>,
 }
 
 /// Response from running instance to CLI client
@@ -146,6 +166,8 @@ pub struct IpcServer {
     running: Arc<AtomicBool>,
     backend_status: Arc<RwLock<BackendStatus>>,
     hotkey_state: SharedHotkeyState,
+    menu: SharedMenuControl,
+    toggles: parking_lot::Mutex<ToggleTracker>,
 }
 
 impl IpcServer {
@@ -157,6 +179,7 @@ impl IpcServer {
         running: Arc<AtomicBool>,
         backend_status: Arc<RwLock<BackendStatus>>,
         hotkey_state: SharedHotkeyState,
+        menu: SharedMenuControl,
     ) -> Self {
         Self {
             socket_path: get_socket_path(),
@@ -167,6 +190,8 @@ impl IpcServer {
             running,
             backend_status,
             hotkey_state,
+            menu,
+            toggles: Default::default(),
         }
     }
 
@@ -279,9 +304,23 @@ impl IpcServer {
         match cmd {
             // The transcriber decides between start and stop, since the
             // recording flag stays up while Stop drains.
+            IpcCommand::Toggle if self.menu.is_available() => self.handle_toggle(),
             IpcCommand::Toggle => {
                 self.send_manual(ManualSessionCommand::Toggle, "Recording toggled")
             }
+            IpcCommand::Menu if self.menu.is_available() => {
+                if self.menu.is_open() {
+                    self.menu.request_close();
+                } else {
+                    self.menu.request_open();
+                }
+                IpcResponse::success("Menu toggled")
+            }
+            IpcCommand::Settings => {
+                self.menu.request_settings();
+                IpcResponse::success("Opening Settings")
+            }
+            IpcCommand::Menu => IpcResponse::error("The menu needs display_mode = \"Cursor\""),
             IpcCommand::Start => self.send_manual(
                 ManualSessionCommand::StartSession { responder: None },
                 "Recording started",
@@ -312,6 +351,62 @@ impl IpcServer {
                 self.send_app(AppCommand::SetLanguage(code), message)
             }
         }
+    }
+
+    /// Cursor mode: a press toggles as usual, but holding the hotkey opens the menu.
+    /// The press that began the hold already started a session; it is cancelled.
+    fn handle_toggle(&self) -> IpcResponse {
+        let now = std::time::Instant::now();
+        let mut toggles = self.toggles.lock();
+        let repeat = toggles
+            .last
+            .is_some_and(|last| now.duration_since(last) < KEY_REPEAT_GAP);
+        toggles.last = Some(now);
+
+        if toggles.holding {
+            if repeat {
+                return IpcResponse::success("Hotkey held");
+            }
+            toggles.holding = false;
+        }
+        if repeat {
+            if let Some(pending) = toggles.pending_stop.take() {
+                pending.abort();
+                toggles.holding = true;
+                toggles.started = None;
+                drop(toggles);
+                let _ = self
+                    .manual_session_tx
+                    .try_send(ManualSessionCommand::CancelSession { responder: None });
+                self.menu.request_open();
+                return IpcResponse::success("Menu opened");
+            }
+        }
+        if self.menu.is_available() && self.menu.is_open() {
+            self.menu.request_close();
+            return IpcResponse::success("Menu closed");
+        }
+
+        if !self.recording.load(Ordering::Relaxed) {
+            toggles.started = Some(now);
+            drop(toggles);
+            return self.send_manual(ManualSessionCommand::Toggle, "Recording toggled");
+        }
+        if toggles
+            .started
+            .is_some_and(|started| now.duration_since(started) < HOLD_WINDOW)
+        {
+            // Wait one repeat gap: a repeat now means a held key, not a stop.
+            let tx = self.manual_session_tx.clone();
+            toggles.pending_stop = Some(tokio::spawn(async move {
+                tokio::time::sleep(KEY_REPEAT_GAP).await;
+                let _ = tx.try_send(ManualSessionCommand::StopSession { responder: None });
+            }));
+            return IpcResponse::success("Recording toggled");
+        }
+        toggles.started = None;
+        drop(toggles);
+        self.send_manual(ManualSessionCommand::Toggle, "Recording toggled")
     }
 
     /// Queues a session command. Never waits: a full queue would stall every

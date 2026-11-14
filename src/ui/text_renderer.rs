@@ -1,6 +1,7 @@
 use glyphon::{
-    Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping, SwashCache,
-    TextArea, TextAtlas, TextBounds, TextRenderer as GlyphonTextRenderer, Viewport,
+    Attrs, Buffer, Cache, Color, ColorMode, Family, FontSystem, Metrics, Resolution, Shaping,
+    SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer as GlyphonTextRenderer, Viewport,
+    Weight,
 };
 use std::sync::Arc;
 use wgpu::{Device, Queue, TextureView};
@@ -26,6 +27,32 @@ pub struct TextRenderer {
     /// Last `measure_text` input and result; the status bar measures the same
     /// text every frame, and reshaping it each time costs more than drawing it.
     cached_measure: Option<(String, f32, f32)>,
+    /// Shaped buffers for `render_labels`, by slot.
+    label_buffers: Vec<(LabelKey, Buffer)>,
+    label_widths: Vec<(LabelKey, f32)>,
+}
+
+/// Line height of a label, as a multiple of its font size.
+pub const LABEL_LINE: f32 = 1.25;
+
+/// One line of text at a position, for `render_labels`. `px` is the font size
+/// in physical pixels; `y` is the top of the line box.
+pub struct Label {
+    pub text: String,
+    pub x: f32,
+    pub y: f32,
+    pub px: f32,
+    pub color: [f32; 4],
+    pub bold: bool,
+    /// Physical px rectangle outside which the label is cut off.
+    pub clip: Option<[f32; 4]>,
+}
+
+#[derive(Default, PartialEq)]
+struct LabelKey {
+    text: String,
+    px_bits: u32,
+    bold: bool,
 }
 
 struct CachedTextLayout {
@@ -43,6 +70,17 @@ impl TextRenderer {
         size: PhysicalSize<u32>,
         surface_format: wgpu::TextureFormat,
     ) -> Self {
+        Self::with_color_mode(device, queue, size, surface_format, ColorMode::Accurate)
+    }
+
+    /// `ColorMode::Web` treats colors as sRGB values, for non-sRGB surfaces.
+    pub fn with_color_mode(
+        device: Arc<Device>,
+        queue: Arc<Queue>,
+        size: PhysicalSize<u32>,
+        surface_format: wgpu::TextureFormat,
+        color_mode: ColorMode,
+    ) -> Self {
         // Create font system and cache
         // Parses all system fonts; slow, and far slower in debug builds.
         let mut font_system = FontSystem::new();
@@ -55,7 +93,8 @@ impl TextRenderer {
         let viewport = Viewport::new(&device, &cache_ref);
 
         // Create the text atlas with the correct parameters
-        let mut atlas = TextAtlas::new(&device, &queue, &cache_ref, surface_format);
+        let mut atlas =
+            TextAtlas::with_color_mode(&device, &queue, &cache_ref, surface_format, color_mode);
 
         // Create the text renderer with the correct parameters
         let renderer =
@@ -85,6 +124,8 @@ impl TextRenderer {
             viewport,
             cached_layout: None,
             cached_measure: None,
+            label_buffers: Vec::new(),
+            label_widths: Vec::new(),
         }
     }
 
@@ -225,7 +266,67 @@ impl TextRenderer {
         }
 
         let text_color = self.layout_text(text, scale, color, area_width);
+        self.draw_buffer(view, encoder, x, y, text_color, clip_rect);
+    }
 
+    /// Renders `spans` (each text with its own color) as one wrapped paragraph,
+    /// so single words can fade on their own. `line_height` is a multiple of the
+    /// font size. It lays the text out on every call.
+    pub fn render_spans(
+        &mut self,
+        view: &TextureView,
+        encoder: &mut wgpu::CommandEncoder,
+        spans: &[(&str, [f32; 4])],
+        x: f32,
+        y: f32,
+        scale: f32,
+        line_height: f32,
+        area_width: u32,
+    ) {
+        let font_size = 10.0 * scale;
+        self.cached_layout = None;
+        self.buffer.lines.clear();
+        self.buffer.set_metrics(
+            &mut self.font_system,
+            Metrics::new(font_size, font_size * line_height),
+        );
+        let buffer_width = area_width as f32 - (LEFT_MARGIN + RIGHT_MARGIN);
+        self.buffer
+            .set_size(&mut self.font_system, Some(buffer_width), None);
+        let to_color = |c: &[f32; 4]| {
+            Color::rgba(
+                (c[0] * 255.0) as u8,
+                (c[1] * 255.0) as u8,
+                (c[2] * 255.0) as u8,
+                (c[3] * 255.0) as u8,
+            )
+        };
+        let base = Attrs::new().family(Family::SansSerif);
+        self.buffer.set_rich_text(
+            &mut self.font_system,
+            spans
+                .iter()
+                .map(|(text, color)| (*text, base.clone().color(to_color(color)))),
+            &base,
+            Shaping::Advanced,
+            None,
+        );
+        self.buffer.shape_until_scroll(&mut self.font_system, true);
+        let default = spans
+            .first()
+            .map_or(Color::rgba(0, 0, 0, 0), |(_, c)| to_color(c));
+        self.draw_buffer(view, encoder, x, y, default, None);
+    }
+
+    fn draw_buffer(
+        &mut self,
+        view: &TextureView,
+        encoder: &mut wgpu::CommandEncoder,
+        x: f32,
+        y: f32,
+        text_color: Color,
+        clip_rect: Option<(u32, u32, u32, u32)>,
+    ) {
         self.viewport.update(
             &self.queue,
             Resolution {
@@ -286,6 +387,159 @@ impl TextRenderer {
                 .renderer
                 .render(&self.atlas, &self.viewport, &mut render_pass);
         }
+    }
+
+    /// Width of one line of `text` as `render_labels` draws it.
+    pub fn measure_label(&mut self, text: &str, px: f32, bold: bool) -> f32 {
+        let key = LabelKey {
+            text: text.to_string(),
+            px_bits: px.to_bits(),
+            bold,
+        };
+        if let Some((_, width)) = self.label_widths.iter().find(|(k, _)| *k == key) {
+            return *width;
+        }
+        let index = self.label_buffer(0, text, px, bold);
+        let width = self.label_buffers[index]
+            .1
+            .layout_runs()
+            .map(|run| run.line_w)
+            .fold(0.0, f32::max);
+        if self.label_widths.len() >= 256 {
+            self.label_widths.clear();
+        }
+        self.label_widths.push((key, width));
+        width
+    }
+
+    /// Draws single-line labels in one pass. Each label keeps its shaped buffer
+    /// while its text, size, and weight stay the same, so only colour changes are free.
+    pub fn render_labels(
+        &mut self,
+        view: &TextureView,
+        encoder: &mut wgpu::CommandEncoder,
+        labels: &[Label],
+    ) {
+        self.render_label_layer(view, encoder, labels, 0);
+    }
+
+    /// `render_labels` for a second layer of the same frame: its labels take the
+    /// slots after `first_slot`, so the shaped buffers of the layer below stay.
+    /// Submit the encoder of the layer below first: glyphon keeps one vertex buffer.
+    pub fn render_label_layer(
+        &mut self,
+        view: &TextureView,
+        encoder: &mut wgpu::CommandEncoder,
+        labels: &[Label],
+        first_slot: usize,
+    ) {
+        if labels.is_empty() {
+            return;
+        }
+        // Slot 0 serves `measure_label`; labels use slots from 1 on.
+        let base = first_slot + 1;
+        for (i, label) in labels.iter().enumerate() {
+            self.label_buffer(base + i, &label.text, label.px, label.bold);
+        }
+        self.viewport.update(
+            &self.queue,
+            Resolution {
+                width: self.size.width,
+                height: self.size.height,
+            },
+        );
+        let to_color = |c: [f32; 4]| {
+            Color::rgba(
+                (c[0] * 255.0) as u8,
+                (c[1] * 255.0) as u8,
+                (c[2] * 255.0) as u8,
+                (c[3].clamp(0.0, 1.0) * 255.0) as u8,
+            )
+        };
+        let full = TextBounds {
+            left: 0,
+            top: 0,
+            right: self.size.width as i32,
+            bottom: self.size.height as i32,
+        };
+        let areas = labels.iter().enumerate().map(|(i, label)| TextArea {
+            buffer: &self.label_buffers[base + i].1,
+            left: label.x,
+            top: label.y,
+            scale: 1.0,
+            bounds: label.clip.map_or(full, |[x, y, w, h]| TextBounds {
+                left: x.floor() as i32,
+                top: y.floor() as i32,
+                right: (x + w).ceil() as i32,
+                bottom: (y + h).ceil() as i32,
+            }),
+            default_color: to_color(label.color),
+            custom_glyphs: &[],
+        });
+        if self
+            .renderer
+            .prepare(
+                &self.device,
+                &self.queue,
+                &mut self.font_system,
+                &mut self.atlas,
+                &self.viewport,
+                areas,
+                &mut self.cache,
+            )
+            .is_err()
+        {
+            return;
+        }
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Label Render Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        let _ = self
+            .renderer
+            .render(&self.atlas, &self.viewport, &mut render_pass);
+    }
+
+    /// Shapes `text` into label slot `index` unless it already holds it.
+    fn label_buffer(&mut self, index: usize, text: &str, px: f32, bold: bool) -> usize {
+        while self.label_buffers.len() <= index {
+            let buffer = Buffer::new(&mut self.font_system, Metrics::new(16.0, 20.0));
+            self.label_buffers.push((LabelKey::default(), buffer));
+        }
+        let key = LabelKey {
+            text: text.to_string(),
+            px_bits: px.to_bits(),
+            bold,
+        };
+        let (cached, buffer) = &mut self.label_buffers[index];
+        if *cached != key {
+            buffer.set_metrics(&mut self.font_system, Metrics::new(px, px * LABEL_LINE));
+            buffer.set_size(&mut self.font_system, None, None);
+            let weight = if bold {
+                Weight::SEMIBOLD
+            } else {
+                Weight::MEDIUM
+            };
+            buffer.set_text(
+                &mut self.font_system,
+                text,
+                &Attrs::new().family(Family::SansSerif).weight(weight),
+                Shaping::Advanced,
+            );
+            buffer.shape_until_scroll(&mut self.font_system, true);
+            *cached = key;
+        }
+        index
     }
 
     /// Trim the atlas to free unused entries.

@@ -184,13 +184,15 @@ impl WindowState {
         backend_command_tx: Option<tokio::sync::mpsc::UnboundedSender<speechcore::BackendCommand>>,
         app_tx: tokio::sync::mpsc::UnboundedSender<crate::ipc::AppCommand>,
         hotkey_state: crate::hotkey::SharedHotkeyState,
+        gpu: super::gpu_utils::Gpu,
     ) -> Result<Self, String> {
         let window: Arc<dyn Window> = Arc::from(window);
-
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
-            ..Default::default()
-        });
+        let super::gpu_utils::Gpu {
+            instance,
+            adapter,
+            device,
+            queue,
+        } = gpu;
 
         let surface = instance.create_surface(window.clone()).map_err(|e| {
             format!(
@@ -198,28 +200,9 @@ impl WindowState {
             )
         })?;
 
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::default(),
-            compatible_surface: Some(&surface),
-            force_fallback_adapter: false,
-        }))
-        .map_err(|e| {
-            format!("No suitable GPU adapter found ({e}). Sonori needs Vulkan drivers.")
-        })?;
-
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: None,
-            required_features: wgpu::Features::PUSH_CONSTANTS,
-            required_limits: wgpu::Limits {
-                max_push_constant_size: 128,
-                ..wgpu::Limits::default()
-            },
-            memory_hints: wgpu::MemoryHints::default(),
-            trace: wgpu::Trace::Off,
-        }))
-        .map_err(|e| {
-            format!("Failed to open the GPU device ({e}). Check that Vulkan drivers are installed.")
-        })?;
+        if !adapter.is_surface_supported(&surface) {
+            return Err("The GPU cannot draw on this display. Check your GPU drivers.".to_string());
+        }
 
         // Use dynamic sizing values
         let fixed_width = window_width;
