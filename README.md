@@ -236,6 +236,8 @@ Sonori uses `config.toml` for configuration. Defaults work well for most users. 
 
 ## Troubleshooting
 
+Run `sonori doctor` first. It checks the compositor, portals, paste helpers, GPU, and microphones, and prints what works. It changes nothing. Paste its output into a bug report.
+
 ### Wayland / Layer Shell
 
 Sonori uses `zwlr_layer_shell_v1` for the transparent overlay.

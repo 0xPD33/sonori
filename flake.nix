@@ -135,7 +135,11 @@
             pname = "sonori";
             version = cargoToml.package.version;
 
-            src = ./.;
+            # The VM tests in nix/ must not trigger a rebuild of Sonori.
+            src = pkgs.lib.fileset.toSource {
+              root = ./.;
+              fileset = pkgs.lib.fileset.difference ./. ./nix;
+            };
 
             cargoLock = {
               lockFile = ./Cargo.lock;
@@ -223,7 +227,9 @@
             doCheck = false;
 
             postInstall = ''
-              # Wrap binary with required library paths and Vulkan environment
+              # Wrap binary with required library paths and Vulkan environment.
+              # The driver directory, not a fixed file list, so every installed
+              # Vulkan driver is found, also when a desktop menu starts Sonori.
               wrapProgram $out/bin/sonori \
                 --prefix PATH : ${pkgs.lib.makeBinPath [
                   pkgs.wl-clipboard
@@ -245,8 +251,7 @@
                   pkgs.portaudio
                 ]} \
                 --set ALSA_PLUGIN_DIR ${pkgs.pipewire}/lib/alsa-lib \
-                --prefix VK_DRIVER_FILES : /run/opengl-driver/share/vulkan/icd.d/nvidia_icd.x86_64.json:/run/opengl-driver/share/vulkan/icd.d/radeon_icd.x86_64.json:/run/opengl-driver/share/vulkan/icd.d/intel_icd.x86_64.json:/run/opengl-driver/share/vulkan/icd.d/intel_hasvk_icd.x86_64.json \
-                --prefix VK_ICD_FILENAMES : /run/opengl-driver/share/vulkan/icd.d/nvidia_icd.x86_64.json:/run/opengl-driver/share/vulkan/icd.d/radeon_icd.x86_64.json:/run/opengl-driver/share/vulkan/icd.d/intel_icd.x86_64.json:/run/opengl-driver/share/vulkan/icd.d/intel_hasvk_icd.x86_64.json
+                --prefix XDG_DATA_DIRS : /run/opengl-driver/share
 
               # Install desktop file
               mkdir -p $out/share/applications
@@ -274,6 +279,12 @@
           sonori = sonoriPkg;
           default = sonoriPkg;
         };
+
+        # VM tests, one desktop each: nix build .#checks.x86_64-linux.vm-sway -L
+        checks = pkgs.lib.optionalAttrs pkgs.stdenv.isLinux (import ./nix/vm-tests.nix {
+          inherit pkgs;
+          sonori = self.packages.${system}.sonori;
+        });
 
         apps = {
           sonori = {

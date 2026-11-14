@@ -1,5 +1,6 @@
 pub mod config;
 pub mod copy;
+pub mod doctor;
 pub mod enhancement;
 pub mod hotkey;
 pub mod ipc;

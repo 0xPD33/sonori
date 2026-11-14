@@ -60,6 +60,8 @@ enum Command {
     Menu,
     /// Open the Settings window
     Settings,
+    /// Check what Sonori needs from this system and print a report
+    Doctor,
 }
 
 #[derive(Parser)]
@@ -94,6 +96,9 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     // Handle IPC subcommands (control running instance)
+    if let Some(Command::Doctor) = args.command {
+        return sonori::doctor::run().await;
+    }
     if let Some(cmd) = args.command {
         return handle_ipc_command(cmd).await;
     }
@@ -121,9 +126,16 @@ async fn main() -> anyhow::Result<()> {
     // This is critical for GlobalShortcuts and other portals to recognize the app across launches
     let app_id =
         AppID::try_from(sonori::config::APPLICATION_ID).expect("Invalid application ID constant");
-    if let Err(e) = register_host_app(app_id).await {
-        eprintln!("Warning: Failed to register host app with portals: {}", e);
-        eprintln!("Portal permissions may not persist across restarts.");
+    // A portal service that hangs on D-Bus activation would block startup for 2 minutes.
+    match tokio::time::timeout(Duration::from_secs(5), register_host_app(app_id)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            eprintln!("Warning: Failed to register host app with portals: {}", e);
+            eprintln!("Portal permissions may not persist across restarts.");
+        }
+        Err(_) => {
+            eprintln!("Warning: the XDG portal did not answer within 5 s; continuing without it.")
+        }
     }
 
     // Override transcription mode from CLI arguments
@@ -1010,6 +1022,7 @@ async fn handle_ipc_command(cmd: Command) -> anyhow::Result<()> {
         Command::Language { code } => IpcCommand::Language { code },
         Command::Menu => IpcCommand::Menu,
         Command::Settings => IpcCommand::Settings,
+        Command::Doctor => unreachable!("handled before IPC dispatch"),
     };
 
     match ipc::send_command(ipc_cmd).await {

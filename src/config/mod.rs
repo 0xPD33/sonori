@@ -768,6 +768,15 @@ pub fn config_file_problem() -> Option<String> {
     }
 }
 
+/// The settings in the config file. Unlike `read_app_config_with_path`, it never
+/// writes, creates, or backs up a file.
+pub fn peek_app_config() -> Option<AppConfig> {
+    let content = std::fs::read_to_string(find_config_path()?).ok()?;
+    let (mut config, _, _) = build_config_with_defaults(&content).ok()?;
+    config.migrate_legacy_config();
+    Some(config)
+}
+
 pub fn write_app_config(config: &AppConfig) -> Result<(), String> {
     let config_path = find_config_path()
         .or_else(user_config_path)
