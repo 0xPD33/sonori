@@ -10,6 +10,10 @@ let
   sonoriConfig =
     display:
     pkgs.writeText "sonori-${lib.toLower display}.toml" ''
+      # As an older release wrote it: no cursor_bubble, and the old paste default.
+      [portal_config]
+      paste_shortcut = "ctrl_shift_v"
+
       [ui_config]
       display_mode = "${display}"
     '';
@@ -218,6 +222,8 @@ let
             with subtest("overlay mode"):
                 start_sonori("overlay", "${sonoriConfig "Overlay"}")
                 sonori_ready("overlay")
+                migrated = machine.execute("grep -q 'paste_shortcut = \"auto\"' /tmp/sonori-overlay.toml")[0] == 0
+                check(migrated, "an older config kept paste_shortcut = ctrl_shift_v")
                 machine.sleep(8)
                 machine.screenshot("overlay")
                 machine.copy_from_vm("/tmp/sonori-overlay.log", "")
@@ -365,7 +371,7 @@ in
                   print(f"OCR {name}:", " ".join(r[11] for r in words))
                   # OCR reads the glass poorly; any one of the wanted words is enough.
                   for r in words:
-                      word = r[11].strip(".,").lower()
+                      word = r[11].strip(".,!?'\"").lower()
                       if word in wanted:
                           left, top, width, height = (int(v) for v in r[6:10])
                           return word, (left + width / 2) / 3, (top + height / 2) / 3
@@ -402,9 +408,14 @@ in
               machine.copy_from_vm("/tmp/sonori-drag.log", "")
 
           with subtest("type through the input method, quick menu, and Recent"):
-              # The virtual mouse lives in the VM only.
+              # The virtual mouse lives in the VM only. dotool makes a new device per call,
+              # and its first move can get lost; Sway then sends the click to the window
+              # below. A second move makes sure the pointer arrives.
               def click(x, y):
-                  machine.succeed(f"{{ sleep 0.3; echo 'mouseto {x / 1280:.4f} {y / 800:.4f}'; sleep 0.3; echo 'click left'; }} | dotool")
+                  machine.succeed(
+                      f"{{ sleep 1; echo 'mouseto {(x - 8) / 1280:.4f} {y / 800:.4f}'; sleep 0.3; "
+                      f"echo 'mouseto {x / 1280:.4f} {y / 800:.4f}'; sleep 0.3; echo 'click left'; }} | dotool"
+                  )
                   machine.sleep(1)
 
               def menu_click(shot, wanted):
@@ -478,7 +489,7 @@ in
               if speech:
                   left, top, width, height = (int(v) for v in speech[0][6:10])
                   x, y = (left + width / 2) / 1280, (top + height / 2) / 800
-                  machine.succeed(f"{{ sleep 0.4; echo 'mouseto {x:.4f} {y:.4f}'; sleep 0.2; echo 'click left'; }} | dotool")
+                  machine.succeed(f"{{ sleep 1; echo 'mouseto {x - 0.006:.4f} {y:.4f}'; sleep 0.3; echo 'mouseto {x:.4f} {y:.4f}'; sleep 0.3; echo 'click left'; }} | dotool")
                   machine.sleep(2)
                   machine.screenshot("settings-speech")
                   for name in ["Nemotron", "Whisper turbo", "Moonshine base"]:
