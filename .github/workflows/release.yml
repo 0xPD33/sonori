@@ -140,14 +140,11 @@ jobs:
 
           # Copy desktop file and icon
           cp desktop/dev.sonori.desktop "${APPDIR}/usr/share/applications/"
-          cp desktop/dev.sonori.desktop "${APPDIR}/sonori.desktop"
+          # The AppImage spec allows one .desktop file in the AppDir root; linuxdeploy adds it under this same name.
+          cp desktop/dev.sonori.desktop "${APPDIR}/dev.sonori.desktop"
           cp -R desktop/icons/hicolor "${APPDIR}/usr/share/icons/"
           cp desktop/icons/hicolor/512x512/apps/sonori.png "${APPDIR}/sonori.png"
           cp desktop/dev.sonori.metainfo.xml "${APPDIR}/usr/share/metainfo/"
-
-          # Fix desktop file Exec line for AppImage
-          sed -i 's|Exec=sonori|Exec=sonori|g' "${APPDIR}/sonori.desktop"
-          sed -i 's|TryExec=sonori|TryExec=sonori|g' "${APPDIR}/sonori.desktop"
 
           # Bundle ONNX Runtime
           cp -P /usr/local/lib/libonnxruntime.so* "${APPDIR}/usr/lib/"

@@ -30,21 +30,13 @@
     </ul>
   </description>
 
-  <launchable type="desktop-id">sonori.desktop</launchable>
-
-  <screenshots>
-    <!-- TODO: Add actual screenshots -->
-    <screenshot type="default">
-      <caption>Sonori main overlay showing real-time transcription</caption>
-      <!-- <image>https://raw.githubusercontent.com/0xPD33/sonori/master/docs/screenshots/main.png</image> -->
-    </screenshot>
-  </screenshots>
+  <launchable type="desktop-id">dev.sonori.desktop</launchable>
 
   <url type="homepage">https://github.com/0xPD33/sonori</url>
   <url type="bugtracker">https://github.com/0xPD33/sonori/issues</url>
   <url type="vcs-browser">https://github.com/0xPD33/sonori</url>
 
-  <developer id="com.github.0xPD33">
+  <developer id="io.github.0xpd33">
     <name>0xPD33</name>
   </developer>
 
