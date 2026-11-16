@@ -33,7 +33,8 @@ Real-time or on-demand transcription, entirely on your device.
 - **Automatic Model Download** - Models are downloaded automatically on first run
 
 ### Interface
-- **Transparent Overlay** - Non-intrusive overlay at the bottom of your screen
+- **Cursor Mode** (default) - A small glass tile follows your pointer while you dictate, and a bubble shows the text. Hold the hotkey (or run `sonori menu`) for a quick menu with language, output, model, and recent dictations
+- **Transparent Overlay** - A fixed panel at the bottom of the screen; used in real-time mode and on X11, or set `display_mode = "Overlay"`
 - **CLI Mode** - Run without GUI using `--cli` flag for headless/terminal usage
 - **Audio Visualization** - Spectrogram display shows audio input in real-time
 - **System Tray Integration** - Quick access with window control and status display
@@ -167,10 +168,10 @@ See [desktop/README.md](desktop/README.md) for details.
 sonori
 ```
 
-1. A transparent overlay appears at the bottom of your screen
-2. **Real-time mode:** Recording starts automatically
-3. **Manual mode:** Press the global hotkey (default `Super+\`), click Record, or run `sonori toggle` to start and stop a session. The empty overlay shows the hotkey that is bound.
-4. Use overlay buttons to copy text, clear history, switch modes, or exit
+1. In cursor mode, a short notice says that Sonori is ready and which hotkey is bound
+2. **Manual mode** (default): Press the global hotkey (default `Super+\`) or run `sonori toggle` to start and stop a session. A glass tile follows your pointer while you talk; the text is pasted into the focused app
+3. **Real-time mode:** Recording starts automatically, and the transparent overlay shows the text
+4. With the overlay, use its buttons to copy text, clear history, switch modes, or exit
 5. On X11, `Tab` also toggles a manual session while the overlay has keyboard focus. On Wayland the overlay never takes focus, so the paste lands in your app.
 
 ### CLI Mode
@@ -292,7 +293,7 @@ ct2-transformers-converter --model your-model --output_dir ~/.cache/speechcore/m
 
 **Parakeet model layout:** Parakeet uses INT8 split ONNX models via sherpa-onnx (auto-downloaded from HuggingFace). STT models are stored under `~/.cache/speechcore/models/` by default.
 
-**Nemotron model layout:** Nemotron 3.5 ASR uses split ONNX models (encoder/decoder/joint, int4) auto-downloaded from HuggingFace. Set the target language (or `auto`) via `[nemotron_options].language`.
+**Nemotron model layout:** Nemotron 3.5 ASR uses split ONNX models (encoder/decoder/joint, int4) auto-downloaded from HuggingFace. It uses the language from `general_config.language`, for example `de` or `de-DE`, or `auto`.
 
 ## Known Issues
 

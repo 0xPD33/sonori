@@ -14,11 +14,114 @@ let
       display_mode = "${display}"
     '';
 
-  # The VM has no network; Sonori exits if it cannot fetch this model.
-  sileroVad = pkgs.fetchurl {
-    url = "https://github.com/snakers4/silero-vad/raw/v5.1.2/src/silero_vad/data/silero_vad.onnx";
-    hash = "sha256-JiOilT9v89LB5hdAxs23FoEzR5smff7xFKSjzFvdeI8=";
+  # The smallest English model, so a VM can transcribe without a download.
+  whisperTiny = pkgs.fetchurl {
+    url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en-q5_1.bin";
+    hash = "sha256-x3xXZvHO8JtrfUfyG1Rsvd1BV4hrO11tT3CekeZsfCs=";
   };
+
+  dictationConfig = pkgs.writeText "sonori-dictate.toml" ''
+    [general_config]
+    model = "tiny.en"
+    language = "en"
+
+    [backend_config]
+    backend = "whisper_cpp"
+    quantization_level = "low"
+    gpu_enabled = false
+
+    [portal_config]
+    paste_shortcut = "auto"
+    output_mode = "Paste"
+
+    [ui_config]
+    display_mode = "Cursor"
+  '';
+
+  # Speaks a WAV file into a null sink whose monitor is the default microphone,
+  # then pastes into foot, which writes what it gets to /tmp/pasted.
+  dictationChecks = sway: ''
+    with subtest("dictation, paste check, and clipboard restore"):
+        machine.succeed(as_user("mkdir -p ~/.cache/speechcore/models && cp /etc/sonori-test/ggml-tiny.en-q5_1.bin ~/.cache/speechcore/models/"))
+        machine.succeed(as_user("pactl load-module module-null-sink sink_name=fakemic"))
+        machine.succeed(as_user("pactl set-default-source fakemic.monitor"))
+        sentences = "".join(
+            f"<s>Sentence {n} is about the clipboard and the paste check.</s><break time='1500ms'/>"
+            for n in range(1, 11)
+        )
+        machine.succeed(f"cat > /tmp/long.ssml <<'EOF'\n<speak>{sentences}</speak>\nEOF")
+        machine.succeed("espeak-ng -m -f /tmp/long.ssml -w /tmp/long.wav")
+        machine.succeed("espeak-ng -w /tmp/short.wav 'This text goes nowhere.'")
+        machine.succeed("espeak-ng -w /tmp/entry.wav 'Paste into the entry.'")
+        print(machine.succeed("soxi -D /tmp/long.wav || ls -l /tmp/long.wav"))
+
+        machine.succeed(as_user("${sway} swaymsg exec \"foot sh -c 'stty -icanon -echo; cat > /tmp/pasted'\""))
+        machine.wait_for_file("/tmp/pasted")
+        # A real session gives Sonori the compositor socket; the paste shortcut needs it.
+        start_sonori("dictate", "${dictationConfig}", "${sway}")
+        machine.wait_until_succeeds("grep -q 'Backend loaded' /tmp/sonori-dictate.log", timeout=120)
+
+        def dictate(wav):
+            machine.succeed(as_user("sonori start"))
+            machine.sleep(1)
+            machine.succeed(as_user(f"paplay --device=fakemic {wav}"))
+            machine.sleep(2)
+            machine.succeed(as_user("sonori stop"))
+
+        machine.succeed(as_user("wl-copy OLD-CLIPBOARD > /dev/null 2>&1"))
+        dictate("/tmp/long.wav")
+        try:
+            machine.wait_until_succeeds("test -s /tmp/pasted", timeout=120)
+        except Exception:
+            check(False, "the transcript did not reach foot")
+        machine.sleep(2)
+        pasted = machine.succeed("cat /tmp/pasted")
+        print(f"pasted: {pasted!r}")
+        check(len(pasted) > 40, "foot got too little text")
+        log_text = machine.succeed("cat /tmp/sonori-dictate.log")
+        first_chunk = log_text.find("Transcribing manual chunk")
+        stop = log_text.find("Recording state changed: true -> false")
+        check(0 <= first_chunk < stop, "no chunk was transcribed while recording")
+        clip = machine.succeed(as_user("wl-paste --no-newline"))
+        check(clip == "OLD-CLIPBOARD", f"the clipboard was not restored: {clip!r}")
+        check('Paste shortcut: Ctrl+Shift+V for app Some("foot")' in log_text, "foot did not get Ctrl+Shift+V")
+
+        # A GTK entry is not a terminal: it gets Ctrl+V.
+        machine.succeed(as_user("${sway} swaymsg exec \"zenity --entry --text=Dictate > /tmp/entry\""))
+        machine.wait_until_succeeds(as_user("${sway} swaymsg -t get_tree | grep -qi zenity"), timeout=30)
+        machine.sleep(1)
+        dictate("/tmp/entry.wav")
+        try:
+            machine.wait_until_succeeds("grep -q 'Paste shortcut: Ctrl+V for app' /tmp/sonori-dictate.log", timeout=60)
+        except Exception:
+            print(machine.succeed("tail -40 /tmp/sonori-dictate.log"))
+            print(machine.succeed(as_user("${sway} swaymsg -t get_tree | grep -E 'app_id|focused'")))
+            machine.screenshot("zenity")
+            check(False, "no Ctrl+V paste for the GTK entry")
+        machine.sleep(2)
+        machine.succeed(as_user("wtype -k Return"))
+        machine.wait_until_succeeds("test -s /tmp/entry", timeout=10)
+        entry = machine.succeed("cat /tmp/entry")
+        print(f"entry: {entry!r}")
+        check("entry" in entry.lower(), "the GTK entry did not get the text")
+
+        # Nothing in focus: the paste goes nowhere, and the transcript stays.
+        machine.succeed(as_user("${sway} swaymsg '[app_id=foot] kill'"))
+        machine.sleep(1)
+        dictate("/tmp/short.wav")
+        try:
+            machine.wait_until_succeeds("grep -q 'no app read the text' /tmp/sonori-dictate.log", timeout=60)
+        except Exception:
+            check(False, "Sonori did not notice the paste that no app took")
+        clip = machine.succeed(as_user("wl-paste --no-newline"))
+        print(f"clipboard: {clip!r}")
+        check("nowhere" in clip.lower(), "the transcript is not in the clipboard")
+        types = machine.succeed(as_user("wl-paste --list-types"))
+        check("x-kde-passwordManagerHint" in types, "the transcript has no history hint")
+        machine.screenshot("not-pasted")
+        machine.copy_from_vm("/tmp/sonori-dictate.log", "")
+        machine.copy_from_vm("/tmp/pasted", "")
+  '';
 
   common = {
     imports = [ "${pkgs.path}/nixos/tests/common/user-account.nix" ];
@@ -30,7 +133,7 @@ let
       pkgs.vulkan-tools
       pkgs.dotool
     ];
-    # dotool drives a virtual pointer inside the VM.
+    # dotool drives a virtual mouse inside the VM, for clicks on Sonori.
     hardware.uinput.enable = true;
     # The VM has no GPU, so Mesa's software Vulkan driver (lavapipe) renders.
     environment.variables.VK_ICD_FILENAMES = "/run/opengl-driver/share/vulkan/icd.d/lvp_icd.x86_64.json";
@@ -48,6 +151,7 @@ let
       waylandDisplay,
       layerShell,
       waitForDesktop,
+      extraChecks ? "",
     }:
     ''
       import shlex
@@ -61,10 +165,10 @@ let
       def as_user(command):
           return "su - alice -c " + shlex.quote(f"{ENV} {command}")
 
-      def start_sonori(display, config):
+      def start_sonori(display, config, env=""):
           machine.succeed(f"install -o alice -m 644 {config} /tmp/sonori-{display}.toml")
           machine.succeed(as_user(
-              f"SONORI_CONFIG_PATH=/tmp/sonori-{display}.toml "
+              f"{env} SONORI_CONFIG_PATH=/tmp/sonori-{display}.toml "
               f"sonori > /tmp/sonori-{display}.log 2>&1 &"
           ))
 
@@ -85,8 +189,6 @@ let
               return False
 
       start_all()
-      machine.succeed("install -D -o alice -m 644 ${sileroVad} /home/alice/.cache/speechcore/models/silero_vad.onnx")
-      machine.succeed("chown -R alice /home/alice/.cache")
       ${waitForDesktop}
       machine.sleep(5)
       machine.screenshot("desktop")
@@ -123,15 +225,36 @@ let
             with subtest("cursor mode menu"):
                 # A new instance replaces the running one.
                 start_sonori("cursor", "${sonoriConfig "Cursor"}")
-                machine.sleep(8)
+                try:
+                    machine.wait_until_succeeds("grep -q 'startup notice' /tmp/sonori-cursor.log", timeout=60)
+                    machine.screenshot("cursor-notice")
+                    # Clicks along the notice's top row (y 581 at 1280x800). The close
+                    # button's x depends on the hint text; clicks beside it reach the
+                    # desktop. The virtual mouse lives in the VM only.
+                    sweep = "; ".join(
+                        f"echo 'mouseto {x / 1280:.4f} {581 / 800:.4f}'; sleep 0.06; echo 'click left'; sleep 0.06"
+                        for x in range(880, 991, 6)
+                    )
+                    machine.succeed(f"{{ sleep 0.4; {sweep}; }} | dotool")
+                    closed = machine.execute("grep -q 'bubble closed' /tmp/sonori-cursor.log")[0] == 0
+                    machine.sleep(1)
+                    machine.screenshot("notice-closed")
+                    check(closed, "the close button did not remove the notice")
+                except Exception as e:
+                    check(False, f"the startup notice did not appear ({e})")
                 if sonori_ready("cursor"):
-                    # A virtual mouse inside the VM moves its pointer, so Sonori
-                    # knows where to open the menu. The host pointer is not touched.
+                    # No pointer report: the menu must open in the screen centre.
                     status, out = machine.execute(as_user("sonori menu"))
                     print(f"sonori menu: {out}")
                     check(status == 0, f"sonori menu failed: {out}")
-                    machine.succeed("{ sleep 2; echo 'mouseto 0.4 0.4'; sleep 0.5; echo 'mouseto 0.45 0.4'; sleep 1; } | dotool")
-                machine.sleep(2)
+                try:
+                    machine.wait_for_text("Magic Mode", timeout=30)
+                except Exception:
+                    check(False, "the quick menu did not appear")
+                try:
+                    machine.wait_for_text("Recent", timeout=10)
+                except Exception:
+                    check(False, "the quick menu has no Recent row")
                 machine.screenshot("cursor-menu")
                 machine.copy_from_vm("/tmp/sonori-cursor.log", "")
           ''
@@ -144,6 +267,8 @@ let
                 machine.copy_from_vm("/tmp/sonori-overlay.log", "")
           ''
       }
+
+      ${extraChecks}
 
       for mode in ["overlay", "cursor"]:
           print(machine.execute(f"cat /tmp/sonori-{mode}.log")[1])
@@ -166,6 +291,8 @@ let
     name: node: args:
     pkgs.testers.runNixOSTest {
       name = "sonori-${name}";
+      # Reads the screen, so a test can check that the menu really shows.
+      enableOCR = true;
       nodes.machine = {
         imports = [
           common
@@ -183,12 +310,69 @@ in
           programs.sway.enable = true;
           # GLES does not run in the VM; wlroots draws with Pixman.
           environment.variables.WLR_RENDERER = "pixman";
+          # The headless backend lets the test add a second output.
+          environment.variables.WLR_BACKENDS = "drm,libinput,headless";
+          environment.variables.WLR_HEADLESS_OUTPUTS = "0";
+          environment.etc."sonori-test/ggml-tiny.en-q5_1.bin".source = whisperTiny;
+          environment.systemPackages = [
+            pkgs.foot
+            pkgs.grim
+            pkgs.tesseract
+            pkgs.zenity
+            pkgs.wtype
+            pkgs.espeak-ng
+            pkgs.pulseaudio
+            pkgs.sox
+            pkgs.wl-clipboard
+          ];
         }
       )
       {
         waylandDisplay = "wayland-1";
         layerShell = true;
         waitForDesktop = ''machine.wait_for_file("/run/user/${uid}/wayland-1")'';
+        extraChecks = ''
+          with subtest("model cards in Settings"):
+              # Before the second output exists, so the virtual mouse maps to the screen.
+              machine.succeed(as_user("sonori settings"))
+              machine.sleep(3)
+              # OCR finds the Speech tab; the virtual mouse lives in the VM only.
+              machine.succeed(as_user("grim /tmp/settings.png"))
+              words = [
+                  line.split("\t")
+                  for line in machine.succeed("tesseract /tmp/settings.png - tsv 2>/dev/null").splitlines()
+              ]
+              print("OCR:", " ".join(w[11] for w in words if len(w) == 12 and w[11].strip()))
+              speech = [w for w in words if len(w) == 12 and w[11].strip() == "Speech"]
+              if speech:
+                  left, top, width, height = (int(v) for v in speech[0][6:10])
+                  x, y = (left + width / 2) / 1280, (top + height / 2) / 800
+                  machine.succeed(f"{{ sleep 0.4; echo 'mouseto {x:.4f} {y:.4f}'; sleep 0.2; echo 'click left'; }} | dotool")
+                  machine.sleep(2)
+                  machine.screenshot("settings-speech")
+                  for name in ["Nemotron", "Whisper turbo", "Moonshine base"]:
+                      try:
+                          machine.wait_for_text(name, timeout=20)
+                      except Exception:
+                          check(False, f"no {name} card in Settings")
+              else:
+                  machine.screenshot("settings")
+                  check(False, "OCR found no Speech tab in Settings")
+
+          with subtest("cursor mode on the focused output"):
+              machine.succeed(as_user("SWAYSOCK=$(ls /run/user/${uid}/sway-ipc.*.sock) swaymsg create_output"))
+              machine.succeed(as_user("SWAYSOCK=$(ls /run/user/${uid}/sway-ipc.*.sock) swaymsg focus output HEADLESS-1"))
+              start_sonori("focus", "${sonoriConfig "Cursor"}")
+              try:
+                  machine.wait_until_succeeds("grep -q 'focused output is HEADLESS-1' /tmp/sonori-focus.log", timeout=60)
+              except Exception:
+                  check(False, "Sonori did not find the focused output")
+              print(machine.execute(as_user("SWAYSOCK=$(ls /run/user/${uid}/sway-ipc.*.sock) swaymsg -t get_outputs | grep -E 'name|focused'"))[1])
+              machine.copy_from_vm("/tmp/sonori-focus.log", "")
+
+          ${dictationChecks "SWAYSOCK=$(ls /run/user/${uid}/sway-ipc.*.sock)"}
+
+        '';
       };
 
   vm-hyprland =

@@ -4339,6 +4339,7 @@ dependencies = [
  "toml 0.9.8",
  "tracing-subscriber",
  "wayland-client",
+ "wayland-protocols-wlr",
  "wgpu",
  "winit",
  "xkbcommon",
@@ -4347,8 +4348,8 @@ dependencies = [
 
 [[package]]
 name = "speechcore"
-version = "0.3.1"
-source = "git+https://github.com/0xPD33/speechcore?tag=v0.3.1#8bf200e8a958d01e98e20760d7bfc7fc9e011d1e"
+version = "0.3.2"
+source = "git+https://github.com/0xPD33/speechcore?tag=v0.3.2#d3e00abd2bd0c3fefce2b5134a98d51b70d51aa9"
 dependencies = [
  "anyhow",
  "chrono",

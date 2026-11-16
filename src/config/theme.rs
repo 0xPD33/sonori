@@ -129,9 +129,10 @@ pub enum CursorBubble {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum DisplayMode {
     /// The fixed overlay with transcript, buttons, and spectrogram.
-    #[default]
     Overlay,
-    /// A ring at the mouse pointer and a short-lived bubble (experimental).
+    /// A glass tile at the mouse pointer and a short-lived bubble. Realtime mode
+    /// and sessions outside Wayland use the overlay.
+    #[default]
     Cursor,
 }
 
@@ -172,7 +173,7 @@ impl VisualThemePreset {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiConfig {
-    /// Fixed overlay or the experimental cursor ring
+    /// The tile at the pointer (default) or the fixed overlay
     pub display_mode: DisplayMode,
 
     /// How long cursor mode shows the delivered text
@@ -207,7 +208,7 @@ pub struct UiConfig {
 impl Default for UiConfig {
     fn default() -> Self {
         Self {
-            display_mode: DisplayMode::Overlay,
+            display_mode: DisplayMode::Cursor,
             cursor_bubble: CursorBubble::Brief,
             visual_theme: VisualThemePreset::Focus,
             spectrogram_skin: SpectrogramSkin::Bars,

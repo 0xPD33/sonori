@@ -6,6 +6,7 @@ use sonori::config::{read_app_config_with_path, AppConfig, OutputMode};
 use sonori::copy;
 use sonori::hotkey::{HotkeyState, SharedHotkeyState};
 use sonori::ipc::{self, AppCommand, IpcCommand};
+use sonori::paste_check;
 use sonori::portal_input;
 use sonori::sound_player::SoundPlayer;
 use sonori::system_tray;
@@ -20,6 +21,9 @@ use ashpd::AppID;
 use clap::{Parser, Subcommand, ValueEnum};
 use std::time::Duration;
 use tracing_subscriber::EnvFilter;
+
+/// Silero VAD v5.1.2, MIT license (assets/models/silero_vad.LICENSE).
+const BUNDLED_SILERO_VAD: &[u8] = include_bytes!("../assets/models/silero_vad.onnx");
 
 #[derive(Debug, Clone, ValueEnum)]
 enum TranscriptionModeArg {
@@ -159,7 +163,13 @@ async fn main() -> anyhow::Result<()> {
     println!("Transcription mode: {:?}", transcription_mode);
 
     println!("Initializing models...");
-    speechcore::download::init_silero_model().await?;
+    if let Err(e) = speechcore::download::init_silero_model().await {
+        // Without the VAD model Sonori cannot start, so an offline first start
+        // falls back to the copy in the binary.
+        eprintln!("Silero VAD download failed ({e:#}); using the bundled copy.");
+        let path = speechcore::download::model_cache_dir()?.join("silero_vad.onnx");
+        std::fs::write(&path, BUNDLED_SILERO_VAD)?;
+    }
     // The GUI resolves the model in the background, so the overlay shows the
     // download progress and any error. The CLI has no overlay and waits here.
     let transcription_model_path = if args.cli {
@@ -864,24 +874,49 @@ async fn output_worker(
     while let Some(Output { text, mode }) = output_rx.recv().await {
         let paste_shortcut = config_rx.borrow().portal_config.paste_shortcut.clone();
         let shown = text.trim().to_string();
-        let outcome = deliver(text, mode, portal.as_ref(), paste_shortcut).await;
+        let (outcome, restore) = deliver(text, mode, portal.as_ref(), paste_shortcut).await;
         if let ui::DeliveryOutcome::Failed(message) = &outcome {
             status.write().report_error(message.clone());
         }
         delivery.write().record(shown, outcome);
+        // Before the next transcript, so its save sees the user's content.
+        if let Some(offer) = restore {
+            let _ = tokio::task::spawn_blocking(move || offer.restore()).await;
+        }
     }
 }
 
-/// Puts one transcript where `mode` says and reports how that went.
+/// How long an app may take to read the clipboard after the paste keys.
+const PASTE_WAIT: Duration = Duration::from_secs(1);
+
+/// Puts one transcript where `mode` says and reports how that went. After a
+/// paste that an app took, the returned offer restores the old clipboard.
 async fn deliver(
     text: String,
     mode: OutputMode,
     portal: Option<&portal_input::PortalInput>,
     paste_shortcut: String,
+) -> (ui::DeliveryOutcome, Option<paste_check::Offer>) {
+    let mut restore = None;
+    let outcome = deliver_inner(text, mode, portal, paste_shortcut, &mut restore).await;
+    (outcome, restore)
+}
+
+async fn deliver_inner(
+    text: String,
+    mode: OutputMode,
+    portal: Option<&portal_input::PortalInput>,
+    paste_shortcut: String,
+    restore: &mut Option<paste_check::Offer>,
 ) -> ui::DeliveryOutcome {
     use ui::DeliveryOutcome::{Copied, Failed, Pasted, Typed};
-    let with_shift = paste_shortcut != "ctrl_v";
-    let shortcut_label = if with_shift { "Ctrl+Shift+V" } else { "Ctrl+V" };
+    // Asks the compositor for the focused app, so it runs only when a paste needs it.
+    let with_shift = |setting: String| async move {
+        tokio::task::spawn_blocking(move || copy::paste_with_shift(&setting))
+            .await
+            .unwrap_or(true)
+    };
+    let label = |with_shift: bool| if with_shift { "Ctrl+Shift+V" } else { "Ctrl+V" };
 
     if mode == OutputMode::Type {
         let typed_text = text.clone();
@@ -894,38 +929,86 @@ async fn deliver(
         eprintln!("Typing failed: {}", e);
         // Fall through to the clipboard, so the text is not lost.
         return Failed(match copy_to_clipboard(text).await {
-            Ok(()) => format!("Typing failed; copied — press {shortcut_label}"),
+            Ok(()) => {
+                let keys = label(with_shift(paste_shortcut).await);
+                format!("Typing failed; copied — press {keys}")
+            }
             Err(e) => format!("Typing and clipboard copy failed: {e}"),
         });
     }
 
-    if let Err(e) = copy_to_clipboard(text).await {
-        eprintln!("Clipboard copy failed: {}", e);
-        return Failed(format!("Clipboard copy failed: {e}"));
-    }
     if mode == OutputMode::Clipboard {
-        return Copied;
+        return match copy_to_clipboard(text).await {
+            Ok(()) => Copied,
+            Err(e) => {
+                eprintln!("Clipboard copy failed: {}", e);
+                Failed(format!("Clipboard copy failed: {e}"))
+            }
+        };
     }
 
-    // Give clipboard managers a short moment before paste injection.
-    tokio::time::sleep(Duration::from_millis(50)).await;
-
-    if let Some(portal) = portal {
-        match portal.paste(with_shift).await {
-            Ok(()) => return Pasted,
-            Err(e) => eprintln!("Portal paste failed: {}; trying wtype/dotool", e),
-        }
-    }
-
-    let pasted = tokio::task::spawn_blocking(move || copy::paste_via_keystroke(&paste_shortcut))
+    // Sonori serves the clipboard during the paste, so it sees if an app took the
+    // text, and it saves the old content for the restore.
+    let offer_text = text.clone();
+    let offer = tokio::task::spawn_blocking(move || paste_check::Offer::set(&offer_text))
         .await
         .unwrap_or_else(|e| Err(e.to_string()));
-    match pasted {
-        Ok(()) => Pasted,
-        Err(e) => {
-            eprintln!("Paste failed: {}", e);
-            Failed(format!("Copied, paste failed — press {shortcut_label}"))
+    if let Err(e) = &offer {
+        eprintln!("Paste check unavailable: {e}");
+        if let Err(e) = copy_to_clipboard(text.clone()).await {
+            eprintln!("Clipboard copy failed: {}", e);
+            return Failed(format!("Clipboard copy failed: {e}"));
         }
+    }
+
+    // The query also gives clipboard managers a moment before the paste keys.
+    let (with_shift, ()) = tokio::join!(
+        with_shift(paste_shortcut),
+        tokio::time::sleep(Duration::from_millis(50))
+    );
+
+    let injected = std::time::Instant::now();
+    let mut pasted = Err("no paste method".to_string());
+    if let Some(portal) = portal {
+        pasted = portal.paste(with_shift).await.map_err(|e| e.to_string());
+        if let Err(e) = &pasted {
+            eprintln!("Portal paste failed: {}; trying wtype/dotool", e);
+        }
+    }
+    if pasted.is_err() {
+        pasted = tokio::task::spawn_blocking(move || copy::paste_via_keystroke(with_shift))
+            .await
+            .unwrap_or_else(|e| Err(e.to_string()));
+    }
+
+    let taken = match offer {
+        Ok(offer) => tokio::task::spawn_blocking(move || {
+            let taken = offer.read_since(injected, PASTE_WAIT);
+            (taken, offer)
+        })
+        .await
+        .ok()
+        .and_then(|(taken, offer)| {
+            if taken == Some(true) {
+                *restore = Some(offer);
+            }
+            taken
+        }),
+        Err(_) => None,
+    };
+    match (pasted, taken) {
+        (Err(e), _) => {
+            eprintln!("Paste failed: {}", e);
+            Failed(format!(
+                "Copied, paste failed — press {}",
+                label(with_shift)
+            ))
+        }
+        (Ok(()), Some(false)) => {
+            println!("Paste check: no app read the text");
+            Failed("Not pasted — it is in the clipboard".to_string())
+        }
+        (Ok(()), _) => Pasted,
     }
 }
 
@@ -957,6 +1040,12 @@ async fn handle_app_commands(
                 } else {
                     OutputMode::Paste
                 };
+                if output_tx.try_send(Output { text, mode }).is_err() {
+                    status.write().report_error("Paste queue full; try again");
+                }
+            }
+            AppCommand::Deliver(text) => {
+                let mode = config_tx.borrow().portal_config.output_mode;
                 if output_tx.try_send(Output { text, mode }).is_err() {
                     status.write().report_error("Paste queue full; try again");
                 }

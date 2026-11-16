@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{Read, Write};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
@@ -30,16 +30,16 @@ impl WlCopy {
 }
 
 /// Simulate a paste keystroke using available tools (wtype → dotool fallback chain)
-pub fn paste_via_keystroke(paste_shortcut: &str) -> Result<(), String> {
-    let (wtype_args, dotool_key): (&[&str], &str) = if paste_shortcut == "ctrl_v" {
-        (&["-M", "ctrl", "-k", "v", "-m", "ctrl"], "key ctrl+v\n")
-    } else {
+pub fn paste_via_keystroke(with_shift: bool) -> Result<(), String> {
+    let (wtype_args, dotool_key): (&[&str], &str) = if with_shift {
         (
             &[
                 "-M", "ctrl", "-M", "shift", "-k", "v", "-m", "shift", "-m", "ctrl",
             ],
             "key ctrl+shift+v\n",
         )
+    } else {
+        (&["-M", "ctrl", "-k", "v", "-m", "ctrl"], "key ctrl+v\n")
     };
 
     let mut wtype = Command::new("wtype");
@@ -53,6 +53,114 @@ pub fn paste_via_keystroke(paste_shortcut: &str) -> Result<(), String> {
         )
         .map_err(|dotool_err| format!("wtype ({wtype_err}); dotool ({dotool_err})")),
     }
+}
+
+/// The focused app reads the paste in well under this, so a slow compositor
+/// query must not hold the paste back for long.
+const FOCUS_QUERY_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// App IDs of terminals, lower case. In a terminal Ctrl+V goes to the program
+/// and Ctrl+Shift+V pastes. Any app ID with "term" in it also counts.
+const TERMINALS: &[&str] = &[
+    "foot",
+    "footclient",
+    "kitty",
+    "alacritty",
+    "com.mitchellh.ghostty",
+    "ghostty",
+    "org.wezfurlong.wezterm",
+    "wezterm",
+    "org.kde.konsole",
+    "konsole",
+    "org.gnome.console",
+    "kgx",
+    "org.gnome.ptyxis",
+    "com.raggesilver.blackbox",
+    "urxvt",
+    "st-256color",
+    "contour",
+    "rio",
+    "herdr-app",
+    "dev.warp.warp",
+];
+
+/// Whether a paste needs Ctrl+Shift+V. "auto" asks the compositor for the
+/// focused app; without an answer it uses Ctrl+Shift+V, the old default.
+pub fn paste_with_shift(paste_shortcut: &str) -> bool {
+    match paste_shortcut {
+        "ctrl_v" => false,
+        "auto" => {
+            let app = focused_app_id();
+            let with_shift = app.as_deref().is_none_or(|app| {
+                let app = app.to_lowercase();
+                TERMINALS.contains(&app.as_str()) || app.contains("term")
+            });
+            let keys = if with_shift { "Ctrl+Shift+V" } else { "Ctrl+V" };
+            println!("Paste shortcut: {keys} for app {app:?}");
+            with_shift
+        }
+        _ => true,
+    }
+}
+
+/// The app ID of the focused window, from the compositor's IPC. None on a
+/// compositor without one (GNOME, KDE) and when no window has focus.
+fn focused_app_id() -> Option<String> {
+    let (program, args): (&str, &[&str]) = if std::env::var_os("NIRI_SOCKET").is_some() {
+        ("niri", &["msg", "--json", "focused-window"])
+    } else if std::env::var_os("SWAYSOCK").is_some() {
+        ("swaymsg", &["-t", "get_tree"])
+    } else if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() {
+        ("hyprctl", &["-j", "activewindow"])
+    } else {
+        return None;
+    };
+    let json: serde_json::Value = serde_json::from_slice(&helper_output(program, args)?).ok()?;
+    let window = if program == "swaymsg" {
+        focused_node(&json)?
+    } else {
+        &json
+    };
+    // niri and Sway give app_id, Hyprland gives class, and Sway gives
+    // window_properties.class for an Xwayland window.
+    let app = window
+        .get("app_id")
+        .and_then(|v| v.as_str())
+        .or_else(|| window.get("class").and_then(|v| v.as_str()))
+        .or_else(|| window.get("window_properties")?.get("class")?.as_str())?;
+    Some(app.to_string())
+}
+
+/// The node with `"focused": true` in a Sway tree.
+fn focused_node(node: &serde_json::Value) -> Option<&serde_json::Value> {
+    if node.get("focused").and_then(|v| v.as_bool()) == Some(true) {
+        return Some(node);
+    }
+    ["nodes", "floating_nodes"]
+        .iter()
+        .filter_map(|key| node.get(key)?.as_array())
+        .flatten()
+        .find_map(focused_node)
+}
+
+/// The stdout of a helper that exited with success before the timeout.
+fn helper_output(program: &str, args: &[&str]) -> Option<Vec<u8>> {
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut stdout = child.stdout.take()?;
+    // A big Sway tree fills the pipe before swaymsg exits, so read while it runs.
+    let reader = std::thread::spawn(move || {
+        let mut out = Vec::new();
+        stdout.read_to_end(&mut out).map(|_| out)
+    });
+    let status = wait_with_timeout(&mut child, program, FOCUS_QUERY_TIMEOUT).ok()?;
+    let out = reader.join().ok()?.ok()?;
+    status.success().then_some(out)
 }
 
 /// Type text into the focused window (wtype → dotool fallback chain). The text

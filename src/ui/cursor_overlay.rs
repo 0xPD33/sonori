@@ -14,9 +14,12 @@ use winit::event_loop::ActiveEventLoop;
 use winit::platform::wayland::{Anchor, KeyboardInteractivity, Layer, WindowAttributesWayland};
 use winit::window::{Window, WindowAttributes, WindowId};
 
-use super::shapes::{glass, Shape, ShapeRenderer, Spring, OUTLINE, SILVER_BAR};
+use super::shapes::{
+    glass, Shape, ShapeRenderer, Spring, CROSS, FLAT, ICON, INK, INK_2, OUTLINE, PANEL, SILVER_BAR,
+};
 use super::text_renderer::{Label, TextRenderer};
 use crate::config::{AppConfig, CursorBubble, DisplayMode, OutputMode};
+use crate::hotkey::{HotkeyState, SharedHotkeyState};
 
 mod menu;
 use crate::ipc::AppCommand;
@@ -117,13 +120,17 @@ pub enum MenuChange {
 impl MenuChange {
     pub fn apply(&self, config: &mut AppConfig) {
         match self {
-            MenuChange::Language(code) => config.general_config.language = code.clone(),
+            MenuChange::Language(code) => {
+                config.general_config.language = code.clone();
+                crate::ui::settings_window::fit_language(config);
+            }
             MenuChange::Output(mode) => config.portal_config.output_mode = *mode,
             MenuChange::Bubble(bubble) => config.ui_config.cursor_bubble = *bubble,
             MenuChange::Display(mode) => config.ui_config.display_mode = *mode,
             MenuChange::Model { backend, model } => {
                 config.backend_config.backend = *backend;
                 config.general_config.model = model.clone();
+                crate::ui::settings_window::fit_language(config);
             }
         }
     }
@@ -179,6 +186,14 @@ const BUBBLE_MAX_WIDTH: f32 = 420.0;
 const BUBBLE_FONT_SCALE: f32 = 1.4;
 const TIMER_FONT_SCALE: f32 = 1.1;
 const BUBBLE_MAX_CHARS: usize = 170;
+/// Width kept free at the right of the bubble for its close button, in logical px.
+const CLOSE_SPACE: f32 = 18.0;
+/// How long the startup notice stays.
+const NOTICE_SHOWN: Duration = Duration::from_millis(3500);
+/// The startup notice waits this long at most for the portal to bind the hotkey.
+const NOTICE_WAIT: Duration = Duration::from_secs(2);
+/// Transcripts the menu's Recent list keeps.
+const RECENT: usize = 5;
 
 #[derive(Debug, Clone)]
 enum Phase {
@@ -206,6 +221,11 @@ enum Phase {
     Menu {
         since: Instant,
     },
+    /// The startup notice: the tile and a bubble that says how to dictate.
+    Notice {
+        since: Instant,
+        until: Instant,
+    },
 }
 
 /// What the bubble shows, laid out once when the text changes.
@@ -231,6 +251,8 @@ const COMPANION_STIFFNESS: f32 = 60.0;
 const COMPANION_DAMPING: f32 = 13.0;
 /// Without a pointer report this long into a session, the tile shows at the bottom.
 const POINTER_WAIT: Duration = Duration::from_millis(400);
+/// How long Sonori waits for the compositor to say which output has focus.
+const FOCUS_WAIT: Duration = Duration::from_secs(1);
 
 struct Renderer {
     shapes: ShapeRenderer,
@@ -248,6 +270,9 @@ struct OutputSurface {
     window: Arc<dyn Window>,
     /// Centre of the input-region gap, in physical px; `None` takes the whole output.
     gap: Option<(f32, f32)>,
+    /// The bubble's close button, in physical px; outside recording and the
+    /// menu, the only place that takes pointer input.
+    hit: Option<[f32; 4]>,
     /// The input region must be set again and committed with the next frame.
     region_dirty: bool,
     /// The surface showed a frame since its content last changed.
@@ -264,6 +289,7 @@ pub struct CursorOverlayHandles {
     pub manual_session_sender: Option<tokio::sync::mpsc::Sender<speechcore::ManualSessionCommand>>,
     pub app_tx: tokio::sync::mpsc::UnboundedSender<AppCommand>,
     pub menu: SharedMenuControl,
+    pub hotkey: SharedHotkeyState,
 }
 
 pub struct CursorOverlay {
@@ -275,6 +301,12 @@ pub struct CursorOverlay {
     surfaces: Vec<OutputSurface>,
     /// The surface on the output that has the pointer; the tile draws there.
     active: Option<WindowId>,
+    /// The surface opened without an output, which the compositor puts on the
+    /// focused one. Without a pointer report, Sonori shows its tile there.
+    focused: Option<WindowId>,
+    /// Until this time, Sonori waits to learn the focused output, then opens
+    /// surfaces on the other outputs.
+    others_due: Option<Instant>,
     handles: CursorOverlayHandles,
     error_color: [f32; 4],
     language: String,
@@ -314,6 +346,16 @@ pub struct CursorOverlay {
     texts: Vec<String>,
     outcome: Option<DeliveryOutcome>,
     bubble: Option<Bubble>,
+    /// A failed paste keeps its bubble until the user closes it.
+    bubble_pinned: bool,
+    close_hover: bool,
+    /// When the startup notice is due; it waits briefly for the hotkey to bind.
+    notice_due: Option<Instant>,
+    history_enabled: bool,
+    /// Latest transcripts, newest first, for the menu's Recent list.
+    recent: std::collections::VecDeque<String>,
+    /// The session whose text `recent[0]` holds; a late chunk updates it.
+    recent_session: Option<Instant>,
     started: Instant,
 }
 
@@ -347,6 +389,8 @@ impl CursorOverlay {
             renderer: None,
             surfaces: Vec::new(),
             active: None,
+            focused: None,
+            others_due: None,
             handles,
             error_color: config.ui_config.effective_recording_indicator_color(),
             language: config.general_config.language.clone(),
@@ -380,6 +424,12 @@ impl CursorOverlay {
             texts: Vec::new(),
             outcome: None,
             bubble: None,
+            bubble_pinned: false,
+            close_hover: false,
+            notice_due: Some(now),
+            history_enabled: config.history_config.enabled,
+            recent: std::collections::VecDeque::new(),
+            recent_session: None,
             started: now,
         })
     }
@@ -392,6 +442,10 @@ impl CursorOverlay {
         self.display_mode = config.ui_config.display_mode;
         self.backend = config.backend_config.backend;
         self.model = config.general_config.model.clone();
+        self.history_enabled = config.history_config.enabled;
+        if !self.history_enabled {
+            self.recent.clear();
+        }
     }
 
     /// Settings the menu changed since the last call.
@@ -421,11 +475,17 @@ impl CursorOverlay {
         } else if !wants_surfaces && !self.surfaces.is_empty() {
             self.surfaces.clear();
             self.active = None;
+            self.focused = None;
+            self.others_due = None;
             self.pointer = None;
             self.anchor = None;
         }
+        if let Err(e) = self.open_other_surfaces(event_loop) {
+            eprintln!("Cursor overlay: {e}");
+        }
+        let still = self.still(Instant::now());
         for output in &self.surfaces {
-            if self.active == Some(output.window.id()) || !output.settled {
+            if (self.active == Some(output.window.id()) && !still) || !output.settled {
                 output.window.request_redraw();
             }
         }
@@ -437,16 +497,22 @@ impl CursorOverlay {
             | WindowEvent::PointerMoved { position, .. } => {
                 self.pointer_seen(window_id, (position.x as f32, position.y as f32));
             }
+            WindowEvent::PointerLeft { .. } => self.set_close_hover(false),
             WindowEvent::PointerButton {
                 state: winit::event::ElementState::Pressed,
                 ..
             } if matches!(self.phase, Phase::Menu { .. }) => self.menu_click(window_id),
+            WindowEvent::PointerButton {
+                state: winit::event::ElementState::Pressed,
+                ..
+            } if self.close_hover => self.dismiss_bubble(Instant::now()),
             WindowEvent::SurfaceResized(size) => self.resize(window_id, size),
             WindowEvent::RedrawRequested => {
                 self.advance(Instant::now());
                 self.draw(window_id);
+                let still = self.still(Instant::now());
                 if let Some(output) = self.surfaces.iter().find(|s| s.window.id() == window_id) {
-                    if self.active == Some(window_id) || !output.settled {
+                    if (self.active == Some(window_id) && !still) || !output.settled {
                         output.window.request_redraw();
                     }
                 }
@@ -454,6 +520,9 @@ impl CursorOverlay {
             // The compositor closed the surface (e.g. its output went away).
             WindowEvent::CloseRequested => {
                 self.surfaces.retain(|s| s.window.id() != window_id);
+                if self.focused == Some(window_id) {
+                    self.focused = None;
+                }
                 if self.active == Some(window_id) {
                     self.active = None;
                     self.pointer = None;
@@ -474,6 +543,15 @@ impl CursorOverlay {
             }
             return;
         }
+        let over_close = self
+            .surfaces
+            .iter()
+            .find(|s| s.window.id() == window_id)
+            .and_then(|s| s.hit)
+            .is_some_and(|[x, y, w, h]| {
+                position.0 >= x && position.0 < x + w && position.1 >= y && position.1 < y + h
+            });
+        self.set_close_hover(over_close);
         let switched = self.active != Some(window_id);
         self.active = Some(window_id);
         self.pointer = Some(position);
@@ -526,7 +604,29 @@ impl CursorOverlay {
         }
         output.region_dirty = false;
         if !capture {
-            let _ = output.window.set_cursor_hittest(false);
+            let rect = output.hit.and_then(|rect| {
+                let wayland = output
+                    .window
+                    .cast_ref::<winit::platform::wayland::Window>()?;
+                Some((wayland, rect))
+            });
+            match rect
+                .and_then(|(wayland, rect)| Some((wayland, wayland.create_region().ok()?, rect)))
+            {
+                Some((wayland, region, [x, y, w, h])) => {
+                    let sf = output.window.scale_factor() as f32;
+                    region.add(
+                        (x / sf).floor() as i32,
+                        (y / sf).floor() as i32,
+                        (w / sf).ceil() as i32,
+                        (h / sf).ceil() as i32,
+                    );
+                    wayland.set_region(Some(&region));
+                }
+                None => {
+                    let _ = output.window.set_cursor_hittest(false);
+                }
+            }
             return;
         }
         let Some(wayland) = output.window.cast_ref::<winit::platform::wayland::Window>() else {
@@ -575,6 +675,7 @@ impl CursorOverlay {
             _ => {}
         }
         self.collect_deliveries(now);
+        self.show_notice_when_due(now);
 
         match self.phase.clone() {
             Phase::Recording { .. } if !recording => {
@@ -644,8 +745,18 @@ impl CursorOverlay {
                     };
                 }
             }
-            Phase::Done { until, .. } => {
-                if now >= until + TELEPORT + BURST {
+            Phase::Done { since, until } => {
+                if self.bubble_pinned {
+                    self.phase = Phase::Done {
+                        since,
+                        until: until.max(now + Duration::from_millis(100)),
+                    };
+                } else if now >= until + TELEPORT + BURST {
+                    self.enter(Phase::Hidden);
+                }
+            }
+            Phase::Notice { until, .. } => {
+                if now >= until + FADE_OUT {
                     self.enter(Phase::Hidden);
                 }
             }
@@ -662,6 +773,8 @@ impl CursorOverlay {
         self.texts.clear();
         self.outcome = None;
         self.bubble = None;
+        self.bubble_pinned = false;
+        self.notice_due = None;
         self.spectrum = [0.0; BANDS.len()];
         self.live = 0.0;
         self.bars = [Spring::default(); BARS];
@@ -715,8 +828,12 @@ impl CursorOverlay {
             self.enter(Phase::Cancelled { since: now });
             return;
         }
+        self.remember(&text);
         let words = text.split_whitespace().count() as u64;
-        if self.cursor_bubble == CursorBubble::Off {
+        let failed = matches!(self.outcome, Some(DeliveryOutcome::Failed(_)));
+        self.bubble_pinned = failed;
+        // A failed paste always shows: the text is only in the clipboard.
+        if self.cursor_bubble == CursorBubble::Off && !failed {
             self.bubble = None;
             self.phase = Phase::Done {
                 since: now,
@@ -758,6 +875,79 @@ impl CursorOverlay {
         });
     }
 
+    /// Keeps the session text for the menu's Recent list, unless history is off.
+    fn remember(&mut self, text: &str) {
+        if !self.history_enabled {
+            return;
+        }
+        if self.recent_session == Some(self.session_start) {
+            self.recent.pop_front();
+        }
+        self.recent.retain(|t| t != text);
+        self.recent.push_front(text.to_string());
+        self.recent.truncate(RECENT);
+        self.recent_session = Some(self.session_start);
+    }
+
+    /// Shows the startup notice once the hotkey is bound, or after a short wait.
+    /// A session that starts first makes it unneeded.
+    fn show_notice_when_due(&mut self, now: Instant) {
+        let Some(due) = self.notice_due else {
+            return;
+        };
+        if !matches!(self.phase, Phase::Hidden) {
+            self.notice_due = None;
+            return;
+        }
+        let hotkey = self.handles.hotkey.read().clone();
+        if matches!(hotkey, HotkeyState::Pending) && now < due + NOTICE_WAIT {
+            return;
+        }
+        self.notice_due = None;
+        let hint = match hotkey {
+            HotkeyState::Bound { trigger } => format!("Press {trigger} to dictate"),
+            _ => "Run sonori toggle to dictate".to_string(),
+        };
+        println!("Cursor mode: showing the startup notice");
+        self.set_bubble("Sonori is ready".to_string(), hint, false);
+        self.enter(Phase::Notice {
+            since: now,
+            until: now + NOTICE_SHOWN,
+        });
+    }
+
+    /// The close button: the bubble goes at once, also a pinned one.
+    fn dismiss_bubble(&mut self, now: Instant) {
+        println!("Cursor mode: bubble closed");
+        self.bubble_pinned = false;
+        self.set_close_hover(false);
+        self.phase = match self.phase {
+            Phase::Done { since, .. } => Phase::Done { since, until: now },
+            Phase::Error { since, .. } => Phase::Error { since, until: now },
+            Phase::Notice { since, .. } => Phase::Notice { since, until: now },
+            ref other => other.clone(),
+        };
+    }
+
+    fn set_close_hover(&mut self, hover: bool) {
+        if self.close_hover == hover {
+            return;
+        }
+        self.close_hover = hover;
+        for output in &mut self.surfaces {
+            output.settled = false;
+            output.window.request_redraw();
+        }
+    }
+
+    /// A pinned bubble that finished its entrance draws nothing new until the
+    /// pointer moves over its close button.
+    fn still(&self, now: Instant) -> bool {
+        self.bubble_pinned
+            && !self.close_hover
+            && now >= self.bubble_since + REVEAL_SPAN + Duration::from_secs(1)
+    }
+
     fn set_bubble(&mut self, body: String, note: String, error: bool) {
         if self.bubble.is_none() {
             self.bubble_since = Instant::now();
@@ -788,36 +978,69 @@ impl CursorOverlay {
     fn measure_bubble(&mut self, text: &str) -> (f32, f32) {
         let sf = self.scale();
         let pad = (13.0 * sf, 10.0 * sf);
+        // Measured again on the first frame that has a renderer.
         let Some(renderer) = self.renderer.as_mut() else {
-            return (BUBBLE_MAX_WIDTH * sf, 60.0 * sf);
+            return (0.0, 0.0);
         };
         let scale = BUBBLE_FONT_SCALE * sf;
+        let close = CLOSE_SPACE * sf;
         let widest = text
             .lines()
             .map(|line| renderer.text.measure_text(line, scale))
             .fold(0.0, f32::max);
-        let inner = (widest + 2.0).min(BUBBLE_MAX_WIDTH * sf - 2.0 * pad.0);
+        let inner = (widest + 2.0).min(BUBBLE_MAX_WIDTH * sf - 2.0 * pad.0 - close);
         let height = renderer
             .text
             .text_height(text, scale, [1.0; 4], text_area_width(inner));
-        (inner + 2.0 * pad.0, height + 2.0 * pad.1)
+        (inner + 2.0 * pad.0 + close, height + 2.0 * pad.1)
     }
 
     /// One layer per output, so the ring can follow the pointer to any monitor.
+    /// The first layer names no output, so the compositor puts it on the focused
+    /// one; the others follow once Sonori knows which output that is.
     fn open_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) -> Result<(), String> {
-        let outputs: Vec<Option<u64>> = {
-            let ids: Vec<u64> = event_loop
-                .available_monitors()
-                .map(|m| m.native_id())
-                .collect();
-            if ids.is_empty() {
-                vec![None]
-            } else {
-                ids.into_iter().map(Some).collect()
-            }
+        self.open_surface(event_loop, None)?;
+        self.focused = self.surfaces.last().map(|s| s.window.id());
+        if event_loop.available_monitors().nth(1).is_some() {
+            self.others_due = Some(Instant::now() + FOCUS_WAIT);
+        }
+        Ok(())
+    }
+
+    /// Opens a layer on each output but the focused one, once the compositor
+    /// says which output the first layer entered.
+    fn open_other_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) -> Result<(), String> {
+        let Some(due) = self.others_due else {
+            return Ok(());
         };
-        for output in outputs {
-            self.open_surface(event_loop, output)?;
+        let entered = self
+            .surfaces
+            .iter()
+            .find(|s| Some(s.window.id()) == self.focused)
+            .and_then(|s| s.window.current_monitor());
+        let Some(entered) = entered else {
+            if Instant::now() >= due {
+                self.others_due = None;
+                // A second layer on the focused output would block clicks there.
+                return Err("the compositor did not say which output has focus; \
+                            Sonori shows on that output only"
+                    .to_string());
+            }
+            return Ok(());
+        };
+        self.others_due = None;
+        println!(
+            "Cursor mode: the focused output is {}",
+            entered.name().as_deref().unwrap_or("unnamed")
+        );
+        let entered = entered.native_id();
+        let others: Vec<u64> = event_loop
+            .available_monitors()
+            .map(|m| m.native_id())
+            .filter(|&id| id != entered)
+            .collect();
+        for output in others {
+            self.open_surface(event_loop, Some(output))?;
         }
         Ok(())
     }
@@ -903,6 +1126,7 @@ impl CursorOverlay {
             config,
             window,
             gap: None,
+            hit: None,
             region_dirty: true,
             settled: false,
         });
@@ -1031,8 +1255,30 @@ impl CursorOverlay {
         let height = size.height as f32;
         let sf = self.surfaces[index].window.scale_factor() as f32;
 
-        // No pointer report yet: after a short wait, use the bottom of the first output.
-        if self.active.is_none() && recording {
+        // Without a pointer report, the tile and menu show on the focused output.
+        // Not all compositors report a still pointer.
+        let focused = self.focused.is_none_or(|id| id == window_id);
+        // No pointer report yet: after a short wait, open the menu in the centre.
+        if let (Phase::Menu { since }, Some(menu)) = (&self.phase, self.menu.as_mut()) {
+            if focused && menu.window().is_none() && now >= *since + POINTER_WAIT {
+                menu.pointer(window_id, (width / 2.0, height / 2.0));
+            }
+        }
+        // Keeps frames coming until the menu has a place.
+        let menu_waiting = matches!(self.phase, Phase::Menu { .. })
+            && self.menu.as_ref().is_some_and(|m| m.window().is_none());
+        // The notice takes no pointer input, so it learns no pointer position.
+        if focused && self.active.is_none() && matches!(self.phase, Phase::Notice { .. }) {
+            self.active = Some(window_id);
+            self.anchor = Some((width / 2.0, height - 140.0 * sf));
+        }
+        if self.bubble.as_ref().is_some_and(|b| b.size.0 == 0.0) {
+            if let Some(bubble) = self.bubble.take() {
+                self.set_bubble(bubble.body, bubble.note, bubble.error);
+            }
+        }
+        // No pointer report yet: after a short wait, use the bottom of the output.
+        if focused && self.active.is_none() && recording {
             if let Phase::Recording { since } = self.phase {
                 if now >= since + POINTER_WAIT {
                     self.active = Some(window_id);
@@ -1079,7 +1325,6 @@ impl CursorOverlay {
         }
         let menu_open = self.menu.as_ref().is_some_and(|m| !m.is_closing());
         let capture = recording || (matches!(self.phase, Phase::Menu { .. }) && menu_open);
-        Self::apply_region(&mut self.surfaces[index], capture);
 
         let (cx, cy) = self.anchor.unwrap_or((-1000.0, -1000.0));
         let menu = matches!(self.phase, Phase::Menu { .. });
@@ -1112,9 +1357,17 @@ impl CursorOverlay {
             }
         }
         let is_active = is_active || menu_here;
+        let still = self.still(now);
         let shapes = scene.shapes;
 
         let output = &mut self.surfaces[index];
+        // Whole pixels, so the bubble's settling lift does not reset the region each frame.
+        let hit = scene.close.map(|rect| rect.map(f32::round));
+        if output.hit != hit {
+            output.hit = hit;
+            output.region_dirty = true;
+        }
+        Self::apply_region(output, capture);
         let frame = match output.surface.get_current_texture() {
             Ok(frame) => frame,
             Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
@@ -1123,7 +1376,7 @@ impl CursorOverlay {
             }
             Err(_) => return,
         };
-        output.settled = !is_active;
+        output.settled = (!is_active || still) && !menu_waiting;
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -1188,7 +1441,7 @@ impl CursorOverlay {
                 y + pad.1,
                 BUBBLE_FONT_SCALE * sf,
                 1.1,
-                text_area_width(bubble.size.0 - 2.0 * pad.0),
+                text_area_width(bubble.size.0 - 2.0 * pad.0 - CLOSE_SPACE * sf),
             );
         }
 
@@ -1256,6 +1509,9 @@ impl CursorOverlay {
             preset: PRESETS
                 .iter()
                 .position(|p| p.backend == self.backend && p.model == model),
+            recent: self
+                .history_enabled
+                .then(|| self.recent.iter().cloned().collect()),
         }
     }
 
@@ -1277,6 +1533,11 @@ impl CursorOverlay {
             }
             Some(MenuAction::OpenSettings) => {
                 self.settings_requested = true;
+                self.close_menu(now);
+            }
+            Some(MenuAction::Paste(text)) => {
+                // The menu takes no keyboard focus, so the text lands in the focused app.
+                let _ = self.handles.app_tx.send(AppCommand::Deliver(text));
                 self.close_menu(now);
             }
             Some(MenuAction::Change(change)) => {
@@ -1331,6 +1592,10 @@ impl CursorOverlay {
                 let t = (since_phase(*since) / CANCEL_FADE.as_secs_f32()).min(1.0);
                 (1.0 - t * t, 1.0 - 0.12 * t * t, 0.0, 0.0)
             }
+            Phase::Notice { since, until } => {
+                let t = (since_phase(*since) / FADE_IN.as_secs_f32()).min(1.0);
+                (t.min(self.fade_out(now, *until)), 1.0, 0.0, 0.0)
+            }
             Phase::Menu { .. } => return scene,
         };
         let k = self.tile_size.x * sf * self.tile_scale.x * exit_scale;
@@ -1379,7 +1644,10 @@ impl CursorOverlay {
         if let Some((label, label_w)) = timer_label {
             self.add_timer(&mut scene, label, label_w, cx, cy + th / 2.0, sf, alpha);
         }
-        if matches!(self.phase, Phase::Done { .. } | Phase::Error { .. }) {
+        if matches!(
+            self.phase,
+            Phase::Done { .. } | Phase::Error { .. } | Phase::Notice { .. }
+        ) {
             self.add_bubble(&mut scene, now, cx, cy, sf, width);
         }
         scene
@@ -1405,7 +1673,9 @@ impl CursorOverlay {
             return;
         };
         let until = match self.phase {
-            Phase::Done { until, .. } | Phase::Error { until, .. } => until,
+            Phase::Done { until, .. }
+            | Phase::Error { until, .. }
+            | Phase::Notice { until, .. } => until,
             _ => return,
         };
         let fade_in = (now.duration_since(self.bubble_since).as_secs_f32()
@@ -1442,6 +1712,9 @@ impl CursorOverlay {
                 if text_alpha > 0.0 {
                     scene.bubble_text = Some((bx, by, text_alpha));
                 }
+                if p == 0.0 {
+                    self.add_close(scene, bx + w, by, sf, fade_in);
+                }
             } else {
                 let q = (after - TELEPORT.as_secs_f32()) / BURST.as_secs_f32();
                 add_burst(scene, target, q, sf);
@@ -1472,6 +1745,34 @@ impl CursorOverlay {
             });
         }
         scene.bubble_text = Some((bx, by, alpha));
+        if now <= until {
+            self.add_close(scene, bx + w, by, sf, alpha);
+        }
+    }
+
+    /// The close button in the bubble's top right corner (`right`, `top`).
+    fn add_close(&self, scene: &mut Scene, right: f32, top: f32, sf: f32, alpha: f32) {
+        let (cx, cy) = (right - 15.0 * sf, top + 15.0 * sf);
+        let half = 11.0 * sf;
+        if self.close_hover {
+            scene.shapes.push(Shape {
+                rect: [cx - half, cy - half, 2.0 * half, 2.0 * half],
+                color: [0.565, 0.659, 0.765, 0.28 * alpha],
+                params: [PANEL, half, FLAT, 0.0],
+                extra: [0.0; 4],
+            });
+        }
+        let color = if self.close_hover { INK } else { INK_2 };
+        let icon = 5.0 * sf;
+        scene.shapes.push(Shape {
+            rect: [cx - icon, cy - icon, 2.0 * icon, 2.0 * icon],
+            color: [color[0], color[1], color[2], 0.9 * alpha],
+            params: [ICON, CROSS, 0.0, 0.0],
+            extra: [0.0; 4],
+        });
+        if alpha > 0.5 {
+            scene.close = Some([cx - half, cy - half, 2.0 * half, 2.0 * half]);
+        }
     }
 
     /// The pill text: elapsed time while recording, else what Sonori waits for.
@@ -1580,6 +1881,8 @@ struct Scene {
     timer: Option<(String, f32, f32, f32, f32)>,
     /// Bubble origin and text opacity.
     bubble_text: Option<(f32, f32, f32)>,
+    /// The close button's hit area, in physical px.
+    close: Option<[f32; 4]>,
     /// Menu text, drawn in one batch.
     labels: Vec<Label>,
 }
@@ -1648,13 +1951,16 @@ impl Renderer {
         format: wgpu::TextureFormat,
         size: PhysicalSize<u32>,
     ) -> Self {
-        let text = TextRenderer::with_color_mode(
+        let mut text = TextRenderer::with_color_mode(
             Arc::new(device.clone()),
             Arc::new(queue.clone()),
             size,
             format,
             glyphon::ColorMode::Web,
         );
+        // The close button sits at the bubble's edge, so the bubble's size must not
+        // depend on the system font.
+        text.use_bundled_font();
         Self {
             shapes: ShapeRenderer::new(device, format),
             text,

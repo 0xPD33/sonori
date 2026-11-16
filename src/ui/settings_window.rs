@@ -4,6 +4,8 @@
 mod model;
 mod view;
 
+pub(crate) use model::fit_language;
+
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Instant;

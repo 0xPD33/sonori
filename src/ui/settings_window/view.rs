@@ -889,7 +889,7 @@ impl View {
                 if c.portal_config.output_mode == OutputMode::Paste {
                     v.push(row(
                         "Paste shortcut",
-                        "Terminals need Ctrl+Shift+V; most other apps use Ctrl+V.",
+                        "Terminals need Ctrl+Shift+V; most other apps use Ctrl+V. By app picks one for the focused app on niri, Sway and Hyprland.",
                         Control::Select(Choice::PasteShortcut),
                     ));
                 }
@@ -1084,7 +1084,10 @@ impl View {
                 v.push(Item::Group("Files"));
                 v.push(row(
                     "Keep a history",
-                    format!("Saves every dictation to {}.", cx.history_path),
+                    format!(
+                        "Saves every dictation to {} and lists the last five under Recent in the quick menu. Off: Sonori saves no transcripts, and Recent is hidden.",
+                        cx.history_path
+                    ),
                     Control::Switch(Flag::History),
                 ));
                 v.push(row(
@@ -1379,10 +1382,14 @@ impl View {
         let h =
             2.0 * pad + px(18.0 + 8.0 + TITLE * LABEL_LINE + 3.0) + lines * px(12.0 * LABEL_LINE);
         let current = preset_of(cx.config);
-        // How many quality bars each preset lights.
-        let lit = [5, 4, 2];
         for (i, preset) in PRESETS.iter().enumerate() {
-            let rect = [x + i as f32 * (card_w + px(GAP)), y, card_w, h];
+            let (col, line) = ((i % 3) as f32, (i / 3) as f32);
+            let rect = [
+                x + col * (card_w + px(GAP)),
+                y + line * (h + px(GAP)),
+                card_w,
+                h,
+            ];
             if current == Some(i) {
                 ui.panel(rect, 13.0, RAISED, 1.0);
                 ring(ui, rect, 13.0, 2.0, [SLATE[0], SLATE[1], SLATE[2], 1.0]);
@@ -1396,7 +1403,7 @@ impl View {
             for j in 0..5 {
                 let bh = px(6.0 + 3.0 * j as f32);
                 let bx = rect[0] + pad + px(2.0 + 7.0 * j as f32);
-                if j < lit[i] {
+                if j < preset.bars {
                     silver_bar(ui, bx, base - bh / 2.0, px(4.0), bh, px(0.6), 1.0);
                 } else {
                     fill(
@@ -1416,7 +1423,8 @@ impl View {
             }
             self.target(rect, Hit::Preset(i));
         }
-        h
+        let rows = PRESETS.len().div_ceil(3) as f32;
+        rows * h + (rows - 1.0) * px(GAP)
     }
 
     #[allow(clippy::too_many_arguments)]

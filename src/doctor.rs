@@ -376,7 +376,8 @@ fn gpu(report: &mut Report) {
         backends: wgpu::Backends::all(),
         ..Default::default()
     });
-    for adapter in instance.enumerate_adapters(wgpu::Backends::all()) {
+    // The GL backend probes X11 and prints "Authorization required" on Wayland.
+    for adapter in quiet_stderr(|| instance.enumerate_adapters(wgpu::Backends::all())) {
         let info = adapter.get_info();
         report.item(
             Level::Info,
@@ -389,7 +390,7 @@ fn gpu(report: &mut Report) {
     }
     drop(instance);
 
-    match crate::ui::gpu_utils::Gpu::new() {
+    match quiet_stderr(crate::ui::gpu_utils::Gpu::new) {
         Ok(gpu) => {
             let info = gpu.adapter.get_info();
             match draw_test(&gpu.device, &gpu.queue) {

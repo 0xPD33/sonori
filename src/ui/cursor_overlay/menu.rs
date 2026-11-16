@@ -12,7 +12,7 @@ use super::MenuChange;
 use crate::config::{DisplayMode, OutputMode};
 use crate::ui::shapes::{
     glass, Shape, Spring, Ui, BARS, CHEVRON, FLAT, GEAR, GLOBE, HAIRLINE, INK, INK_2, PAGE, PANEL,
-    POINTER, RAISED, SILVER_BAR, SLATE, SLATE_FILL, SPARKLES, SUNK, TICK,
+    POINTER, RAISED, SILVER_BAR, SLATE, SLATE_FILL, SPARKLES, SUNK, TICK, WORDS,
 };
 use crate::ui::text_renderer::{Label, TextRenderer, LABEL_LINE};
 
@@ -22,28 +22,48 @@ pub(crate) struct Preset {
     pub detail: &'static str,
     pub backend: BackendType,
     pub model: &'static str,
+    /// Accuracy in English, as 1 to 5 bars.
+    pub bars: usize,
 }
 
-/// Parakeet leads the Open ASR leaderboard among the models speechcore runs:
-/// mean English WER 6.05 (v2) and 6.32 (v3), against 7.83 for Whisper large-v3 turbo.
-pub(crate) const PRESETS: [Preset; 3] = [
+/// Mean English WER on the Open ASR leaderboard: Parakeet 6.05 (v2) and 6.32
+/// (v3), Whisper large-v3 turbo 7.83. Nemotron 3.5 reports 7.91 on FLEURS English
+/// and names 15 languages as ready for transcription.
+pub(crate) const PRESETS: [Preset; 5] = [
     Preset {
         name: "Parakeet v2",
         detail: "Most accurate · English only",
         backend: BackendType::Parakeet,
         model: "parakeet-tdt-0.6b-v2",
+        bars: 5,
     },
     Preset {
         name: "Parakeet v3",
         detail: "25 languages, German included",
         backend: BackendType::Parakeet,
         model: "parakeet-tdt-0.6b-v3",
+        bars: 4,
+    },
+    Preset {
+        name: "Nemotron 3.5",
+        detail: "15 languages, Japanese included",
+        backend: BackendType::Nemotron,
+        model: "nemotron-3.5-asr-streaming-0.6b",
+        bars: 3,
+    },
+    Preset {
+        name: "Whisper turbo",
+        detail: "99 languages · slower than Parakeet",
+        backend: BackendType::WhisperCpp,
+        model: "large-v3-turbo",
+        bars: 3,
     },
     Preset {
         name: "Moonshine base",
         detail: "Smallest and fastest · English only",
         backend: BackendType::Moonshine,
         model: "base",
+        bars: 2,
     },
 ];
 
@@ -89,6 +109,8 @@ pub(super) struct MenuState {
     pub display: DisplayMode,
     /// Index into `PRESETS`, if the configured model is one of them.
     pub preset: Option<usize>,
+    /// Latest transcripts, newest first; `None` hides the row (history is off).
+    pub recent: Option<Vec<String>>,
 }
 
 pub(super) enum MenuAction {
@@ -96,13 +118,32 @@ pub(super) enum MenuAction {
     Change(MenuChange),
     ToggleMagic,
     OpenSettings,
+    /// Deliver this transcript again, as a new dictation would.
+    Paste(String),
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum List {
     Language,
     Model,
+    Recent,
 }
+
+const LISTS: [List; 3] = [List::Language, List::Model, List::Recent];
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Row {
+    Language,
+    Magic,
+    Output,
+    Model,
+    Display,
+    Recent,
+    Settings,
+}
+
+/// Characters of a transcript that fit on one option line.
+const RECENT_CHARS: usize = 36;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Hit {
@@ -133,7 +174,7 @@ pub(super) struct QuickMenu {
     /// Whether the menu opens to the left of and above the pointer; fixed on open.
     flip: Option<(bool, bool)>,
     open: Option<List>,
-    expand: [Spring; 2],
+    expand: [Spring; 3],
     hover: Option<Hit>,
     highlight: [Spring; 4],
     highlight_alpha: Spring,
@@ -156,7 +197,7 @@ impl QuickMenu {
             at: None,
             flip: None,
             open: None,
-            expand: [Spring::default(); 2],
+            expand: [Spring::default(); 3],
             hover: None,
             highlight: [Spring::default(); 4],
             highlight_alpha: Spring::default(),
@@ -224,6 +265,11 @@ impl QuickMenu {
             Hit::Choose(List::Language, i) => Some(MenuAction::Change(MenuChange::Language(
                 LANGUAGES[i].0.to_string(),
             ))),
+            Hit::Choose(List::Recent, i) => state
+                .recent
+                .as_ref()
+                .and_then(|recent| recent.get(i))
+                .map(|text| MenuAction::Paste(text.clone())),
             Hit::Choose(List::Model, i) if state.preset == Some(i) => {
                 self.pending = None;
                 None
@@ -293,14 +339,27 @@ impl QuickMenu {
             }
         };
         let px = |v: f32| v * sf;
-        let lists = [
-            Self::list_height(List::Language),
-            Self::list_height(List::Model),
+        let mut rows = vec![
+            Row::Language,
+            Row::Magic,
+            Row::Output,
+            Row::Model,
+            Row::Display,
         ];
-        let base = 2.0 * PAD + 6.0 * ROW + SEPARATOR + HINT;
-        let height = base + lists[0] * self.expand[0].x + lists[1] * self.expand[1].x;
+        if state.recent.is_some() {
+            rows.push(Row::Recent);
+        }
+        rows.push(Row::Settings);
+        let lists = LISTS.map(|list| Self::list_height(list, state));
+        let base = 2.0 * PAD + rows.len() as f32 * ROW + SEPARATOR + HINT;
+        let height = base
+            + lists
+                .iter()
+                .zip(&self.expand)
+                .map(|(h, e)| h * e.x)
+                .sum::<f32>();
         let (left, above) = *self.flip.get_or_insert_with(|| {
-            let tallest = base + lists[0].max(lists[1]);
+            let tallest = base + lists.iter().copied().fold(0.0, f32::max);
             (
                 pointer.0 + px(OFFSET + WIDTH) > size.0 - px(8.0),
                 pointer.1 + px(OFFSET + tallest) > size.1 - px(8.0),
@@ -354,26 +413,26 @@ impl QuickMenu {
         let label_x = x0 + px(PAD + 46.0);
         let mut y = y0 + px(PAD);
 
-        for row in 0..6 {
+        for row in rows {
             let rect = [row_x, y, row_w, px(ROW)];
             let cy = y + px(ROW) / 2.0;
-            let icon = [GLOBE, SPARKLES, PAGE, BARS, POINTER, GEAR][row];
+            let (icon, title) = match row {
+                Row::Language => (GLOBE, "Language"),
+                Row::Magic => (SPARKLES, "Magic Mode"),
+                Row::Output => (PAGE, "Output"),
+                Row::Model => (BARS, "Model"),
+                Row::Display => (POINTER, "Display"),
+                Row::Recent => (WORDS, "Recent"),
+                Row::Settings => (GEAR, "More settings…"),
+            };
             ui.icon(icon, x0 + px(PAD + 23.0), cy, 18.0, 0.0, SLATE, 1.0);
-            let title = [
-                "Language",
-                "Magic Mode",
-                "Output",
-                "Model",
-                "Display",
-                "More settings…",
-            ][row];
             ui.label(title, label_x, cy, 14.0, true, INK, 1.0);
             match row {
-                0 | 3 => {
-                    let (list, index) = if row == 0 {
-                        (List::Language, 0)
-                    } else {
-                        (List::Model, 1)
+                Row::Language | Row::Model | Row::Recent => {
+                    let list = match row {
+                        Row::Language => List::Language,
+                        Row::Model => List::Model,
+                        _ => List::Recent,
                     };
                     let value = match list {
                         List::Language => LANGUAGES
@@ -383,8 +442,12 @@ impl QuickMenu {
                         List::Model => state
                             .preset
                             .map_or("Custom".to_string(), |i| PRESETS[i].name.to_string()),
+                        List::Recent => match state.recent.as_ref().map_or(0, Vec::len) {
+                            0 => "None yet".to_string(),
+                            n => n.to_string(),
+                        },
                     };
-                    let e = self.expand[index].x;
+                    let e = self.expand[list as usize].x;
                     ui.icon(
                         CHEVRON,
                         right - px(5.0),
@@ -407,7 +470,7 @@ impl QuickMenu {
                     }
                     continue;
                 }
-                1 => {
+                Row::Magic => {
                     let k = self.knob.x;
                     let (tx, ty) = (right - px(42.0), cy - px(12.0));
                     ui.panel([tx, ty, px(42.0), px(24.0)], 12.0, SUNK, 1.0);
@@ -431,23 +494,24 @@ impl QuickMenu {
                         highlight: Some(rect),
                     });
                 }
-                2 | 4 => {
+                Row::Output | Row::Display => {
+                    let output = row == Row::Output;
                     targets.push(Target {
                         rect,
                         hit: Hit::Row,
                         highlight: Some(rect),
                     });
-                    let names: Vec<&str> = if row == 2 {
+                    let names: Vec<&str> = if output {
                         OUTPUTS.iter().map(|(_, n)| *n).collect()
                     } else {
                         DISPLAYS.iter().map(|(_, n)| *n).collect()
                     };
-                    let selected = if row == 2 {
+                    let selected = if output {
                         OUTPUTS.iter().position(|(m, _)| *m == state.output)
                     } else {
                         DISPLAYS.iter().position(|(m, _)| *m == state.display)
                     };
-                    let pill = if row == 2 {
+                    let pill = if output {
                         self.output_pill
                     } else {
                         self.display_pill
@@ -456,7 +520,7 @@ impl QuickMenu {
                     for (i, rect_i) in buttons.iter().enumerate() {
                         targets.push(Target {
                             rect: *rect_i,
-                            hit: if row == 2 {
+                            hit: if output {
                                 Hit::Output(i)
                             } else {
                                 Hit::Display(i)
@@ -467,7 +531,7 @@ impl QuickMenu {
                     // The pill springs towards the selected button.
                     if let Some(i) = selected {
                         let goal = [buttons[i][0], buttons[i][2]];
-                        let pill = if row == 2 {
+                        let pill = if output {
                             &mut self.output_pill
                         } else {
                             &mut self.display_pill
@@ -480,7 +544,7 @@ impl QuickMenu {
                         }
                     }
                 }
-                _ => {
+                Row::Settings => {
                     ui.icon(CHEVRON, right - px(5.0), cy, 10.0, 0.0, INK_2, 1.0);
                     targets.push(Target {
                         rect,
@@ -490,7 +554,7 @@ impl QuickMenu {
                 }
             }
             y += px(ROW);
-            if row == 4 {
+            if row == Row::Display {
                 ui.panel(
                     [
                         x0 + px(PAD + 10.0),
@@ -549,7 +613,7 @@ impl QuickMenu {
     }
 
     fn animate(&mut self, state: &MenuState, dt: f32) {
-        for (i, list) in [List::Language, List::Model].into_iter().enumerate() {
+        for (i, list) in LISTS.into_iter().enumerate() {
             let goal = if self.open == Some(list) { 1.0 } else { 0.0 };
             self.expand[i].step(goal, 380.0, 40.0, dt);
             self.expand[i].x = self.expand[i].x.clamp(0.0, 1.0);
@@ -561,11 +625,18 @@ impl QuickMenu {
         self.knob.step(goal, 500.0, 34.0, dt);
     }
 
-    fn list_height(list: List) -> f32 {
-        let (count, height) = match list {
+    /// Number of options and the height of one, in logical px.
+    fn list_shape(list: List, state: &MenuState) -> (usize, f32) {
+        match list {
             List::Language => (LANGUAGES.len() + 1, OPTION),
             List::Model => (PRESETS.len(), OPTION_TALL),
-        };
+            // An empty list keeps one line that says so.
+            List::Recent => (state.recent.as_ref().map_or(0, Vec::len).max(1), OPTION),
+        }
+    }
+
+    fn list_height(list: List, state: &MenuState) -> f32 {
+        let (count, height) = Self::list_shape(list, state);
         2.0 + count as f32 * (height + OPTION_GAP) - OPTION_GAP + 8.0
     }
 
@@ -587,14 +658,7 @@ impl QuickMenu {
         let fade = ((e - 0.3) / 0.7).clamp(0.0, 1.0);
         let x = x0 + px(PAD + OPTION_INDENT);
         let w = px(WIDTH - 2.0 * PAD - OPTION_INDENT - 6.0);
-        let height = match list {
-            List::Language => OPTION,
-            List::Model => OPTION_TALL,
-        };
-        let count = match list {
-            List::Language => LANGUAGES.len() + 1,
-            List::Model => PRESETS.len(),
-        };
+        let (count, height) = Self::list_shape(list, state);
         let mut y = top + px(2.0) * e;
         for i in 0..count {
             let rect = [x, y, w, px(height)];
@@ -604,12 +668,34 @@ impl QuickMenu {
                     .get(i)
                     .is_some_and(|(code, _)| *code == state.language),
                 List::Model => state.preset == Some(i),
+                List::Recent => false,
             };
+            let recent = state.recent.as_ref().and_then(|recent| recent.get(i));
             if selected {
                 ui.panel(rect, 10.0, RAISED, fade);
                 ui.icon(TICK, x + w - px(17.0), cy, 14.0, 0.0, SLATE, fade);
             }
             match (list, LANGUAGES.get(i), PRESETS.get(i)) {
+                (List::Recent, _, _) => match recent {
+                    Some(text) => ui.label(
+                        &one_line(text, RECENT_CHARS),
+                        x + px(10.0),
+                        cy,
+                        13.0,
+                        false,
+                        INK,
+                        fade,
+                    ),
+                    None => ui.label(
+                        "Your dictations show here",
+                        x + px(10.0),
+                        cy,
+                        13.0,
+                        false,
+                        INK_2,
+                        fade,
+                    ),
+                },
                 (List::Language, Some((_, name)), _) => {
                     ui.label(name, x + px(10.0), cy, 13.0, false, INK, fade)
                 }
@@ -643,7 +729,8 @@ impl QuickMenu {
                     );
                 }
             }
-            if e > 0.9 {
+            let empty = list == List::Recent && recent.is_none();
+            if e > 0.9 && !empty {
                 let hit = match (list, i < LANGUAGES.len()) {
                     (List::Language, false) => Hit::Settings,
                     _ => Hit::Choose(list, i),
@@ -656,6 +743,16 @@ impl QuickMenu {
             }
             y += px(height + OPTION_GAP) * e;
         }
-        top + px(Self::list_height(list)) * e
+        top + px(Self::list_height(list, state)) * e
     }
+}
+
+/// `text` on one line: newlines become spaces, and a long text ends in "…".
+fn one_line(text: &str, max: usize) -> String {
+    let flat: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= max {
+        return flat;
+    }
+    let cut: String = flat.chars().take(max - 1).collect();
+    format!("{}…", cut.trim_end())
 }

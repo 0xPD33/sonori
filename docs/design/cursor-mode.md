@@ -1,12 +1,17 @@
 # Cursor mode
 
-Cursor mode is an experimental display mode. It replaces the fixed overlay with
-an animated copy of the Sonori icon beside the mouse pointer and a short-lived speech bubble. It is
-selected with `[ui_config] display_mode = "Cursor"`; the default stays
-`"Overlay"`.
+Cursor mode is the default display mode. It replaces the fixed overlay with
+an animated copy of the Sonori icon beside the mouse pointer and a short-lived
+speech bubble. `[ui_config] display_mode = "Overlay"` selects the fixed overlay.
+Realtime mode and sessions outside Wayland always use the fixed overlay.
 
 ## Behavior
 
+- Start: the tile and a bubble show at the bottom center of the focused output
+  for 3.5 s: "Sonori is ready", and below it the bound hotkey ("Press
+  LOGO+backslash to dictate") or "Run sonori toggle to dictate". The notice
+  waits up to 2 s for the portal to bind the hotkey. A session that starts
+  first replaces it.
 - Idle: Sonori shows nothing.
 - Recording: a translucent frosted glass tile (100 × 64 logical px) with nine
   polished silver capsule bars, in the style of the Sonori icon, floats
@@ -33,6 +38,13 @@ selected with `[ui_config] display_mode = "Cursor"`; the default stays
   burst marks the spot. `cursor_bubble` sets how long the bubble stays:
   `Brief` (1.2 s plus 30 ms per word, at most 4 s), `Long` (6 s plus 60 ms per
   word, at most 15 s), or `Off` (only the burst).
+- Every bubble has a close button in its top right corner. A click removes
+  the bubble at once.
+- A failed paste keeps its bubble until the close button or the next session
+  removes it, because the text is then only in the clipboard. This applies
+  also with `cursor_bubble = "Off"`. A paste that no app takes counts as
+  failed: the bubble says "Not pasted — it is in the clipboard". This happens
+  when no text field has focus, or when the app ignores the paste shortcut.
 - Error: the tile shakes, gets a red outline, and the bubble shows the message
   for 4 s.
 - Model loading: the bars pulse at rest height, and the pill says
@@ -54,16 +66,29 @@ functions) and one batch of glyphon labels. Its rows:
   Español, and a link to Settings for more).
 - Magic Mode: a switch with a silver knob.
 - Output: Paste, Type, or Copy.
-- Model: opens a list of three models. A model switch needs a second click,
+- Model: opens a list of five models. A model switch needs a second click,
   because it may download the model; the app then reloads the backend.
 - Display: Cursor or Overlay.
+- Recent: opens a list of the last five transcripts, newest first, one line
+  each. A click delivers the transcript again with the current output mode.
+  The list lives in memory only. With the history off
+  (`history_config.enabled = false`), Sonori keeps no list and hides the row.
 - More settings: opens the Settings window.
 
-The models are the ones speechcore runs that lead the Open ASR leaderboard
-(paper data of 2026-03-27): Parakeet TDT v2 (mean English WER 6.05, English
-only), Parakeet TDT v3 (6.32, 25 languages), and Moonshine base (smallest).
-Whisper large-v3 turbo scores 7.83 and runs about 17 times slower than
-Parakeet, so the menu does not offer it.
+The list gives one good model for each need:
+
+- Parakeet TDT v2: mean English WER 6.05 on the Open ASR leaderboard (paper
+  data of 2026-03-27). English only.
+- Parakeet TDT v3: WER 6.32, 25 European languages.
+- Nemotron 3.5: 7.91 on FLEURS English. NVIDIA names 15 languages as ready
+  for transcription, Japanese, Korean, Hindi and Arabic included.
+- Whisper large-v3 turbo: WER 7.83, 99 languages. It runs about 17 times
+  slower than Parakeet.
+- Moonshine base: the smallest and fastest. English only.
+
+A model switch keeps the language when the new model knows it. Otherwise
+Sonori picks the same language in the form that the model uses ("de" or
+"de-DE"), else auto detect.
 
 A change saves to `config.toml` through the app, so the Settings window sees
 it. A highlight glides to the hovered row, and lists, the knob, and the
@@ -93,7 +118,11 @@ permanent full-screen layer can block direct scanout for full-screen games and
 video.
 
 Sonori opens one such surface per output, so the tile can follow the pointer to
-any monitor. All surfaces share one 8-bit non-sRGB format: one renderer draws on
+any monitor. The first surface names no output, so the compositor puts it on
+the focused output (niri, Sway, Hyprland, and KWin do so). When the compositor
+reports which output the surface entered, Sonori opens the surfaces on the
+other outputs. If no report comes within 1 s, Sonori stays on that one output:
+a second surface on the same output would block clicks there. All surfaces share one 8-bit non-sRGB format: one renderer draws on
 all of them, and blending then matches the compositor's.
 
 While recording, each surface takes pointer input everywhere except a square gap
@@ -103,11 +132,13 @@ the pointer leaves the gap, it enters Sonori's region; the compositor reports
 the exact position, and Sonori moves the gap under the pointer with the next
 commit. niri sends `wl_pointer.enter` with the exact position when a surface
 maps under a still pointer (tested on niri 2026-11-12). A fast move can briefly
-toggle hover in the app below. After the session stops, the input region becomes
-empty.
+toggle hover in the app below. After the session stops, the input region shrinks to the bubble's close
+button, or to nothing without a bubble, so the rest of the screen stays free.
 
 If no output reports the pointer within 400 ms, the tile shows at the bottom
-center of the first output.
+center of the focused output, and the menu opens in its center. Sway, for
+example, sends no `wl_pointer.enter` to a surface that maps under a still
+pointer.
 
 ## Data flow
 
@@ -123,12 +154,54 @@ The UI polls shared state, as the fixed overlay does:
   transcript arrives, before Magic Mode and the paste.
 - `BackendStatus::last_error` supplies the error text.
 
-speechcore reports `Completed` only after the transcript of the stopped session
-is out. If transcription never starts within 700 ms after recording stops, the
-session counts as cancelled and the tile fades without a bubble. After
-transcription, "Transcribing…" stays until every received transcript is
-delivered: up to 15 s, or 60 s with Magic Mode. If no transcript arrives
-within 1.5 s, the session produced no text, and the tile fades.
+## Paste check and clipboard restore
+
+An app reads the clipboard only when it takes a paste. In Paste mode, Sonori
+therefore serves the clipboard itself through `zwlr_data_control_v1` while it
+sends the paste keys, and counts the reads. If no app reads the text within
+1 s after the keys, the paste counts as failed, and the transcript stays in
+the clipboard while Sonori runs.
+
+Before the paste, Sonori saves the clipboard content in every type it offers:
+text, rich text, images, files. After an app reads the transcript, Sonori
+waits 200 ms for reads in other types, then offers the saved content again.
+The user's clipboard is then as before the dictation. Sonori serves the
+restored content until another client takes the selection, so it is lost when
+Sonori exits first. Sonori does not restore when the content is larger than
+20 MB or takes longer than 500 ms to read; the transcript then stays in the
+clipboard.
+
+The transcript offer includes `x-kde-passwordManagerHint` ("secret"). Klipper
+and cliphist (through `wl-paste --watch`) then keep no history entry for it.
+Reads of the hint do not count as pastes.
+
+Sonori cannot tell in two cases, and then reports a paste:
+
+- The compositor has no data-control protocol (GNOME). Sonori copies with
+  wl-copy, as before, and does not restore.
+- Another client takes the selection before the paste, for example a
+  clipboard manager that keeps the clipboard alive. Sonori then does not
+  restore either.
+
+A clipboard manager that reads every new selection late, after the paste
+keys, can hide a failed paste. A good paste looks failed only when the app
+takes more than 1 s to read the clipboard.
+
+## Paste shortcut
+
+A terminal sends Ctrl+V to the program and pastes on Ctrl+Shift+V. In other
+apps, Ctrl+Shift+V often does something else or nothing. With
+`paste_shortcut = "auto"`, the default, Sonori asks the compositor for the
+app ID of the focused window just before the paste keys. It uses
+`niri msg`, `swaymsg` or `hyprctl`, with a 500 ms limit.
+
+- A known terminal, or an app ID that contains "term", gets Ctrl+Shift+V.
+- Any other app gets Ctrl+V.
+- Without an answer (GNOME, KDE, no focused window), Sonori uses
+  Ctrl+Shift+V.
+
+The setting values `ctrl_shift_v` and `ctrl_v` force one shortcut for all
+apps.
 
 ## Rendering
 
@@ -137,7 +210,10 @@ glass tiles, silver capsule bars, and outlines. The pipeline is in
 `src/ui/shapes.rs`, and the Settings window draws with it too. Bars, tile, and bubble move on
 damped springs that step with the frame time. Each shape covers only its own
 quad, so a frame shades a few hundred pixels around the pointer, not the whole
-output. Glyphon renders the timer and bubble text. The surface redraws every
+output. Glyphon renders the timer and bubble text. All cursor-mode text uses the
+bundled Inter (Medium and SemiBold), or the system's Inter if installed. So the
+bubble has the same size on every system, and its close button stays where
+the bubble text leaves room for it. The surface redraws every
 frame while it exists and uses premultiplied alpha.
 
 The GPU device is shared with the Settings window, so Settings opens in cursor

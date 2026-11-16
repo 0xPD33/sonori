@@ -52,7 +52,8 @@ The window has one theme only.
 | Advanced | Clean-up rules, Magic Mode model, Keep a history, Config file, Tray icon, Commands | `post_process_config.*`, `enhancement_config.enabled`, `history_config.enabled`, `window_behavior_config.show_in_system_tray` |
 
 The model cards are the quick menu presets (`PRESETS` in
-`src/ui/cursor_overlay/menu.rs`): Parakeet v2, Parakeet v3, and Moonshine base.
+`src/ui/cursor_overlay/menu.rs`): Parakeet v2, Parakeet v3, Nemotron 3.5,
+Whisper turbo, and Moonshine base, in rows of three.
 When the configured model is not a preset, a line under the cards names it.
 
 The Select for Model lists every model of the backend. CTranslate2, Moonshine,

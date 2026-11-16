@@ -25,6 +25,8 @@ use speechcore::{BackendStatus, BackendStatusState, ManualSessionCommand, Transc
 pub enum AppCommand {
     CopyLast,
     PasteLast,
+    /// Deliver this text with the configured output mode, as a dictation would.
+    Deliver(String),
     ToggleMagicMode,
     SetLanguage(String),
 }

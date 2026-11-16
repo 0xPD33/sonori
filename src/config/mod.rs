@@ -82,7 +82,8 @@ pub struct PortalConfig {
     pub manual_toggle_accelerator: String,
     /// Shortcut activation mode: Toggle (press to start/stop) or PushToTalk (hold to record)
     pub shortcut_mode: ShortcutMode,
-    /// Paste shortcut to use: "ctrl_shift_v" (default, works in terminals) or "ctrl_v"
+    /// Paste shortcut: "auto" (default; Ctrl+Shift+V for terminals, Ctrl+V for other
+    /// apps), "ctrl_shift_v" or "ctrl_v"
     pub paste_shortcut: String,
     /// What happens with a finished transcript
     pub output_mode: OutputMode,
@@ -149,7 +150,7 @@ impl Default for PortalConfig {
             enable_global_shortcuts: true,
             manual_toggle_accelerator: "<Super>backslash".to_string(),
             shortcut_mode: ShortcutMode::default(),
-            paste_shortcut: "ctrl_shift_v".to_string(), // Default: Ctrl+Shift+V (works in terminals)
+            paste_shortcut: "auto".to_string(),
             output_mode: OutputMode::default(),
         }
     }
@@ -366,9 +367,6 @@ pub struct AppConfig {
     /// Parakeet TDT-specific options
     pub parakeet_options: ParakeetOptions,
 
-    /// Nemotron 3.5 ASR-specific options
-    pub nemotron_options: NemotronOptions,
-
     /// XDG Desktop Portal configuration
     pub portal_config: PortalConfig,
 
@@ -424,7 +422,6 @@ impl Default for AppConfig {
             whisper_cpp_options: WhisperCppOptions::default(),
             moonshine_options: MoonshineOptions::default(),
             parakeet_options: ParakeetOptions::default(),
-            nemotron_options: NemotronOptions::default(),
             portal_config: PortalConfig::default(),
             display_config: DisplayConfig::default(),
             window_behavior_config: WindowBehaviorConfig::default(),
@@ -488,8 +485,9 @@ impl From<AppConfig> for speechcore::SpeechConfig {
                 enable_cache: config.moonshine_options.enable_cache,
             },
             parakeet_options: speechcore::config::ParakeetOptions::default(),
+            // Empty, so the one language setting reaches Nemotron too.
             nemotron_options: speechcore::config::NemotronOptions {
-                language: config.nemotron_options.language,
+                language: String::new(),
             },
             debug_config: speechcore::config::DebugConfig {
                 log_stats_enabled: config.debug_config.log_stats_enabled,

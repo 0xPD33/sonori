@@ -30,10 +30,16 @@ pub struct TextRenderer {
     /// Shaped buffers for `render_labels`, by slot.
     label_buffers: Vec<(LabelKey, Buffer)>,
     label_widths: Vec<(LabelKey, f32)>,
+    /// Body text uses the bundled Inter instead of the system sans.
+    bundled_font: bool,
 }
 
 /// Line height of a label, as a multiple of its font size.
 pub const LABEL_LINE: f32 = 1.25;
+
+/// Inter 4.1, SIL Open Font License 1.1 (assets/fonts/OFL.txt).
+const LABEL_FONT_MEDIUM: &[u8] = include_bytes!("../../assets/fonts/Inter-Medium.ttf");
+const LABEL_FONT_SEMIBOLD: &[u8] = include_bytes!("../../assets/fonts/Inter-SemiBold.ttf");
 
 /// One line of text at a position, for `render_labels`. `px` is the font size
 /// in physical pixels; `y` is the top of the line box.
@@ -84,6 +90,11 @@ impl TextRenderer {
         // Create font system and cache
         // Parses all system fonts; slow, and far slower in debug builds.
         let mut font_system = FontSystem::new();
+        // Labels use the bundled Inter, so they look the same on every system.
+        // A system sans without a Medium face made cosmic-text fall back to a serif.
+        for face in [LABEL_FONT_MEDIUM, LABEL_FONT_SEMIBOLD] {
+            font_system.db_mut().load_font_data(face.to_vec());
+        }
         let cache = SwashCache::new();
 
         // Create a cache for the TextAtlas
@@ -126,6 +137,7 @@ impl TextRenderer {
             cached_measure: None,
             label_buffers: Vec::new(),
             label_widths: Vec::new(),
+            bundled_font: false,
         }
     }
 
@@ -166,12 +178,13 @@ impl TextRenderer {
         self.buffer.lines.clear();
         let font_size = 10.0 * scale;
         let metrics = Metrics::new(font_size, font_size * 1.1);
+        let family = self.body_family();
         self.buffer.set_metrics(&mut self.font_system, metrics);
         self.buffer.set_size(&mut self.font_system, None, None);
         self.buffer.set_text(
             &mut self.font_system,
             text,
-            &Attrs::new().family(Family::SansSerif),
+            &Attrs::new().family(family),
             Shaping::Advanced,
         );
         self.buffer.shape_until_scroll(&mut self.font_system, true);
@@ -226,6 +239,7 @@ impl TextRenderer {
         });
 
         if needs_layout {
+            let family = self.body_family();
             self.buffer.lines.clear();
             self.buffer.set_metrics(&mut self.font_system, metrics);
             self.buffer
@@ -233,7 +247,7 @@ impl TextRenderer {
             self.buffer.set_text(
                 &mut self.font_system,
                 text,
-                &Attrs::new().family(Family::SansSerif).color(text_color),
+                &Attrs::new().family(family).color(text_color),
                 Shaping::Advanced,
             );
             self.buffer.shape_until_scroll(&mut self.font_system, true);
@@ -301,7 +315,7 @@ impl TextRenderer {
                 (c[3] * 255.0) as u8,
             )
         };
-        let base = Attrs::new().family(Family::SansSerif);
+        let base = Attrs::new().family(self.body_family());
         self.buffer.set_rich_text(
             &mut self.font_system,
             spans
@@ -386,6 +400,21 @@ impl TextRenderer {
             let _ = self
                 .renderer
                 .render(&self.atlas, &self.viewport, &mut render_pass);
+        }
+    }
+
+    /// Draws all text in the bundled Inter, so its size is the same on every system.
+    pub fn use_bundled_font(&mut self) {
+        self.bundled_font = true;
+        self.cached_layout = None;
+        self.cached_measure = None;
+    }
+
+    fn body_family(&self) -> Family<'static> {
+        if self.bundled_font {
+            Family::Name("Inter")
+        } else {
+            Family::SansSerif
         }
     }
 
@@ -533,7 +562,7 @@ impl TextRenderer {
             buffer.set_text(
                 &mut self.font_system,
                 text,
-                &Attrs::new().family(Family::SansSerif).weight(weight),
+                &Attrs::new().family(Family::Name("Inter")).weight(weight),
                 Shaping::Advanced,
             );
             buffer.shape_until_scroll(&mut self.font_system, true);

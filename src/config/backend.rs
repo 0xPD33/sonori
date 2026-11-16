@@ -122,23 +122,6 @@ pub struct MoonshineOptions {
 #[serde(default)]
 pub struct ParakeetOptions {}
 
-/// Nemotron 3.5 ASR-specific options
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct NemotronOptions {
-    /// Target language locale for the lang-ID prompt (e.g. "en-US", "de-DE",
-    /// or "auto" for built-in language detection).
-    pub language: String,
-}
-
-impl Default for NemotronOptions {
-    fn default() -> Self {
-        Self {
-            language: "en-US".to_string(),
-        }
-    }
-}
-
 /// Configuration for Voice Activity Detection
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]

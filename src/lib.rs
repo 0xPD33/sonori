@@ -4,6 +4,7 @@ pub mod doctor;
 pub mod enhancement;
 pub mod hotkey;
 pub mod ipc;
+pub mod paste_check;
 pub mod portal_input;
 pub mod portal_tokens;
 pub mod sound_generator;

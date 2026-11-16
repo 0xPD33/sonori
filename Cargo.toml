@@ -4,11 +4,12 @@ version = "0.11.0"
 edition = "2021"
 
 [dependencies]
-speechcore = { git = "https://github.com/0xPD33/speechcore", tag = "v0.3.1", default-features = false, features = ["runtime"] }
+speechcore = { git = "https://github.com/0xPD33/speechcore", tag = "v0.3.2", default-features = false, features = ["runtime"] }
 cpal = "0.16"
 portaudio = "0.8.0"
 libc = "0.2"
 wayland-client = "0.31.11"
+wayland-protocols-wlr = { version = "0.3.9", features = ["client"] }
 serde_json = "1.0"
 reqwest = { version = "0.12.14", features = ["stream", "json"] }
 tokio = { version = "1.43.0", features = ["full"] }

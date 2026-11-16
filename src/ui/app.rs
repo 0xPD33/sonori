@@ -317,6 +317,7 @@ impl WindowApp {
                 manual_session_sender: self.manual_session_sender.clone(),
                 app_tx: self.app_tx.clone(),
                 menu: self.menu.clone(),
+                hotkey: self.hotkey_state.clone(),
             };
             let overlay = self
                 .shared_gpu()

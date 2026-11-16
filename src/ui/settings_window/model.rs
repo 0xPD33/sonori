@@ -130,7 +130,7 @@ impl Choice {
             Choice::ShortcutMode => vec!["Toggle", "Hold to talk"],
             Choice::Listening => vec!["On demand", "Live"],
             Choice::Output => vec!["Paste", "Type", "Copy"],
-            Choice::PasteShortcut => vec!["Ctrl+Shift+V", "Ctrl+V"],
+            Choice::PasteShortcut => vec!["By app", "Ctrl+Shift+V", "Ctrl+V"],
             Choice::Language => languages(config).iter().map(|(_, name)| *name).collect(),
             Choice::Bubble => vec!["Brief", "Long", "Off"],
             Choice::Theme => vec!["Focus", "Pulse", "Terminal"],
@@ -167,7 +167,11 @@ impl Choice {
                 OutputMode::Type => 1,
                 OutputMode::Clipboard => 2,
             }),
-            Choice::PasteShortcut => Some(usize::from(c.portal_config.paste_shortcut == "ctrl_v")),
+            Choice::PasteShortcut => Some(match c.portal_config.paste_shortcut.as_str() {
+                "ctrl_shift_v" => 1,
+                "ctrl_v" => 2,
+                _ => 0,
+            }),
             Choice::Language => languages(c)
                 .iter()
                 .position(|(code, _)| *code == c.general_config.language),
@@ -227,7 +231,8 @@ impl Choice {
                     [OutputMode::Paste, OutputMode::Type, OutputMode::Clipboard][index]
             }
             Choice::PasteShortcut => {
-                c.portal_config.paste_shortcut = ["ctrl_shift_v", "ctrl_v"][index].to_string()
+                c.portal_config.paste_shortcut =
+                    ["auto", "ctrl_shift_v", "ctrl_v"][index].to_string()
             }
             Choice::Language => {
                 if let Some((code, _)) = languages(c).get(index) {
@@ -464,6 +469,7 @@ impl Change {
             Change::Preset(i) => {
                 c.backend_config.backend = PRESETS[*i].backend;
                 c.general_config.model = PRESETS[*i].model.to_string();
+                fit_language(c);
             }
             Change::Display(mode) => c.ui_config.display_mode = *mode,
             Change::Vocabulary(words) => {
@@ -484,6 +490,22 @@ impl Change {
             Change::Vocabulary(_) | Change::Replacements(_) => Effect::Restart,
         }
     }
+}
+
+/// Changes a language that the configured model does not list into the same
+/// language in its form ("de" and "de-DE"), else into auto detect.
+pub fn fit_language(c: &mut AppConfig) {
+    let current = c.general_config.language.clone();
+    let codes: Vec<&str> = languages(c).iter().map(|(code, _)| *code).collect();
+    if codes.is_empty() || codes.contains(&current.as_str()) {
+        return;
+    }
+    let base = |code: &str| code.split('-').next().unwrap_or_default().to_string();
+    c.general_config.language = codes
+        .iter()
+        .find(|code| base(code) == base(&current))
+        .unwrap_or(&"auto")
+        .to_string();
 }
 
 /// Index into `PRESETS` of the configured model, if it is one of them.
