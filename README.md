@@ -269,7 +269,7 @@ Required for UI rendering and optional GPU-accelerated transcription.
 - Falls back to `dotool` if wtype also fails (works on all compositors via uinput — requires `input` group membership)
 - Copies text to clipboard via `wl-copy`, then simulates the configured paste shortcut
 - A portal paste that fails falls back to wtype/dotool; if every method fails, the status bar says "Copied, paste failed" and the text stays on the clipboard
-- `output_mode` (Settings → Behavior → Output) picks `Paste`, `Type` (wtype/dotool types the text; the clipboard stays untouched) or `Clipboard` (copy only)
+- `output_mode` (Settings → Behavior → Output) picks `Paste`, `Type` (inserts the text through the input method protocol on niri and Sway, else wtype/dotool types it; the clipboard stays untouched) or `Clipboard` (copy only)
 
 ### Model Issues
 

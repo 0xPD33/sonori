@@ -3,6 +3,7 @@ pub mod copy;
 pub mod doctor;
 pub mod enhancement;
 pub mod hotkey;
+pub mod input_method;
 pub mod ipc;
 pub mod paste_check;
 pub mod portal_input;

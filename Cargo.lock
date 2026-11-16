@@ -4339,6 +4339,7 @@ dependencies = [
  "toml 0.9.8",
  "tracing-subscriber",
  "wayland-client",
+ "wayland-protocols-misc",
  "wayland-protocols-wlr",
  "wgpu",
  "winit",

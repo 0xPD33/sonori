@@ -95,7 +95,8 @@ pub enum OutputMode {
     /// Copy to the clipboard, then send the paste shortcut.
     #[default]
     Paste,
-    /// Type the text with wtype or dotool. The clipboard stays untouched.
+    /// Insert the text through the input method protocol (niri, Sway), else type
+    /// it with wtype or dotool. The clipboard stays untouched.
     Type,
     /// Copy to the clipboard only.
     Clipboard,

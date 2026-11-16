@@ -42,8 +42,8 @@ let
   # then pastes into foot, which writes what it gets to /tmp/pasted.
   dictationChecks = sway: ''
     with subtest("dictation, paste check, and clipboard restore"):
-        machine.succeed(as_user("mkdir -p ~/.cache/speechcore/models && cp /etc/sonori-test/ggml-tiny.en-q5_1.bin ~/.cache/speechcore/models/"))
-        machine.succeed(as_user("pactl load-module module-null-sink sink_name=fakemic"))
+        machine.succeed(as_user("mkdir -p ~/.cache/speechcore/models && cp -f /etc/sonori-test/ggml-tiny.en-q5_1.bin ~/.cache/speechcore/models/"))
+        machine.succeed(as_user("pactl list short sinks | grep -q fakemic || pactl load-module module-null-sink sink_name=fakemic"))
         machine.succeed(as_user("pactl set-default-source fakemic.monitor"))
         sentences = "".join(
             f"<s>Sentence {n} is about the clipboard and the paste check.</s><break time='1500ms'/>"
@@ -318,6 +318,7 @@ in
             pkgs.foot
             pkgs.grim
             pkgs.tesseract
+            pkgs.imagemagick
             pkgs.zenity
             pkgs.wtype
             pkgs.espeak-ng
@@ -332,6 +333,136 @@ in
         layerShell = true;
         waitForDesktop = ''machine.wait_for_file("/run/user/${uid}/wayland-1")'';
         extraChecks = ''
+          with subtest("drag a bubble that did not paste"):
+              # The desktop is empty, so no app takes the paste and the bubble stays.
+              machine.succeed(as_user("mkdir -p ~/.cache/speechcore/models && cp -f /etc/sonori-test/ggml-tiny.en-q5_1.bin ~/.cache/speechcore/models/"))
+              machine.succeed(as_user("pactl load-module module-null-sink sink_name=fakemic"))
+              machine.succeed(as_user("pactl set-default-source fakemic.monitor"))
+              machine.succeed("espeak-ng -w /tmp/short.wav 'This text goes nowhere.'")
+              start_sonori("drag", "${dictationConfig}", "SWAYSOCK=$(ls /run/user/${uid}/sway-ipc.*.sock)")
+              machine.wait_until_succeeds("grep -q 'Backend loaded' /tmp/sonori-drag.log", timeout=120)
+              machine.succeed(as_user("sonori start"))
+              machine.sleep(1)
+              machine.succeed(as_user("paplay --device=fakemic /tmp/short.wav"))
+              machine.sleep(2)
+              machine.succeed(as_user("sonori stop"))
+              try:
+                  machine.wait_until_succeeds("grep -q 'no app read the text' /tmp/sonori-drag.log", timeout=60)
+              except Exception:
+                  check(False, "the paste did not fail")
+              machine.sleep(2)
+
+              def screen_word(name, wanted):
+                  machine.succeed(as_user(f"grim /tmp/{name}.png"))
+                  machine.copy_from_vm(f"/tmp/{name}.png", "")
+                  # Upscaled 3x, so OCR reads the small text on Sonori's glass.
+                  machine.succeed(f"magick /tmp/{name}.png -resize 300% -colorspace Gray -negate /tmp/{name}-ocr.png")
+                  rows = [
+                      line.split("\t")
+                      for line in machine.succeed(f"tesseract /tmp/{name}-ocr.png - --psm 11 tsv 2>/dev/null").splitlines()
+                  ]
+                  words = [r for r in rows if len(r) == 12 and r[0] == "5" and r[11].strip()]
+                  print(f"OCR {name}:", " ".join(r[11] for r in words))
+                  # OCR reads the glass poorly; any one of the wanted words is enough.
+                  for r in words:
+                      word = r[11].strip(".,").lower()
+                      if word in wanted:
+                          left, top, width, height = (int(v) for v in r[6:10])
+                          return word, (left + width / 2) / 3, (top + height / 2) / 3
+                  return None
+
+              before = screen_word("bubble-before", ["text", "goes", "nowhere", "pasted", "clipboard"])
+              if before is None:
+                  check(False, "OCR found no failed-paste bubble")
+              else:
+                  word, x, y = before
+                  # The virtual mouse lives in the VM only.
+                  steps = "; ".join(
+                      f"echo 'mouseto {(x - 30 * i) / 1280:.4f} {(y - 30 * i) / 800:.4f}'; sleep 0.03"
+                      for i in range(1, 11)
+                  )
+                  machine.succeed(
+                      f"{{ sleep 0.4; echo 'mouseto {x / 1280:.4f} {y / 800:.4f}'; sleep 0.3; "
+                      f"echo 'buttondown left'; sleep 0.2; {steps}; sleep 0.2; echo 'buttonup left'; }} | dotool"
+                  )
+                  machine.sleep(1)
+                  machine.screenshot("bubble-dragged")
+                  after = screen_word("bubble-after", [word])
+                  print(f"bubble word moved from {before} to {after}")
+                  check(
+                      after is not None and abs(after[1] - (x - 300)) < 30 and abs(after[2] - (y - 300)) < 30,
+                      "the bubble did not follow the drag",
+                  )
+                  check(machine.execute("grep -q 'bubble closed' /tmp/sonori-drag.log")[0] != 0, "the drag closed the bubble")
+              # A new session removes the pinned bubble.
+              machine.succeed(as_user("sonori start"))
+              machine.sleep(1)
+              machine.succeed(as_user("sonori cancel"))
+              machine.sleep(2)
+              machine.copy_from_vm("/tmp/sonori-drag.log", "")
+
+          with subtest("type through the input method, quick menu, and Recent"):
+              # The virtual mouse lives in the VM only.
+              def click(x, y):
+                  machine.succeed(f"{{ sleep 0.3; echo 'mouseto {x / 1280:.4f} {y / 800:.4f}'; sleep 0.3; echo 'click left'; }} | dotool")
+                  machine.sleep(1)
+
+              def menu_click(shot, wanted):
+                  hit = screen_word(shot, wanted)
+                  check(hit is not None, f"OCR found none of {wanted} in the quick menu")
+                  if hit is not None:
+                      click(hit[1], hit[2])
+                  return hit is not None
+
+              machine.succeed("espeak-ng -w /tmp/typed.wav 'Typed through the input method.'")
+              machine.succeed(as_user("SWAYSOCK=$(ls /run/user/${uid}/sway-ipc.*.sock) swaymsg exec \"foot sh -c 'stty -icanon -echo; cat > /tmp/typed'\""))
+              machine.wait_for_file("/tmp/typed")
+              machine.sleep(1)
+              machine.succeed(as_user("wl-copy KEEP-CLIPBOARD > /dev/null 2>&1"))
+
+              # The quick menu switches the output to Type.
+              machine.succeed(as_user("sonori menu"))
+              machine.sleep(2)
+              if menu_click("menu-output", ["type"]):
+                  machine.screenshot("menu-type")
+                  click(60, 760)
+                  check(machine.execute("grep -q 'output_mode = \"Type\"' /tmp/sonori-drag.toml")[0] == 0, "the menu did not switch the output to Type")
+
+              machine.succeed(as_user("sonori start"))
+              machine.sleep(1)
+              machine.succeed(as_user("paplay --device=fakemic /tmp/typed.wav"))
+              machine.sleep(2)
+              machine.succeed(as_user("sonori stop"))
+              try:
+                  machine.wait_until_succeeds("grep -q 'inserted through the input method' /tmp/sonori-drag.log", timeout=60)
+              except Exception:
+                  print(machine.succeed("grep -E 'Type:|Typing' /tmp/sonori-drag.log || true"))
+                  check(False, "Type did not use the input method")
+              machine.sleep(1)
+              typed = machine.succeed("cat /tmp/typed")
+              print(f"typed: {typed!r}")
+              check("method" in typed.lower(), "foot did not get the text")
+              clip = machine.succeed(as_user("wl-paste --no-newline"))
+              check(clip == "KEEP-CLIPBOARD", f"Type changed the clipboard: {clip!r}")
+
+              # Recent delivers the transcript again, with the current output mode.
+              machine.sleep(6)
+              machine.succeed(as_user("sonori menu"))
+              machine.sleep(2)
+              if menu_click("menu-rows", ["recent"]) and menu_click("menu-recent", ["through", "method", "input"]):
+                  machine.screenshot("recent-chosen")
+                  try:
+                      machine.wait_until_succeeds("test $(grep -c 'inserted through the input method' /tmp/sonori-drag.log) -ge 2", timeout=30)
+                  except Exception:
+                      check(False, "Recent did not deliver the transcript")
+                  machine.sleep(1)
+                  typed = machine.succeed("cat /tmp/typed")
+                  print(f"typed after Recent: {typed!r}")
+                  check(typed.lower().count("method") >= 2, "foot did not get the Recent text")
+              machine.succeed(as_user("SWAYSOCK=$(ls /run/user/${uid}/sway-ipc.*.sock) swaymsg '[app_id=foot] kill'"))
+              machine.copy_from_vm("/tmp/sonori-drag.log", "")
+              machine.copy_from_vm("/tmp/typed", "")
+
           with subtest("model cards in Settings"):
               # Before the second output exists, so the virtual mouse maps to the screen.
               machine.succeed(as_user("sonori settings"))

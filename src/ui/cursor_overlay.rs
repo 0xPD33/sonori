@@ -270,9 +270,11 @@ struct OutputSurface {
     window: Arc<dyn Window>,
     /// Centre of the input-region gap, in physical px; `None` takes the whole output.
     gap: Option<(f32, f32)>,
-    /// The bubble's close button, in physical px; outside recording and the
-    /// menu, the only place that takes pointer input.
+    /// Outside recording and the menu, the only place that takes pointer input:
+    /// a pinned bubble, else the bubble's close button. In physical px.
     hit: Option<[f32; 4]>,
+    /// The bubble's close button, in physical px.
+    close: Option<[f32; 4]>,
     /// The input region must be set again and committed with the next frame.
     region_dirty: bool,
     /// The surface showed a frame since its content last changed.
@@ -348,6 +350,12 @@ pub struct CursorOverlay {
     bubble: Option<Bubble>,
     /// A failed paste keeps its bubble until the user closes it.
     bubble_pinned: bool,
+    /// Top left of a pinned bubble that the user dragged, in physical px.
+    bubble_at: Option<(f32, f32)>,
+    /// While the user drags the bubble: the pointer's offset from its top left.
+    drag: Option<(f32, f32)>,
+    /// The pointer shape last set on the surfaces.
+    cursor: CursorIcon,
     close_hover: bool,
     /// When the startup notice is due; it waits briefly for the hotkey to bind.
     notice_due: Option<Instant>,
@@ -425,6 +433,9 @@ impl CursorOverlay {
             outcome: None,
             bubble: None,
             bubble_pinned: false,
+            bubble_at: None,
+            drag: None,
+            cursor: CursorIcon::Default,
             close_hover: false,
             notice_due: Some(now),
             history_enabled: config.history_config.enabled,
@@ -506,6 +517,17 @@ impl CursorOverlay {
                 state: winit::event::ElementState::Pressed,
                 ..
             } if self.close_hover => self.dismiss_bubble(Instant::now()),
+            WindowEvent::PointerButton {
+                state: winit::event::ElementState::Pressed,
+                ..
+            } => self.start_drag(window_id),
+            WindowEvent::PointerButton {
+                state: winit::event::ElementState::Released,
+                ..
+            } => {
+                self.drag = None;
+                self.set_cursor(window_id, CursorIcon::Grab);
+            }
             WindowEvent::SurfaceResized(size) => self.resize(window_id, size),
             WindowEvent::RedrawRequested => {
                 self.advance(Instant::now());
@@ -543,15 +565,29 @@ impl CursorOverlay {
             }
             return;
         }
-        let over_close = self
+        if let Some((ox, oy)) = self.drag {
+            self.pointer = Some(position);
+            self.move_bubble(window_id, (position.0 - ox, position.1 - oy));
+            return;
+        }
+        let (close, hit) = self
             .surfaces
             .iter()
             .find(|s| s.window.id() == window_id)
-            .and_then(|s| s.hit)
-            .is_some_and(|[x, y, w, h]| {
-                position.0 >= x && position.0 < x + w && position.1 >= y && position.1 < y + h
-            });
+            .map_or((None, None), |s| (s.close, s.hit));
+        let over_close = close.is_some_and(|[x, y, w, h]| {
+            position.0 >= x && position.0 < x + w && position.1 >= y && position.1 < y + h
+        });
         self.set_close_hover(over_close);
+        let draggable = self.bubble_pinned && !over_close && hit.is_some();
+        self.set_cursor(
+            window_id,
+            if draggable {
+                CursorIcon::Grab
+            } else {
+                CursorIcon::Default
+            },
+        );
         let switched = self.active != Some(window_id);
         self.active = Some(window_id);
         self.pointer = Some(position);
@@ -568,6 +604,55 @@ impl CursorOverlay {
                 output.region_dirty = true;
                 output.settled = false;
                 output.window.request_redraw();
+            }
+        }
+    }
+
+    /// A press on a pinned bubble starts a drag. The compositor keeps sending
+    /// motion to this surface until the release, also outside its input region.
+    fn start_drag(&mut self, window_id: WindowId) {
+        let rect = self
+            .surfaces
+            .iter()
+            .find(|s| s.window.id() == window_id)
+            .and_then(|s| s.hit);
+        if let (true, Some([x, y, ..]), Some((px, py))) = (self.bubble_pinned, rect, self.pointer) {
+            self.drag = Some((px - x, py - y));
+            self.set_cursor(window_id, CursorIcon::Grabbing);
+        }
+    }
+
+    /// Moves the dragged bubble, kept fully on the output.
+    fn move_bubble(&mut self, window_id: WindowId, (x, y): (f32, f32)) {
+        let Some(output) = self.surfaces.iter().find(|s| s.window.id() == window_id) else {
+            return;
+        };
+        let size = output.window.surface_size();
+        let (w, h) = self.bubble.as_ref().map_or((0.0, 0.0), |b| b.size);
+        self.bubble_at = Some((
+            x.clamp(0.0, (size.width as f32 - w).max(0.0)),
+            y.clamp(0.0, (size.height as f32 - h).max(0.0)),
+        ));
+        output.window.request_redraw();
+    }
+
+    fn set_cursor(&mut self, window_id: WindowId, cursor: CursorIcon) {
+        if self.cursor == cursor {
+            return;
+        }
+        self.cursor = cursor;
+        if let Some(output) = self.surfaces.iter().find(|s| s.window.id() == window_id) {
+            output.window.set_cursor(cursor.into());
+        }
+    }
+
+    /// The surfaces take all pointer input while recording, so a grab shape must
+    /// not outlive the bubble.
+    fn reset_cursor(&mut self) {
+        if self.cursor != CursorIcon::Default {
+            self.cursor = CursorIcon::Default;
+            for output in &self.surfaces {
+                output.window.set_cursor(CursorIcon::Default.into());
             }
         }
     }
@@ -774,6 +859,9 @@ impl CursorOverlay {
         self.outcome = None;
         self.bubble = None;
         self.bubble_pinned = false;
+        self.bubble_at = None;
+        self.drag = None;
+        self.reset_cursor();
         self.notice_due = None;
         self.spectrum = [0.0; BANDS.len()];
         self.live = 0.0;
@@ -920,6 +1008,8 @@ impl CursorOverlay {
     fn dismiss_bubble(&mut self, now: Instant) {
         println!("Cursor mode: bubble closed");
         self.bubble_pinned = false;
+        self.drag = None;
+        self.reset_cursor();
         self.set_close_hover(false);
         self.phase = match self.phase {
             Phase::Done { since, .. } => Phase::Done { since, until: now },
@@ -945,11 +1035,13 @@ impl CursorOverlay {
     fn still(&self, now: Instant) -> bool {
         self.bubble_pinned
             && !self.close_hover
+            && self.drag.is_none()
             && now >= self.bubble_since + REVEAL_SPAN + Duration::from_secs(1)
     }
 
     fn set_bubble(&mut self, body: String, note: String, error: bool) {
         if self.bubble.is_none() {
+            self.bubble_at = None;
             self.bubble_since = Instant::now();
             self.bubble_lift = Spring::at(6.0);
         }
@@ -1127,6 +1219,7 @@ impl CursorOverlay {
             window,
             gap: None,
             hit: None,
+            close: None,
             region_dirty: true,
             settled: false,
         });
@@ -1362,7 +1455,8 @@ impl CursorOverlay {
 
         let output = &mut self.surfaces[index];
         // Whole pixels, so the bubble's settling lift does not reset the region each frame.
-        let hit = scene.close.map(|rect| rect.map(f32::round));
+        let hit = scene.grab.or(scene.close).map(|rect| rect.map(f32::round));
+        output.close = scene.close;
         if output.hit != hit {
             output.hit = hit;
             output.region_dirty = true;
@@ -1682,7 +1776,7 @@ impl CursorOverlay {
             / BUBBLE_FADE_IN.as_secs_f32())
         .min(1.0);
         let (bx, by) = bubble_origin(cx, cy, bubble.size, sf, width);
-        let by = by + self.bubble_lift.x * sf;
+        let (bx, by) = self.bubble_at.unwrap_or((bx, by + self.bubble_lift.x * sf));
         let (w, h) = bubble.size;
 
         if matches!(self.phase, Phase::Done { .. }) {
@@ -1714,6 +1808,9 @@ impl CursorOverlay {
                 }
                 if p == 0.0 {
                     self.add_close(scene, bx + w, by, sf, fade_in);
+                    if self.bubble_pinned {
+                        scene.grab = Some([bx, by, w, h]);
+                    }
                 }
             } else {
                 let q = (after - TELEPORT.as_secs_f32()) / BURST.as_secs_f32();
@@ -1883,6 +1980,8 @@ struct Scene {
     bubble_text: Option<(f32, f32, f32)>,
     /// The close button's hit area, in physical px.
     close: Option<[f32; 4]>,
+    /// A pinned bubble, which the user can drag.
+    grab: Option<[f32; 4]>,
     /// Menu text, drawn in one batch.
     labels: Vec<Label>,
 }

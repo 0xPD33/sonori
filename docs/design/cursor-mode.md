@@ -45,6 +45,9 @@ Realtime mode and sessions outside Wayland always use the fixed overlay.
   also with `cursor_bubble = "Off"`. A paste that no app takes counts as
   failed: the bubble says "Not pasted — it is in the clipboard". This happens
   when no text field has focus, or when the app ignores the paste shortcut.
+  The user can drag such a bubble anywhere on its output; it stays fully on
+  screen. The whole bubble then takes pointer input, and the pointer shows a
+  grab hand over it.
 - Error: the tile shakes, gets a red outline, and the bubble shows the message
   for 4 s.
 - Model loading: the bars pulse at rest height, and the pill says
@@ -133,7 +136,8 @@ the exact position, and Sonori moves the gap under the pointer with the next
 commit. niri sends `wl_pointer.enter` with the exact position when a surface
 maps under a still pointer (tested on niri 2026-11-12). A fast move can briefly
 toggle hover in the app below. After the session stops, the input region shrinks to the bubble's close
-button, or to nothing without a bubble, so the rest of the screen stays free.
+button (the whole bubble when a failed paste pins it), or to nothing without a
+bubble, so the rest of the screen stays free.
 
 If no output reports the pointer within 400 ms, the tile shows at the bottom
 center of the focused output, and the menu opens in its center. Sway, for
@@ -219,10 +223,37 @@ frame while it exists and uses premultiplied alpha.
 The GPU device is shared with the Settings window, so Settings opens in cursor
 mode, where the fixed overlay does not exist.
 
+## Type through the input method
+
+In Type mode, Sonori inserts the text through `zwp_input_method_v2`, as an
+input method does. It sends no keys and does not touch the clipboard, so
+terminals need no paste shortcut, and every character arrives as written.
+
+niri and Sway let a text field enable text input only while an input method
+is bound. So Sonori binds one for each insertion and destroys it after:
+
+1. Sonori binds the input method. The compositor tells the focused text field
+   that text input is available.
+2. The field enables text input, and the compositor activates Sonori's input
+   method.
+3. Sonori sends the text with `commit_string` and `commit`. The commit carries
+   the number of `done` events received; with another number, the compositor
+   discards the text. Text over 3000 bytes goes in parts, because Wayland caps
+   a message at 4 KiB.
+
+Sonori types the text with wtype or dotool, as before, in these cases:
+
+- The compositor has no `zwp_input_method_manager_v2` (GNOME, KDE).
+- Another input method runs, such as fcitx5. The compositor allows one per
+  seat and answers `unavailable`.
+- The focused app does not activate the input method within 300 ms. Chromium
+  and Electron apps do this without `--enable-wayland-ime`.
+
+The input method commits the text as one string. A line break in the text
+reaches a terminal as Enter, as with typed keys.
+
 ## Later steps
 
-- Insert text through `zwp_input_method_v2` (`commit_string`), so the clipboard
-  stays untouched and terminals need no paste shortcut.
 - Blur behind the bubble through `ext-background-effect-v1`.
 - Pick the microphone in the menu. speechcore opens the input device once at
   start and cannot list devices yet.

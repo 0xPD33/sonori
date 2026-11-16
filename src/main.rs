@@ -5,6 +5,7 @@ use std::sync::Arc;
 use sonori::config::{read_app_config_with_path, AppConfig, OutputMode};
 use sonori::copy;
 use sonori::hotkey::{HotkeyState, SharedHotkeyState};
+use sonori::input_method;
 use sonori::ipc::{self, AppCommand, IpcCommand};
 use sonori::paste_check;
 use sonori::portal_input;
@@ -920,9 +921,17 @@ async fn deliver_inner(
 
     if mode == OutputMode::Type {
         let typed_text = text.clone();
-        let typed = tokio::task::spawn_blocking(move || copy::type_text(&typed_text))
-            .await
-            .unwrap_or_else(|e| Err(e.to_string()));
+        // The input method inserts at once; key events are the fallback.
+        let typed = tokio::task::spawn_blocking(move || {
+            input_method::insert(&typed_text)
+                .inspect(|()| println!("Type: inserted through the input method"))
+                .or_else(|e| {
+                    println!("Type: input method unusable ({e}); typing keys");
+                    copy::type_text(&typed_text)
+                })
+        })
+        .await
+        .unwrap_or_else(|e| Err(e.to_string()));
         let Err(e) = typed else {
             return Typed;
         };

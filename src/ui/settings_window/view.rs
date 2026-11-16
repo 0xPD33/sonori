@@ -883,7 +883,7 @@ impl View {
                 ));
                 v.push(row(
                     "Output",
-                    "Paste uses the clipboard; Type types the text; Copy only copies it.",
+                    "Paste uses the clipboard; Type inserts the text directly; Copy only copies it.",
                     Control::Segmented(Choice::Output),
                 ));
                 if c.portal_config.output_mode == OutputMode::Paste {

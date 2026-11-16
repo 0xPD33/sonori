@@ -337,13 +337,18 @@ fn capabilities(
     };
     let portal = (portal_enabled && portals.remote_desktop.is_some())
         .then_some("portal (asks for permission once)");
-    // Typing goes through wtype or dotool only; pasting can also use the portal.
+    // Typing goes through the input method, else wtype or dotool; pasting can
+    // also use the portal.
     let (label, way) = match output_mode.unwrap_or_default() {
         OutputMode::Clipboard => {
             report.item(Level::Info, "Paste", "off (output mode is clipboard only)");
             return hotkey(report, portals, config);
         }
         OutputMode::Paste => ("Paste", portal.or(keystrokes)),
+        OutputMode::Type if has("zwp_input_method_manager_v2") => (
+            "Type",
+            Some(keystrokes.map_or("input method", |_| "input method, else keystrokes")),
+        ),
         OutputMode::Type => ("Type", keystrokes),
     };
     match way {
