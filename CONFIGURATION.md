@@ -208,9 +208,10 @@ enable_xdg_portal = true              # Enable XDG Desktop Portal for input inje
 enable_global_shortcuts = true        # Enable global shortcuts via portal
 manual_toggle_accelerator = "<Super>backslash"  # Accelerator for toggling manual sessions
 shortcut_mode = "Toggle"              # Shortcut behavior: "Toggle" (press to start/stop) or "PushToTalk" (hold to record)
-paste_shortcut = "ctrl_shift_v"       # Paste method: "ctrl_shift_v" (terminals) or "ctrl_v" (apps)
-output_mode = "Paste"                 # "Paste" (clipboard + paste shortcut), "Type" (wtype/dotool types the text,
-                                      # clipboard untouched) or "Clipboard" (copy only)
+paste_shortcut = "auto"               # "auto": Ctrl+Shift+V in terminals, Ctrl+V elsewhere (niri, Sway, Hyprland);
+                                      # "ctrl_shift_v" or "ctrl_v" forces one shortcut
+output_mode = "Paste"                 # "Paste" (clipboard + paste shortcut), "Type" (input method on niri and Sway,
+                                      # else wtype/dotool; clipboard untouched) or "Clipboard" (copy only)
                                       # Note: Application ID for portal registration is hardcoded to "dev.sonori"
 
 [display_config]
@@ -225,7 +226,9 @@ window_position = "BottomCenter"      # Window position on screen
 show_in_system_tray = true            # Show icon in system tray
 
 [ui_config]
-visual_theme = "Focus"               # Focus, Pulse, Terminal
+display_mode = "Cursor"              # "Cursor": a tile at the pointer and a bubble; "Overlay": the fixed panel
+cursor_bubble = "Brief"              # How long cursor mode shows the text: "Brief", "Long", or "Off"
+visual_theme = "Focus"               # Focus, Pulse, Terminal (the fixed overlay)
 spectrogram_skin = "Bars"            # Bars, Waveform, Meter
 font_size = 10.0                     # Transcript font size
 speaking_color = [0.1, 0.9, 0.5, 1.0]

@@ -1,7 +1,6 @@
-//! Sonori serves the clipboard itself while it pastes, so it sees whether an app
-//! read the text. An app reads the clipboard only when it takes the paste; with
-//! no text field in focus, nothing reads, and Sonori can say so. After the
-//! paste, Sonori offers the clipboard content from before the paste again.
+//! Sonori serves the clipboard itself while it pastes: an app reads it only when
+//! it takes the paste, so no read means no paste. Afterwards, Sonori offers the
+//! clipboard content from before the paste again.
 
 use std::collections::HashMap;
 use std::io::{ErrorKind, Read, Write};

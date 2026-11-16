@@ -372,7 +372,9 @@ impl IpcServer {
             toggles.holding = false;
         }
         if repeat {
-            if let Some(pending) = toggles.pending_stop.take() {
+            // A stop that already ran is not pending; the press is a new one.
+            let pending = toggles.pending_stop.take().filter(|p| !p.is_finished());
+            if let Some(pending) = pending {
                 pending.abort();
                 toggles.holding = true;
                 toggles.started = None;

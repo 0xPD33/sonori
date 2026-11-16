@@ -109,6 +109,8 @@ pub(super) struct MenuState {
     pub display: DisplayMode,
     /// Index into `PRESETS`, if the configured model is one of them.
     pub preset: Option<usize>,
+    /// The configured model name, shown when it is no preset.
+    pub model: String,
     /// Latest transcripts, newest first; `None` hides the row (history is off).
     pub recent: Option<Vec<String>>,
 }
@@ -441,7 +443,7 @@ impl QuickMenu {
                             .map_or(state.language.to_uppercase(), |(_, name)| name.to_string()),
                         List::Model => state
                             .preset
-                            .map_or("Custom".to_string(), |i| PRESETS[i].name.to_string()),
+                            .map_or(state.model.clone(), |i| PRESETS[i].name.to_string()),
                         List::Recent => match state.recent.as_ref().map_or(0, Vec::len) {
                             0 => "None yet".to_string(),
                             n => n.to_string(),

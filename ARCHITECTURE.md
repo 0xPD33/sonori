@@ -87,6 +87,12 @@ Modes can be toggled at runtime via UI button or CLI flags (`--mode manual`). `s
 - **`ui/text_window.rs`** - Text window rendering and scrolling management
 - **`ui/spectogram.rs`** - Real-time FFT-based audio visualization
 
+**Cursor Mode and Settings** (see `docs/design/cursor-mode.md` and `docs/design/settings.md`):
+- **`ui/cursor_overlay.rs`** - The default display mode: one full-screen layer-shell surface per output, the glass tile at the pointer, the bubble, and the input region that lets clicks through
+- **`ui/cursor_overlay/menu.rs`** - The quick menu: language, Magic Mode, output, the five model presets, display, and Recent
+- **`ui/settings_window.rs`**, **`ui/settings_window/model.rs`**, **`ui/settings_window/view.rs`** - The Settings window: state and config changes, and the drawn pages
+- **`ui/shapes.rs`** - Instanced signed-distance-function shapes (glass, capsules, outlines, icons) that cursor mode and Settings share
+
 **UI Components:**
 - **`ui/buttons.rs`** - Interactive buttons with mode-specific layouts (e.g., RecordToggle, Accept for manual mode)
 - **`ui/button_texture.rs`** - Button texture management and rendering
@@ -119,7 +125,12 @@ Modes can be toggled at runtime via UI button or CLI flags (`--mode manual`). `s
 - **`portal_tokens.rs`** - Portal session token persistence and restoration across runs
 - **`global_shortcuts.rs`** - Global shortcut registration via XDG Desktop Portal (e.g., Super+backslash to toggle manual sessions); handles accelerator normalization and signal management
 - **`system_tray.rs`** - Full StatusNotifierItem D-Bus integration with context menu, status indicators, and command support (window control, recording toggle, session management, mode switching, quit)
-- **`copy.rs`** - Wayland clipboard operations using wl-copy
+- **`copy.rs`** - Wayland clipboard operations using wl-copy, paste keystrokes, and the paste shortcut for the focused app
+- **`paste_check.rs`** - Serves the clipboard through `zwlr_data_control_v1` during a paste, notices a paste that no app took, and restores the old clipboard
+- **`input_method.rs`** - Type mode: inserts text through `zwp_input_method_v2`
+- **`ipc.rs`** - The control socket behind `sonori toggle`, `menu`, `settings`, and the other subcommands; detects a held hotkey
+- **`hotkey.rs`** - Shared state of the global hotkey binding, shown in the startup notice and Settings
+- **`doctor.rs`** - `sonori doctor`: checks protocols, portals, helpers, the GPU, and microphones
 - **`transcript_writer.rs`** - Optional transcript history persistence
 - **`../speechcore/src/stats_reporter.rs`** - Performance monitoring and telemetry collection
 - **`../speechcore/src/transcription_stats.rs`** - Transcription quality metrics and analysis

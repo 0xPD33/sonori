@@ -630,6 +630,8 @@ async fn run_gui_mode(
         let mode_ref = transcription_mode_ref.clone();
         let running_ref = running.clone();
         let hotkey_state = hotkey_state.clone();
+        let menu = menu.clone();
+        let recording = recording.clone();
         tokio::spawn(async move {
             if let Err(e) = crate::global_shortcuts::run_listener(
                 &accelerator,
@@ -639,6 +641,8 @@ async fn run_gui_mode(
                 mode_ref,
                 running_ref,
                 hotkey_state,
+                menu,
+                recording,
             )
             .await
             {
@@ -922,13 +926,18 @@ async fn deliver_inner(
     if mode == OutputMode::Type {
         let typed_text = text.clone();
         // The input method inserts at once; key events are the fallback.
-        let typed = tokio::task::spawn_blocking(move || {
-            input_method::insert(&typed_text)
-                .inspect(|()| println!("Type: inserted through the input method"))
-                .or_else(|e| {
-                    println!("Type: input method unusable ({e}); typing keys");
-                    copy::type_text(&typed_text)
-                })
+        let typed = tokio::task::spawn_blocking(move || match input_method::insert(&typed_text) {
+            Ok(()) => {
+                println!("Type: inserted through the input method");
+                Ok(())
+            }
+            Err(input_method::Error::Unusable(e)) => {
+                println!("Type: input method unusable ({e}); typing keys");
+                copy::type_text(&typed_text)
+            }
+            Err(input_method::Error::Partial(e)) => {
+                Err(format!("the input method stopped part way ({e})"))
+            }
         })
         .await
         .unwrap_or_else(|e| Err(e.to_string()));

@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use ashpd::desktop::global_shortcuts::{GlobalShortcuts, NewShortcut};
 use ashpd::ActivationToken;
 use futures_util::StreamExt;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration};
@@ -11,12 +11,15 @@ use zbus::zvariant::OwnedValue;
 use sonori::config::ShortcutMode;
 use sonori::hotkey::{HotkeyState, SharedHotkeyState};
 use sonori::ipc::AppCommand;
+use sonori::ui::cursor_overlay::SharedMenuControl;
 use speechcore::{ManualSessionCommand, TranscriptionMode};
 
 const TOGGLE_ID: &str = "toggle_manual";
 const CANCEL_ID: &str = "cancel_session";
 const PASTE_LAST_ID: &str = "paste_last";
 const MAGIC_MODE_ID: &str = "toggle_magic_mode";
+/// A toggle press held this long opens the quick menu instead of dictating.
+const HOLD_FOR_MENU: Duration = Duration::from_millis(500);
 
 /// Manages global shortcuts through the XDG Desktop Portal.
 ///
@@ -30,6 +33,19 @@ pub struct GlobalShortcutsManager {
     transcription_mode: Arc<AtomicU8>,
     running: Arc<AtomicBool>,
     state: SharedHotkeyState,
+    menu: SharedMenuControl,
+    recording: Arc<AtomicBool>,
+    hold: Arc<Hold>,
+}
+
+/// Tells a held toggle key from a press.
+#[derive(Default)]
+struct Hold {
+    down: AtomicBool,
+    /// Counts presses, so a timer acts only for the press that started it.
+    presses: AtomicU64,
+    /// A portal that never reports releases would make every press look held.
+    releases_seen: AtomicBool,
 }
 
 impl GlobalShortcutsManager {
@@ -161,6 +177,17 @@ impl GlobalShortcutsManager {
             return;
         }
 
+        let toggle = activated.shortcut_id() == TOGGLE_ID
+            && self.shortcut_mode == ShortcutMode::Toggle
+            && self.menu.is_available();
+        if toggle {
+            if self.menu.is_open() {
+                self.menu.request_close();
+                return;
+            }
+            self.watch_hold();
+        }
+
         let command = match (activated.shortcut_id(), self.shortcut_mode) {
             (CANCEL_ID, _) => ManualSessionCommand::CancelSession { responder: None },
             (_, ShortcutMode::Toggle) => ManualSessionCommand::Toggle,
@@ -178,6 +205,8 @@ impl GlobalShortcutsManager {
         if deactivated.shortcut_id() != TOGGLE_ID {
             return;
         }
+        self.hold.down.store(false, Ordering::Relaxed);
+        self.hold.releases_seen.store(true, Ordering::Relaxed);
 
         // Only act in Manual mode with push-to-talk
         if self.shortcut_mode != ShortcutMode::PushToTalk {
@@ -194,6 +223,28 @@ impl GlobalShortcutsManager {
         if let Err(e) = self.manual_session_tx.send(command).await {
             eprintln!("Failed to send stop command: {}", e);
         }
+    }
+}
+
+impl GlobalShortcutsManager {
+    /// Cursor mode: a press that starts a session and is still held after
+    /// `HOLD_FOR_MENU` cancels that session and opens the quick menu.
+    fn watch_hold(&self) {
+        let hold = self.hold.clone();
+        hold.down.store(true, Ordering::Relaxed);
+        let press = hold.presses.fetch_add(1, Ordering::Relaxed) + 1;
+        if !hold.releases_seen.load(Ordering::Relaxed) || self.recording.load(Ordering::Relaxed) {
+            return;
+        }
+        let tx = self.manual_session_tx.clone();
+        let menu = self.menu.clone();
+        tokio::spawn(async move {
+            sleep(HOLD_FOR_MENU).await;
+            if hold.down.load(Ordering::Relaxed) && hold.presses.load(Ordering::Relaxed) == press {
+                let _ = tx.try_send(ManualSessionCommand::CancelSession { responder: None });
+                menu.request_open();
+            }
+        });
     }
 }
 
@@ -256,6 +307,8 @@ pub async fn run_listener(
     transcription_mode: Arc<AtomicU8>,
     running: Arc<AtomicBool>,
     state: SharedHotkeyState,
+    menu: SharedMenuControl,
+    recording: Arc<AtomicBool>,
 ) -> Result<()> {
     GlobalShortcutsManager {
         accelerator: accelerator.to_string(),
@@ -265,6 +318,9 @@ pub async fn run_listener(
         transcription_mode,
         running,
         state,
+        menu,
+        recording,
+        hold: Arc::default(),
     }
     .run()
     .await

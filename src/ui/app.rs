@@ -201,10 +201,9 @@ impl WindowApp {
             .with_cursor(CursorIcon::Default);
 
         if event_loop.is_wayland() {
-            // Must use layer-shell for the settings window too, because this winit
-            // fork doesn't deliver pointer events to non-layer-shell windows.
-            // No anchor = compositor centers the surface. On-demand keyboard
-            // focus lets the text fields take typing after a click.
+            // Layer shell, because this winit fork gives other windows no pointer
+            // events. Without an anchor the compositor centers the surface;
+            // on-demand keyboard focus lets the text fields take typing.
             let mut wayland_attrs = WindowAttributesWayland::default()
                 .with_layer_shell()
                 .with_layer(Layer::Overlay)

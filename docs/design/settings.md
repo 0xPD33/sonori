@@ -56,9 +56,11 @@ The model cards are the quick menu presets (`PRESETS` in
 Whisper turbo, and Moonshine base, in rows of three.
 When the configured model is not a preset, a line under the cards names it.
 
-The Select for Model lists every model of the backend. CTranslate2, Moonshine,
-and Whisper models whose name ends in `.en` understand English only. For them,
-Language shows "English" as a read-only value.
+The Select for Model lists every model of the backend. Moonshine, Parakeet v2,
+and models whose name ends in `.en` understand English only. For them,
+Language shows "English" as a read-only value. CTranslate2 takes the Whisper
+languages, but has no auto detect. A change of backend or model fits the
+language as the quick menu does (see `cursor-mode.md`).
 
 "Start listening" maps onto the VAD sensitivity: "Easily" is `High`, "Normal"
 is `Medium`, and "Only clear speech" is `Low`.

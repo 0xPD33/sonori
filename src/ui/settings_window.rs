@@ -573,10 +573,9 @@ fn scissor(clip: Option<[f32; 4]>, size: PhysicalSize<u32>) -> Option<[u32; 4]> 
 
 /// `path` with the home directory written as `~`.
 fn home_relative(path: &str) -> String {
-    match std::env::var("HOME") {
-        Ok(home) if !home.is_empty() && path.starts_with(&home) => {
-            format!("~{}", &path[home.len()..])
-        }
+    let home = std::env::var("HOME").unwrap_or_default();
+    match std::path::Path::new(path).strip_prefix(&home) {
+        Ok(rest) if !home.is_empty() => format!("~/{}", rest.display()),
         _ => path.to_string(),
     }
 }

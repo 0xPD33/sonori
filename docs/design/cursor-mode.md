@@ -91,7 +91,8 @@ The list gives one good model for each need:
 
 A model switch keeps the language when the new model knows it. Otherwise
 Sonori picks the same language in the form that the model uses ("de" or
-"de-DE"), else auto detect.
+"de-DE"), else auto detect. An English-only model sets English. When the
+configured model is no preset, the Model row shows its name.
 
 A change saves to `config.toml` through the app, so the Settings window sees
 it. A highlight glides to the hovered row, and lists, the knob, and the
@@ -106,6 +107,11 @@ repeats. A press starts dictation at once. A stop within 1.2 s of the start
 waits 200 ms; if a repeat arrives, the key is held, so Sonori cancels the
 session it just started and opens the menu. Hold detection applies only while
 cursor mode is active.
+
+The portal hotkey reports the press and the release. A press that starts a
+session and is still down after 500 ms cancels that session and opens the
+menu. A portal that never reported a release could make every press look
+held, so this starts only after the first release.
 
 Cursor mode applies to manual sessions only. In realtime mode, Sonori shows the
 fixed overlay, because a session never ends there.
@@ -205,7 +211,9 @@ app ID of the focused window just before the paste keys. It uses
   Ctrl+Shift+V.
 
 The setting values `ctrl_shift_v` and `ctrl_v` force one shortcut for all
-apps.
+apps. Older releases wrote their default `ctrl_shift_v` into every config.
+A config without `ui_config.cursor_bubble` comes from them, so Sonori changes
+its `ctrl_shift_v` to `auto` once; the write-back then adds the key.
 
 ## Rendering
 
@@ -249,8 +257,11 @@ Sonori types the text with wtype or dotool, as before, in these cases:
 - The focused app does not activate the input method within 300 ms. Chromium
   and Electron apps do this without `--enable-wayland-ime`.
 
-The input method commits the text as one string. A line break in the text
-reaches a terminal as Enter, as with typed keys.
+If the field loses focus after the first part, Sonori stops: typing the whole
+text again would repeat the parts already in. The bubble then reports the
+failure, and the text is in the clipboard.
+
+A line break in the text reaches a terminal as Enter, as with typed keys.
 
 ## Later steps
 

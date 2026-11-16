@@ -869,6 +869,21 @@ fn migrate_legacy_keys(user: &mut toml::Value) {
     let Some(root) = user.as_table_mut() else {
         return;
     };
+    // Older releases wrote their default "ctrl_shift_v" into every config. A file
+    // without `cursor_bubble` comes from them; "auto" still gives terminals Ctrl+Shift+V.
+    let older_release = root
+        .get("ui_config")
+        .and_then(|ui| ui.get("cursor_bubble"))
+        .is_none();
+    if let Some(portal) = root
+        .get_mut("portal_config")
+        .and_then(toml::Value::as_table_mut)
+        .filter(|_| older_release)
+    {
+        if portal.get("paste_shortcut").and_then(toml::Value::as_str) == Some("ctrl_shift_v") {
+            portal.insert("paste_shortcut".into(), "auto".into());
+        }
+    }
     if let Some(manual) = root
         .get_mut("manual_mode_config")
         .and_then(toml::Value::as_table_mut)

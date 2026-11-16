@@ -279,14 +279,13 @@ impl Choice {
                 if !list.contains(&c.general_config.model.as_str()) {
                     c.general_config.model = list[0].to_string();
                 }
+                fit_language(c);
             }
             // The file on disk may name another backend than the list showed.
             Choice::Model => {
                 if let Some(model) = models(c.backend_config.backend).get(index) {
                     c.general_config.model = model.to_string();
-                    if model.ends_with(".en") {
-                        c.general_config.language = "en".to_string();
-                    }
+                    fit_language(c);
                 }
             }
             Choice::Precision => {
@@ -497,14 +496,24 @@ impl Change {
 pub fn fit_language(c: &mut AppConfig) {
     let current = c.general_config.language.clone();
     let codes: Vec<&str> = languages(c).iter().map(|(code, _)| *code).collect();
-    if codes.is_empty() || codes.contains(&current.as_str()) {
+    if codes.is_empty() {
+        // An English-only model.
+        c.general_config.language = "en".to_string();
+        return;
+    }
+    if codes.contains(&current.as_str()) {
         return;
     }
     let base = |code: &str| code.split('-').next().unwrap_or_default().to_string();
+    let fallback = if codes.contains(&"auto") {
+        "auto"
+    } else {
+        codes[0]
+    };
     c.general_config.language = codes
         .iter()
         .find(|code| base(code) == base(&current))
-        .unwrap_or(&"auto")
+        .unwrap_or(&fallback)
         .to_string();
 }
 
@@ -561,28 +570,35 @@ fn models(backend: BackendType) -> &'static [&'static str] {
     }
 }
 
+/// Whisper's languages; "auto" first, because CTranslate2 cannot detect.
+const WHISPER_LANGUAGES: [(&str, &str); 15] = [
+    ("auto", "Auto detect"),
+    ("en", "English"),
+    ("zh", "Chinese"),
+    ("de", "German"),
+    ("es", "Spanish"),
+    ("fr", "French"),
+    ("hi", "Hindi"),
+    ("it", "Italian"),
+    ("ja", "Japanese"),
+    ("ko", "Korean"),
+    ("nl", "Dutch"),
+    ("pl", "Polish"),
+    ("pt", "Portuguese"),
+    ("ru", "Russian"),
+    ("tr", "Turkish"),
+];
+
 /// Languages the configured model can take, as (code, name). Empty when the
 /// model understands English only.
 pub fn languages(c: &AppConfig) -> &'static [(&'static str, &'static str)] {
     match c.backend_config.backend {
-        BackendType::WhisperCpp if !c.general_config.model.ends_with(".en") => &[
-            ("auto", "Auto detect"),
-            ("en", "English"),
-            ("zh", "Chinese"),
-            ("de", "German"),
-            ("es", "Spanish"),
-            ("fr", "French"),
-            ("hi", "Hindi"),
-            ("it", "Italian"),
-            ("ja", "Japanese"),
-            ("ko", "Korean"),
-            ("nl", "Dutch"),
-            ("pl", "Polish"),
-            ("pt", "Portuguese"),
-            ("ru", "Russian"),
-            ("tr", "Turkish"),
-        ],
-        BackendType::Parakeet => &[
+        BackendType::WhisperCpp if !c.general_config.model.ends_with(".en") => &WHISPER_LANGUAGES,
+        BackendType::CTranslate2 if !c.general_config.model.ends_with(".en") => {
+            &WHISPER_LANGUAGES[1..]
+        }
+        // Parakeet v2 is English only.
+        BackendType::Parakeet if !c.general_config.model.ends_with("-v2") => &[
             ("auto", "Auto detect"),
             ("en", "English"),
             ("de", "German"),

@@ -1,8 +1,6 @@
-//! Inserts text into the focused text field through `zwp_input_method_v2`, as an
-//! input method does: no clipboard and no key events, so terminals need no paste
-//! shortcut. niri and Sway let text fields enable text input only while an input
-//! method is bound. So Sonori binds one for each insertion: the focused field
-//! enables, the compositor activates Sonori's input method, and Sonori commits.
+//! Inserts text into the focused field through `zwp_input_method_v2`: no clipboard,
+//! no key events. Text fields enable text input only while an input method is bound,
+//! so Sonori binds one per insertion; see `docs/design/cursor-mode.md`.
 
 use std::os::fd::AsRawFd;
 use std::time::{Duration, Instant};
@@ -34,43 +32,64 @@ struct State {
     unavailable: bool,
 }
 
-/// Inserts `text` into the focused text field. Fails when the compositor has no
-/// input method protocol, another input method runs, or the focused app does
-/// not take input method text; nothing is inserted then.
-pub fn insert(text: &str) -> Result<(), String> {
-    let conn = Connection::connect_to_env().map_err(|e| e.to_string())?;
+pub enum Error {
+    /// Nothing was inserted: no protocol, another input method, or an app
+    /// that takes no input method text.
+    Unusable(String),
+    /// Part of the text was inserted before the field lost focus.
+    Partial(String),
+}
+
+/// Inserts `text` into the focused text field.
+pub fn insert(text: &str) -> Result<(), Error> {
+    let unusable = |e: String| Error::Unusable(e);
+    let conn = Connection::connect_to_env().map_err(|e| unusable(e.to_string()))?;
     let (globals, mut queue): (_, EventQueue<State>) =
-        registry_queue_init(&conn).map_err(|e| e.to_string())?;
+        registry_queue_init(&conn).map_err(|e| unusable(e.to_string()))?;
     let qh = queue.handle();
     let manager: ZwpInputMethodManagerV2 = globals
         .bind(&qh, 1..=1, ())
-        .map_err(|_| "the compositor has no input method protocol".to_string())?;
+        .map_err(|_| unusable("the compositor has no input method protocol".into()))?;
     let seat: WlSeat = globals
         .bind(&qh, 1..=1, ())
-        .map_err(|_| "the compositor has no seat".to_string())?;
+        .map_err(|_| unusable("the compositor has no seat".into()))?;
     let im = manager.get_input_method(&seat, &qh, ());
     let mut state = State::default();
 
     let result = (|| {
         dispatch_until(&mut queue, &mut state, ACTIVATE_WAIT, |s| {
             s.active || s.unavailable
-        })?;
+        })
+        .map_err(unusable)?;
         if state.unavailable {
-            return Err("another input method is running".to_string());
+            return Err(unusable("another input method is running".into()));
         }
         if !state.active {
-            return Err("the focused app takes no input method text".to_string());
+            return Err(unusable(
+                "the focused app takes no input method text".into(),
+            ));
         }
         for (index, part) in parts(text).enumerate() {
+            // Once a part is in, a failure must not make the caller type it all again.
+            let fail = |e: String| {
+                if index == 0 {
+                    Error::Unusable(e)
+                } else {
+                    Error::Partial(e)
+                }
+            };
             if index > 0 {
-                dispatch_until(&mut queue, &mut state, PART_WAIT, |_| false)?;
+                dispatch_until(&mut queue, &mut state, PART_WAIT, |_| false).map_err(fail)?;
             }
             if !state.active {
-                return Err("the text field lost focus".to_string());
+                return Err(fail("the text field lost focus".into()));
             }
             im.commit_string(part.to_string());
             im.commit(state.dones);
-            queue.roundtrip(&mut state).map_err(|e| e.to_string())?;
+            // The part may be in already, so a failure here is never "nothing inserted".
+            queue
+                .roundtrip(&mut state)
+                .map_err(|e| Error::Partial(e.to_string()))?;
         }
         Ok(())
     })();

@@ -350,6 +350,8 @@ pub struct CursorOverlay {
     bubble: Option<Bubble>,
     /// A failed paste keeps its bubble until the user closes it.
     bubble_pinned: bool,
+    /// The surfaces failed to open; no retry until this recording ends.
+    surface_failed: bool,
     /// Top left of a pinned bubble that the user dragged, in physical px.
     bubble_at: Option<(f32, f32)>,
     /// While the user drags the bubble: the pointer's offset from its top left.
@@ -433,6 +435,7 @@ impl CursorOverlay {
             outcome: None,
             bubble: None,
             bubble_pinned: false,
+            surface_failed: false,
             bubble_at: None,
             drag: None,
             cursor: CursorIcon::Default,
@@ -481,7 +484,8 @@ impl CursorOverlay {
             if let Err(e) = self.open_surfaces(event_loop) {
                 eprintln!("Cursor overlay: {e}");
                 self.surfaces.clear();
-                self.phase = Phase::Hidden;
+                self.surface_failed = true;
+                self.enter(Phase::Hidden);
             }
         } else if !wants_surfaces && !self.surfaces.is_empty() {
             self.surfaces.clear();
@@ -525,8 +529,9 @@ impl CursorOverlay {
                 state: winit::event::ElementState::Released,
                 ..
             } => {
-                self.drag = None;
-                self.set_cursor(window_id, CursorIcon::Grab);
+                if self.drag.take().is_some() {
+                    self.set_cursor(window_id, CursorIcon::Grab);
+                }
             }
             WindowEvent::SurfaceResized(size) => self.resize(window_id, size),
             WindowEvent::RedrawRequested => {
@@ -745,6 +750,9 @@ impl CursorOverlay {
     /// Moves the phase on from the shared session state.
     fn advance(&mut self, now: Instant) {
         let recording = self.handles.recording.load(Ordering::Relaxed);
+        if !recording {
+            self.surface_failed = false;
+        }
         let processing_state = self.handles.audio_data.read().processing_state;
         match self.handles.menu.request.swap(0, Ordering::Relaxed) {
             MENU_OPEN => {
@@ -787,7 +795,7 @@ impl CursorOverlay {
                     self.enter(Phase::Hidden);
                 }
             }
-            _ if recording => self.start_session(now),
+            _ if recording && !self.surface_failed => self.start_session(now),
             Phase::Hidden => {}
             Phase::Processing {
                 since,
@@ -1603,6 +1611,7 @@ impl CursorOverlay {
             preset: PRESETS
                 .iter()
                 .position(|p| p.backend == self.backend && p.model == model),
+            model: model.to_string(),
             recent: self
                 .history_enabled
                 .then(|| self.recent.iter().cloned().collect()),
