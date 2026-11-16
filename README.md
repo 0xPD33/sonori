@@ -4,7 +4,7 @@
 
 # Sonori
 
-**Local AI speech transcription with a transparent overlay for Linux**
+**Local AI dictation for Linux: speak, and the text lands where you type**
 
 Real-time or on-demand transcription, entirely on your device.
 
@@ -33,17 +33,20 @@ Real-time or on-demand transcription, entirely on your device.
 - **Automatic Model Download** - Models are downloaded automatically on first run
 
 ### Interface
-- **Cursor Mode** (default) - A small glass tile follows your pointer while you dictate, and a bubble shows the text. Hold the hotkey (or run `sonori menu`) for a quick menu with language, output, model, and recent dictations
-- **Transparent Overlay** - A fixed panel at the bottom of the screen; used in real-time mode and on X11, or set `display_mode = "Overlay"`
+- **Cursor Mode** (default) - A small glass tile follows your pointer while you dictate, and a bubble shows the text. A bubble for a failed paste stays until you close it, and you can drag it aside
+- **Quick Menu** - Hold the hotkey (or run `sonori menu`) for language, Magic Mode, output, model, display, and your last five dictations
+- **Model Picker** - Five models, one for each need: Parakeet v2 (most accurate English), Parakeet v3 (25 languages), Nemotron 3.5, Whisper turbo (99 languages), and Moonshine base (smallest)
+- **Settings Window** - `sonori settings` or the tray opens every option
+- **Transparent Overlay** - A fixed panel at the bottom of the screen with a spectrogram and typewriter text; used in real-time mode and on X11, or set `display_mode = "Overlay"`
 - **CLI Mode** - Run without GUI using `--cli` flag for headless/terminal usage
-- **Audio Visualization** - Spectrogram display shows audio input in real-time
 - **System Tray Integration** - Quick access with window control and status display
-- **Typewriter Effect** - Character-by-character text reveal animation when transcription completes
+- **`sonori doctor`** - Checks what your desktop supports and prints a report
 
 ### Optional Features
 - **GPU Acceleration** - Vulkan-based rendering; Whisper.cpp Vulkan acceleration; ONNX Runtime GPU acceleration for Moonshine, Parakeet TDT, and Nemotron 3.5 ASR backends
 - **Global Shortcuts** - System-wide hotkeys via XDG Desktop Portal (e.g., Super+\ to toggle recording)
-- **Auto-Paste** - Automatic text injection via XDG Desktop Portal, with wtype/dotool fallback for compositors without portal support
+- **Auto-Paste** - Pastes into the focused app with the right shortcut (Ctrl+Shift+V in terminals, Ctrl+V elsewhere), notices when no app took the paste, and restores your clipboard afterwards
+- **Type Mode** - Inserts the text through the input method protocol on niri and Sway: no clipboard and no key events
 - **Sound Feedback** - Audio cues for recording state changes
 - **Magic Mode** - Post-process transcriptions through a local LLM to clean up grammar, remove filler words, and improve readability
 
@@ -63,23 +66,25 @@ Real-time or on-demand transcription, entirely on your device.
 
 **Platform:** Linux x86_64 only
 
-**Tested on:** NixOS with KDE Plasma/KWin and niri (Wayland)
+**Tested on:** NixOS with niri and KDE Plasma/KWin. VM tests run Sway, Hyprland, KDE Plasma, and GNOME (`nix build .#checks.x86_64-linux.vm-sway -L`)
 
 ### Compositor (Wayland)
 
 | Protocol | Required | Purpose |
 |----------|----------|---------|
-| `zwlr_layer_shell_v1` | **Yes** | Transparent overlay rendering |
+| `zwlr_layer_shell_v1` | **Yes** | Cursor mode and the overlay |
+| `zwlr_data_control_v1` | No | Paste check and clipboard restore |
+| `zwp_input_method_manager_v2` | No | Type mode without key events (fallback: wtype/dotool) |
 | XDG Portal: GlobalShortcuts | No | System-wide hotkeys |
 | XDG Portal: RemoteDesktop | No | Auto-paste via portal (fallback: wtype/dotool) |
 
 **Compositor Compatibility:**
 | Compositor | Status |
 |------------|--------|
+| niri | ✅ Full support (bind `sonori toggle` to a key) |
 | KDE Plasma (KWin) | ✅ Full support |
-| niri | ✅ Full support (use IPC for keybindings) |
-| Hyprland | ✅ Should work |
-| Sway | ✅ Should work |
+| Sway | ✅ Full support (bind `sonori toggle` to a key) |
+| Hyprland | ✅ Works in the VM test |
 | GNOME (Mutter) | ❌ No layer shell (use CLI mode) |
 
 ### Hardware
@@ -169,10 +174,11 @@ sonori
 ```
 
 1. In cursor mode, a short notice says that Sonori is ready and which hotkey is bound
-2. **Manual mode** (default): Press the global hotkey (default `Super+\`) or run `sonori toggle` to start and stop a session. A glass tile follows your pointer while you talk; the text is pasted into the focused app
-3. **Real-time mode:** Recording starts automatically, and the transparent overlay shows the text
-4. With the overlay, use its buttons to copy text, clear history, switch modes, or exit
-5. On X11, `Tab` also toggles a manual session while the overlay has keyboard focus. On Wayland the overlay never takes focus, so the paste lands in your app.
+2. **Manual mode** (default): Press the global hotkey (default `Super+\`) or run `sonori toggle` to start and stop a session. A glass tile follows your pointer while you talk; the text is pasted into the focused app. Long dictations are transcribed at pauses while you speak, so the text arrives soon after you stop
+3. **Quick menu:** Hold the hotkey, or run `sonori menu`
+4. **Real-time mode:** Recording starts automatically, and the transparent overlay shows the text
+5. With the overlay, use its buttons to copy text, clear history, switch modes, or exit
+6. On X11, `Tab` also toggles a manual session while the overlay has keyboard focus. On Wayland the overlay never takes focus, so the paste lands in your app.
 
 ### CLI Mode
 
@@ -210,6 +216,9 @@ sonori copy-last   # Copy the last transcript to the clipboard
 sonori paste-last  # Paste the last transcript again
 sonori magic       # Turn Magic Mode on or off
 sonori language de # Set the transcription language (applies from the next recording)
+sonori menu        # Open or close the quick menu
+sonori settings    # Open the Settings window
+sonori doctor      # Check what this desktop supports
 ```
 
 Starting `sonori` while another instance runs replaces that instance.
@@ -233,7 +242,7 @@ Sonori uses `config.toml` for configuration. Defaults work well for most users. 
 - **Multilingual** - For non-English languages
 - **Moonshine** - ONNX-based backend with fast real-time performance
 - **Parakeet TDT** - NVIDIA NeMo model via sherpa-onnx, multilingual or English-only
-- **Nemotron 3.5 ASR** - NVIDIA streaming model (cache-aware FastConformer + RNNT), 40+ locales with auto-detect
+- **Nemotron 3.5 ASR** - NVIDIA streaming model (cache-aware FastConformer + RNNT); NVIDIA names 15 languages as ready for transcription
 
 ## Troubleshooting
 
@@ -267,8 +276,9 @@ Required for UI rendering and optional GPU-accelerated transcription.
 - Uses XDG RemoteDesktop portal for keyboard injection (KDE Plasma)
 - Falls back to `wtype` when portal is unavailable (sway, Hyprland, niri, river, labwc, COSMIC)
 - Falls back to `dotool` if wtype also fails (works on all compositors via uinput — requires `input` group membership)
-- Copies text to clipboard via `wl-copy`, then simulates the configured paste shortcut
-- A portal paste that fails falls back to wtype/dotool; if every method fails, the status bar says "Copied, paste failed" and the text stays on the clipboard
+- Puts the text in the clipboard, then sends the paste shortcut. `paste_shortcut = "auto"` (the default) asks niri, Sway, or Hyprland which app has focus: terminals get Ctrl+Shift+V, other apps Ctrl+V. `ctrl_shift_v` or `ctrl_v` forces one shortcut
+- With `zwlr_data_control_v1` (every compositor but GNOME), Sonori sees whether an app read the paste. If none did, the bubble says "Not pasted — it is in the clipboard". After a good paste, Sonori restores your old clipboard
+- A portal paste that fails falls back to wtype/dotool; if every method fails, the bubble says "Copied, paste failed" and the text stays on the clipboard
 - `output_mode` (Settings → Behavior → Output) picks `Paste`, `Type` (inserts the text through the input method protocol on niri and Sway, else wtype/dotool types it; the clipboard stays untouched) or `Clipboard` (copy only)
 
 ### Model Issues
@@ -284,10 +294,7 @@ pip install -U ctranslate2 huggingface_hub torch transformers
 ct2-transformers-converter --model your-model --output_dir ~/.cache/speechcore/models/your-model-ct2 --copy_files preprocessor_config.json tokenizer.json
 ```
 
-**30-second truncation:** Whisper's 30-second window with 448 token limit can truncate dense speech. Solutions:
-1. Keep recordings under 25 seconds
-2. Adjust `chunk_duration_seconds` (15-25) in `[manual_mode_config]`
-3. Try CTranslate2 backend
+**Long dictations:** Sonori cuts a long manual recording at the first pause after `chunk_duration_seconds` (in `[manual_mode_config]`) and transcribes each part while you speak. Whisper's 448-token limit can still truncate very dense speech in one part; a lower `chunk_duration_seconds` (15-25) helps.
 
 **Moonshine model layout:** Moonshine uses ONNX merged models (auto-downloaded) and expects a model name like `tiny` or `base`. If you see decoder input errors, set `[moonshine_options].enable_cache = false` and retry.
 
@@ -297,7 +304,8 @@ ct2-transformers-converter --model your-model --output_dir ~/.cache/speechcore/m
 
 ## Known Issues
 
-- Not all Wayland compositors supported (tested primarily on KDE Plasma/KWin)
+- GNOME has no layer shell; Sonori runs there only in CLI mode
+- Chromium and Electron apps take Type mode text only with `--enable-wayland-ime`; otherwise Sonori types keys
 - Transcription accuracy depends on backend and model quality
 - CPU usage can be high when idle (buffer size related)
 
