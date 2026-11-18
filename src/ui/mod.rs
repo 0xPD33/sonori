@@ -26,5 +26,5 @@ pub mod window;
 
 pub use app::{run_with_audio_data, UiHandles};
 pub use cursor_overlay::{
-    Delivery, DeliveryOutcome, MenuControl, SharedDelivery, SharedMenuControl,
+    Delivery, DeliveryOutcome, MenuControl, SharedDelivery, SharedMenuControl, UiWaker,
 };

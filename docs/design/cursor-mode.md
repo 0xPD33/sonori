@@ -152,7 +152,10 @@ pointer.
 
 ## Data flow
 
-The UI polls shared state, as the fixed overlay does:
+The UI polls shared state every 30 ms while the overlay shows something. While
+nothing shows, it polls every 100 ms. A session start (through Sonori's
+`FeedbackSink`) and a quick-menu request wake the event loop at once, so the
+tile appears without delay. The UI reads this state:
 
 - `recording` (atomic flag) starts and ends the recording phase.
 - `AudioVisualizationData::samples` gives the level for the bars: RMS of the

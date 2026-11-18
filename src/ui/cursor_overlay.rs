@@ -2,7 +2,7 @@
 //! See `docs/design/cursor-mode.md`.
 
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use parking_lot::RwLock;
@@ -10,7 +10,7 @@ use speechcore::{AudioVisualizationData, BackendStatus, BackendStatusState, Proc
 use winit::cursor::CursorIcon;
 use winit::dpi::{LogicalSize, PhysicalSize};
 use winit::event::WindowEvent;
-use winit::event_loop::ActiveEventLoop;
+use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 use winit::platform::wayland::{Anchor, KeyboardInteractivity, Layer, WindowAttributesWayland};
 use winit::window::{Window, WindowAttributes, WindowId};
 
@@ -66,6 +66,23 @@ pub struct MenuControl {
     /// Cursor mode is active, so a held hotkey opens the menu.
     available: AtomicBool,
     settings: AtomicBool,
+    waker: UiWaker,
+}
+
+/// Wakes the UI event loop from another thread, so an idle loop can sleep long.
+#[derive(Debug, Default, Clone)]
+pub struct UiWaker(Arc<OnceLock<EventLoopProxy>>);
+
+impl UiWaker {
+    pub fn set(&self, proxy: EventLoopProxy) {
+        let _ = self.0.set(proxy);
+    }
+
+    pub fn wake(&self) {
+        if let Some(proxy) = self.0.get() {
+            proxy.wake_up();
+        }
+    }
 }
 
 const MENU_OPEN: u8 = 1;
@@ -74,10 +91,12 @@ const MENU_CLOSE: u8 = 2;
 impl MenuControl {
     pub fn request_open(&self) {
         self.request.store(MENU_OPEN, Ordering::Relaxed);
+        self.waker.wake();
     }
 
     pub fn request_close(&self) {
         self.request.store(MENU_CLOSE, Ordering::Relaxed);
+        self.waker.wake();
     }
 
     pub fn is_open(&self) -> bool {
@@ -98,6 +117,10 @@ impl MenuControl {
 
     pub fn take_settings_request(&self) -> bool {
         self.settings.swap(false, Ordering::Relaxed)
+    }
+
+    pub fn waker(&self) -> &UiWaker {
+        &self.waker
     }
 }
 
@@ -474,6 +497,11 @@ impl CursorOverlay {
 
     pub fn owns(&self, window_id: WindowId) -> bool {
         self.surfaces.iter().any(|s| s.window.id() == window_id)
+    }
+
+    /// No session, menu, or bubble is on screen.
+    pub fn is_hidden(&self) -> bool {
+        matches!(self.phase, Phase::Hidden)
     }
 
     /// Follows the session state. Called on every event-loop wake-up.

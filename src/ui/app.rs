@@ -39,7 +39,8 @@ const DRAG_MAX_FRAME_DELTA_PX: f64 = 96.0;
 const DRAG_EDGE_INSET_PX: i32 = 32;
 /// How often an idle overlay checks shared state for changes to paint.
 const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(100);
-/// Cursor mode polls faster, because the ring must appear soon after the hotkey.
+/// A visible cursor overlay polls faster, to follow the session closely. While it
+/// is hidden, a recording start or a menu request wakes the loop at once.
 const CURSOR_POLL_INTERVAL: Duration = Duration::from_millis(30);
 const ORPHAN_GRACE: Duration = Duration::from_secs(5);
 
@@ -76,6 +77,7 @@ pub fn run_with_audio_data(handles: UiHandles) {
             std::process::exit(1);
         }
     };
+    handles.menu.waker().set(event_loop.create_proxy());
     let mut app = WindowApp {
         windows: HashMap::new(),
         audio_data: Some(handles.audio_data),
@@ -864,16 +866,20 @@ impl ApplicationHandler for WindowApp {
         // An idle overlay renders no frames, so this wake-up is what notices new
         // transcripts, status changes, a lost overlay, or a cleared running flag.
         let cursor_mode = self.sync_display_mode(event_loop);
-        let poll_interval = if cursor_mode {
+        if let Some(overlay) = &mut self.cursor_overlay {
+            overlay.poll(event_loop);
+        }
+        self.apply_cursor_menu_requests(event_loop);
+        let overlay_shown = self
+            .cursor_overlay
+            .as_ref()
+            .is_some_and(|overlay| !overlay.is_hidden());
+        let poll_interval = if overlay_shown {
             CURSOR_POLL_INTERVAL
         } else {
             IDLE_POLL_INTERVAL
         };
         event_loop.set_control_flow(ControlFlow::wait_duration(poll_interval));
-        if let Some(overlay) = &mut self.cursor_overlay {
-            overlay.poll(event_loop);
-        }
-        self.apply_cursor_menu_requests(event_loop);
         if let Some(settings) = self.settings_window.as_mut() {
             settings.poll();
         }

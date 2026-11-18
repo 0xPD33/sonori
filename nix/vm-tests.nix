@@ -246,6 +246,14 @@ let
                     machine.sleep(1)
                     machine.screenshot("notice-closed")
                     check(closed, "the close button did not remove the notice")
+                    # A hidden cursor overlay sleeps until a recording or a menu request.
+                    pid = machine.succeed("pgrep -n sonori").strip()
+                    switches = f"awk '/ctxt_switches/ {{n += $2}} END {{print n}}' /proc/{pid}/task/{pid}/status"
+                    before = int(machine.succeed(switches))
+                    machine.sleep(10)
+                    rate = (int(machine.succeed(switches)) - before) / 10
+                    print(f"idle main thread wakes per second: {rate:.1f}")
+                    check(rate < 15, f"the idle cursor overlay wakes {rate:.1f} times per second")
                 except Exception as e:
                     check(False, f"the startup notice did not appear ({e})")
                 if sonori_ready("cursor"):

@@ -12,7 +12,9 @@ use sonori::portal_input;
 use sonori::sound_player::SoundPlayer;
 use sonori::system_tray;
 use sonori::ui;
-use speechcore::{FeedbackSink, RealTimeTranscriber, SpeechConfig, TranscriptionMode};
+use speechcore::{
+    FeedbackEvent, FeedbackSink, RealTimeTranscriber, SpeechConfig, TranscriptionMode,
+};
 
 // Binary-specific modules (not in library)
 mod global_shortcuts;
@@ -198,7 +200,11 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    let feedback_sink = sound_player.map(|player| player as std::sync::Arc<dyn FeedbackSink>);
+    let menu = ui::SharedMenuControl::default();
+    let feedback_sink: Arc<dyn FeedbackSink> = Arc::new(Feedback {
+        sound: sound_player,
+        waker: menu.waker().clone(),
+    });
     let magic_mode_enabled = Arc::new(AtomicBool::new(
         app_config.enhancement_config.enabled && app_config.enhancement_config.active,
     ));
@@ -213,7 +219,7 @@ async fn main() -> anyhow::Result<()> {
 
     let speech_config: SpeechConfig = app_config.clone().into();
     let mut transcriber =
-        RealTimeTranscriber::new(transcription_model_path, speech_config, feedback_sink)?;
+        RealTimeTranscriber::new(transcription_model_path, speech_config, Some(feedback_sink))?;
     if let Some(problem) = sonori::config::config_file_problem() {
         transcriber
             .get_backend_status()
@@ -242,6 +248,7 @@ async fn main() -> anyhow::Result<()> {
             app_config,
             magic_mode_enabled,
             magic_mode_enhancer,
+            menu,
         )
         .await?;
     }
@@ -487,6 +494,25 @@ async fn run_manual_cli(mut transcriber: RealTimeTranscriber) -> anyhow::Result<
 /// grow it, and the copy of it on every final, without bound.
 const MAX_OVERLAY_TRANSCRIPT_BYTES: usize = 20_000;
 
+/// Plays the sound cues, and wakes the UI when a session starts, so the
+/// cursor ring shows at once.
+struct Feedback {
+    sound: Option<Arc<SoundPlayer>>,
+    waker: ui::UiWaker,
+}
+
+impl FeedbackSink for Feedback {
+    fn play(&self, event: FeedbackEvent) {
+        // Cursor mode runs only in manual mode, so only a session start shows it.
+        if event == FeedbackEvent::SessionStart {
+            self.waker.wake();
+        }
+        if let Some(sound) = &self.sound {
+            FeedbackSink::play(sound.as_ref(), event);
+        }
+    }
+}
+
 /// A finished transcript and what to do with it.
 struct Output {
     text: String,
@@ -498,6 +524,7 @@ async fn run_gui_mode(
     app_config: AppConfig,
     magic_mode_enabled: Arc<AtomicBool>,
     magic_mode_enhancer: Option<Arc<sonori::enhancement::MagicModeEnhancer>>,
+    menu: ui::SharedMenuControl,
 ) -> anyhow::Result<()> {
     let transcript_history = transcriber.get_transcript_history();
     let transcript_rx = transcriber.get_transcript_rx();
@@ -530,7 +557,6 @@ async fn run_gui_mode(
         config_rx.clone(),
         output_tx.clone(),
     ));
-    let menu = ui::SharedMenuControl::default();
     tokio::spawn(output_worker(
         output_rx,
         app_config.portal_config.enable_xdg_portal,
