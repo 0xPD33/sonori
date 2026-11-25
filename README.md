@@ -14,7 +14,9 @@ Real-time or on-demand transcription, entirely on your device.
 
 <br>
 
-![Sonori Demo](assets/sonori-demo.gif)
+![Sonori: the tile at the pointer shows the words while you speak, then types them into the editor](assets/sonori-demo.gif)
+
+**[▶ Watch the full demo (39 s)](assets/sonori-demo.mp4)**: dictation with live words, the quick menu, and Settings
 
 </div>
 
@@ -36,11 +38,18 @@ Real-time or on-demand transcription, entirely on your device.
 - **Cursor Mode** (default) - A small glass tile follows your pointer while you dictate, and a bubble shows the text. A bubble for a failed paste stays until you close it, and you can drag it aside
 - **Quick Menu** - Hold the hotkey (or run `sonori menu`) for language, Magic Mode, output, model, display, and your last five dictations
 - **Model Picker** - Five models, one for each need: Parakeet v2 (most accurate English), Parakeet v3 (25 languages), Nemotron 3.5, Whisper turbo (99 languages), and Moonshine base (smallest)
-- **Settings Window** - `sonori settings` or the tray opens every option
+- **Settings Window** - `sonori settings` or the tray opens every option; `sonori settings speech` opens one section
 - **Transparent Overlay** - A fixed panel at the bottom of the screen with a spectrogram and typewriter text; used in real-time mode and on X11, or set `display_mode = "Overlay"`
 - **CLI Mode** - Run without GUI using `--cli` flag for headless/terminal usage
 - **System Tray Integration** - Quick access with window control and status display
 - **`sonori doctor`** - Checks what your desktop supports and prints a report
+
+<table>
+  <tr>
+    <td align="center" valign="top"><img src="assets/sonori-menu.gif" alt="The quick menu at the pointer: language, Magic Mode, output, model, display, and recent dictations" width="420"><br><sub>The quick menu opens at the pointer</sub></td>
+    <td align="center" valign="top"><img src="assets/sonori-settings.gif" alt="The Settings window steps through General, Speech, Look, Words, and Advanced" width="420"><br><sub>Settings: every option, saved at once</sub></td>
+  </tr>
+</table>
 
 ### Optional Features
 - **GPU Acceleration** - Vulkan-based rendering; Whisper.cpp Vulkan acceleration; ONNX Runtime GPU acceleration for Moonshine, Parakeet TDT, and Nemotron 3.5 ASR backends
@@ -232,7 +241,7 @@ sonori paste-last  # Paste the last transcript again
 sonori magic       # Turn Magic Mode on or off
 sonori language de # Set the transcription language (applies from the next recording)
 sonori menu        # Open or close the quick menu
-sonori settings    # Open the Settings window
+sonori settings    # Open the Settings window (add a section: general, speech, microphone, look, words, advanced)
 sonori doctor      # Check what this desktop supports
 ```
 
