@@ -283,6 +283,14 @@ struct Bubble {
     dim_from: usize,
 }
 
+impl Bubble {
+    /// When the last word and the note have faded in.
+    fn revealed(&self) -> Instant {
+        let last = self.word_since.iter().copied().max();
+        last.map_or(self.note_since, |w| w.max(self.note_since)) + WORD_FADE
+    }
+}
+
 /// A word of the session text and when the bubble first showed it.
 #[derive(Clone)]
 struct ShownWord {
@@ -1201,7 +1209,10 @@ impl CursorOverlay {
         self.bubble_pinned
             && !self.close_hover
             && self.drag.is_none()
-            && now >= self.bubble_since + REVEAL_SPAN + Duration::from_secs(1)
+            && self
+                .bubble
+                .as_ref()
+                .is_some_and(|b| now >= b.revealed() + Duration::from_secs(1))
     }
 
     fn set_bubble(&mut self, body: String, note: String, error: bool) {

@@ -93,7 +93,10 @@ let
         machine.sleep(14)
         live = screen_word("live-words", {"sentence", "about", "clipboard", "paste", "check"})
         print(f"live word on screen: {live}")
-        check(live is not None, "the bubble showed no words while the user spoke")
+        # Whisper on the VM's CPU is too slow for live words: a pass takes about
+        # 2 s, so the safety net ends them. Then the paste must still be complete.
+        slow = "Live preview: off for this session" in machine.succeed("cat /tmp/sonori-dictate.log")
+        check(live is not None or slow, "the bubble showed no words while the user spoke")
         machine.wait_until_succeeds("! pgrep -x paplay", timeout=120)
         machine.sleep(2)
         machine.succeed(as_user("sonori stop"))
