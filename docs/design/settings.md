@@ -2,7 +2,9 @@
 
 The Settings window holds every setting that the quick menu does not show. It
 opens from "More settings…" in the quick menu, from the tray, and with
-`sonori settings`. Only one Settings window exists at a time.
+`sonori settings`. `sonori settings <section>` opens it on that section, or
+shows that section if the window is open. Only one Settings window exists at
+a time.
 
 ## Layout
 

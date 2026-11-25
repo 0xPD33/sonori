@@ -66,7 +66,10 @@ enum Command {
     /// Open or close the cursor-mode menu
     Menu,
     /// Open the Settings window
-    Settings,
+    Settings {
+        /// Section to show: general, speech, microphone, look, words, or advanced
+        section: Option<String>,
+    },
     /// Check what Sonori needs from this system and print a report
     Doctor,
 }
@@ -1218,7 +1221,7 @@ async fn handle_ipc_command(cmd: Command) -> anyhow::Result<()> {
         Command::Magic => IpcCommand::ToggleMagic,
         Command::Language { code } => IpcCommand::Language { code },
         Command::Menu => IpcCommand::Menu,
-        Command::Settings => IpcCommand::Settings,
+        Command::Settings { section } => IpcCommand::Settings { section },
         Command::Doctor => unreachable!("handled before IPC dispatch"),
     };
 

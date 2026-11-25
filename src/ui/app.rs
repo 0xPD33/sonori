@@ -339,8 +339,11 @@ impl WindowApp {
 
     /// Saves settings changed in the cursor-mode menu and opens Settings on request.
     fn apply_cursor_menu_requests(&mut self, event_loop: &dyn ActiveEventLoop) {
-        if self.menu.take_settings_request() {
+        if let Some(section) = self.menu.take_settings_request() {
             self.open_settings_window(event_loop);
+            if let (Some(section), Some(settings)) = (section, self.settings_window.as_mut()) {
+                settings.show_section(section);
+            }
         }
         let Some(overlay) = self.cursor_overlay.as_mut() else {
             return;

@@ -23,6 +23,7 @@ use crate::hotkey::{HotkeyState, SharedHotkeyState};
 
 mod menu;
 use crate::ipc::AppCommand;
+use crate::ui::settings_window::Section;
 pub(crate) use menu::PRESETS;
 use menu::{MenuAction, MenuState, QuickMenu};
 
@@ -76,7 +77,8 @@ pub struct MenuControl {
     open: AtomicBool,
     /// Cursor mode is active, so a held hotkey opens the menu.
     available: AtomicBool,
-    settings: AtomicBool,
+    /// 0: no request, 1: open Settings, 2 + i: open it on `Section::ALL[i]`.
+    settings: AtomicU8,
     waker: UiWaker,
 }
 
@@ -122,12 +124,19 @@ impl MenuControl {
         self.available.store(available, Ordering::Relaxed);
     }
 
-    pub fn request_settings(&self) {
-        self.settings.store(true, Ordering::Relaxed);
+    pub fn request_settings(&self, section: Option<Section>) {
+        let value = section.map_or(1, |s| 2 + s as u8);
+        self.settings.store(value, Ordering::Relaxed);
+        self.waker.wake();
     }
 
-    pub fn take_settings_request(&self) -> bool {
-        self.settings.swap(false, Ordering::Relaxed)
+    /// `Some` when Settings should open, with the section to show, if any.
+    pub fn take_settings_request(&self) -> Option<Option<Section>> {
+        match self.settings.swap(0, Ordering::Relaxed) {
+            0 => None,
+            1 => Some(None),
+            n => Some(Section::ALL.get(usize::from(n - 2)).copied()),
+        }
     }
 
     pub fn waker(&self) -> &UiWaker {

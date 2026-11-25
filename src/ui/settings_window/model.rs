@@ -32,6 +32,13 @@ impl Section {
         Section::Advanced,
     ];
 
+    /// The section whose title is `name`, ignoring case.
+    pub fn from_name(name: &str) -> Option<Section> {
+        Section::ALL
+            .into_iter()
+            .find(|s| s.title().eq_ignore_ascii_case(name))
+    }
+
     pub fn title(self) -> &'static str {
         match self {
             Section::General => "General",

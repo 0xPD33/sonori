@@ -4,7 +4,7 @@
 mod model;
 mod view;
 
-pub(crate) use model::fit_language;
+pub(crate) use model::{fit_language, Section};
 
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
@@ -393,6 +393,11 @@ impl SettingsWindow {
         if let Some(change) = self.view.release(&self.app_config) {
             self.save(change);
         }
+        self.window.request_redraw();
+    }
+
+    pub fn show_section(&mut self, section: Section) {
+        self.view.show_section(section);
         self.window.request_redraw();
     }
 

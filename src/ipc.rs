@@ -18,6 +18,7 @@ use tokio::sync::mpsc;
 
 use crate::hotkey::{HotkeyState, SharedHotkeyState};
 use crate::ui::cursor_overlay::SharedMenuControl;
+use crate::ui::settings_window::Section;
 use speechcore::{BackendStatus, BackendStatusState, ManualSessionCommand, TranscriptionMode};
 
 /// App-level actions that IPC, global shortcuts and the UI share.
@@ -59,8 +60,11 @@ pub enum IpcCommand {
     Language { code: String },
     /// Open or close the cursor-mode menu
     Menu,
-    /// Open the Settings window
-    Settings,
+    /// Open the Settings window, on a section if one is named
+    Settings {
+        #[serde(default)]
+        section: Option<String>,
+    },
 }
 
 /// niri and other compositors repeat a held key binding about every 40 ms after a
@@ -318,10 +322,25 @@ impl IpcServer {
                 }
                 IpcResponse::success("Menu toggled")
             }
-            IpcCommand::Settings => {
-                self.menu.request_settings();
+            IpcCommand::Settings { section: None } => {
+                self.menu.request_settings(None);
                 IpcResponse::success("Opening Settings")
             }
+            IpcCommand::Settings {
+                section: Some(name),
+            } => match Section::from_name(&name) {
+                Some(section) => {
+                    self.menu.request_settings(Some(section));
+                    IpcResponse::success(format!("Opening Settings on {}", section.title()))
+                }
+                None => {
+                    let names: Vec<_> = Section::ALL.iter().map(|s| s.title()).collect();
+                    IpcResponse::error(format!(
+                        "No section \"{name}\"; choose one of {}",
+                        names.join(", ")
+                    ))
+                }
+            },
             IpcCommand::Menu => IpcResponse::error("The menu needs display_mode = \"Cursor\""),
             IpcCommand::Start => self.send_manual(
                 ManualSessionCommand::StartSession { responder: None },

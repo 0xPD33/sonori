@@ -249,6 +249,13 @@ impl View {
         }
     }
 
+    pub fn show_section(&mut self, section: Section) {
+        if self.section != section {
+            self.section = section;
+            self.scroll = 0.0;
+        }
+    }
+
     pub fn toast(&mut self, message: impl Into<String>) {
         self.toast = Some((message.into(), Instant::now()));
     }
@@ -302,12 +309,7 @@ impl View {
                 self.dropdown = None;
                 self.pending = None;
             }
-            Hit::Nav(section) => {
-                if self.section != section {
-                    self.section = section;
-                    self.scroll = 0.0;
-                }
-            }
+            Hit::Nav(section) => self.show_section(section),
             Hit::Close => return Action::Close,
             Hit::Flag(Flag::Magic) => return Action::ToggleMagic,
             Hit::Flag(flag) if !flag.get(config) && flag.asks_first() => {
