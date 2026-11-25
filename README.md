@@ -49,6 +49,10 @@ Real-time or on-demand transcription, entirely on your device.
 - **Type Mode** - Inserts the text through the input method protocol on niri and Sway: no clipboard and no key events
 - **Sound Feedback** - Audio cues for recording state changes
 - **Magic Mode** - Post-process transcriptions through a local LLM to clean up grammar, remove filler words, and improve readability
+- **Words While You Speak** (off by default) - The bubble shows your words while you dictate. It needs a GPU and a fast model such as Parakeet; see [CONFIGURATION.md](CONFIGURATION.md#live-words-ui_configlive_text)
+- **Training Data** (off by default) - Saves the audio and text of each dictation in the NeMo manifest format, so you can test or fine-tune a model on your own voice; see [CONFIGURATION.md](CONFIGURATION.md#training-data-training_data)
+
+Sonori keeps no dictation on disk unless you turn on the history or the training data. Settings shows a warning before either turns on.
 
 ### Roadmap
 
