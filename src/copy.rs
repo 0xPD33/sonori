@@ -105,7 +105,7 @@ pub fn paste_with_shift(paste_shortcut: &str) -> bool {
 
 /// The app ID of the focused window, from the compositor's IPC. None on a
 /// compositor without one (GNOME, KDE) and when no window has focus.
-fn focused_app_id() -> Option<String> {
+pub fn focused_app_id() -> Option<String> {
     let (program, args): (&str, &[&str]) = if std::env::var_os("NIRI_SOCKET").is_some() {
         ("niri", &["msg", "--json", "focused-window"])
     } else if std::env::var_os("SWAYSOCK").is_some() {

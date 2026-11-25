@@ -39,15 +39,26 @@ pub enum DeliveryOutcome {
 /// The latest delivered transcript. `seq` grows with each delivery, so the UI
 /// can tell a new delivery from one it already showed. `received` counts final
 /// transcripts on their way to delivery, so the UI knows a paste is coming.
+/// `live` is the text of the session that records now; `live_seq` grows with it.
 #[derive(Debug, Clone, Default)]
 pub struct Delivery {
     pub received: u64,
     pub seq: u64,
     pub text: String,
     pub outcome: Option<DeliveryOutcome>,
+    pub live_seq: u64,
+    pub live: String,
+    /// Words after `live` that the model may still change.
+    pub live_tentative: String,
 }
 
 impl Delivery {
+    pub fn set_live(&mut self, text: String, tentative: String) {
+        self.live_seq += 1;
+        self.live = text;
+        self.live_tentative = tentative;
+    }
+
     pub fn record(&mut self, text: String, outcome: DeliveryOutcome) {
         self.seq += 1;
         self.text = text;
@@ -209,6 +220,12 @@ const BUBBLE_MAX_WIDTH: f32 = 420.0;
 const BUBBLE_FONT_SCALE: f32 = 1.4;
 const TIMER_FONT_SCALE: f32 = 1.1;
 const BUBBLE_MAX_CHARS: usize = 170;
+/// Lines of text in the bubble while the user speaks, and after a session that
+/// showed live text. Longer text shows only its end.
+const LIVE_LINES: usize = 2;
+const LIVE_DONE_LINES: usize = 3;
+/// Opacity of live words that the model may still change.
+const TENTATIVE_ALPHA: f32 = 0.45;
 /// Width kept free at the right of the bubble for its close button, in logical px.
 const CLOSE_SPACE: f32 = 18.0;
 /// How long the startup notice stays.
@@ -258,6 +275,19 @@ struct Bubble {
     note: String,
     error: bool,
     size: (f32, f32),
+    /// When each word of `body` starts to fade in. A word that the bubble
+    /// already showed keeps its old time, so only new words fade.
+    word_since: Vec<Instant>,
+    note_since: Instant,
+    /// Words of `body` from this index on may still change; they show dimmer.
+    dim_from: usize,
+}
+
+/// A word of the session text and when the bubble first showed it.
+#[derive(Clone)]
+struct ShownWord {
+    word: String,
+    since: Instant,
 }
 
 const MAX_SHAPES: usize = 128;
@@ -272,6 +302,13 @@ const COMPANION_GAP: f32 = 16.0;
 /// about 0.6 s.
 const COMPANION_STIFFNESS: f32 = 60.0;
 const COMPANION_DAMPING: f32 = 13.0;
+/// The bubble trails the tile: it lags behind by the tile's velocity times
+/// `BUBBLE_LAG` seconds, at most `BUBBLE_LAG_MAX` logical px, and swings back
+/// on a softer spring with a small overshoot.
+const BUBBLE_LAG: f32 = 0.07;
+const BUBBLE_LAG_MAX: f32 = 28.0;
+const BUBBLE_STIFFNESS: f32 = 110.0;
+const BUBBLE_DAMPING: f32 = 12.0;
 /// Without a pointer report this long into a session, the tile shows at the bottom.
 const POINTER_WAIT: Duration = Duration::from_millis(400);
 /// How long Sonori waits for the compositor to say which output has focus.
@@ -360,6 +397,9 @@ pub struct CursorOverlay {
     tile_scale: Spring,
     tile_size: Spring,
     bubble_lift: Spring,
+    /// Top left of the bubble, trailing its place beside the tile. `None` puts
+    /// a new bubble there at once.
+    bubble_pos: Option<(Spring, Spring)>,
     bubble_since: Instant,
     /// Loudest recent level; bars show levels relative to it, so any mic gain moves them.
     peak: f32,
@@ -371,6 +411,11 @@ pub struct CursorOverlay {
     texts: Vec<String>,
     outcome: Option<DeliveryOutcome>,
     bubble: Option<Bubble>,
+    /// The session text words the bubble shows or showed, with their fade times.
+    shown_words: Vec<ShownWord>,
+    /// Last live text seen; a session that showed live text ends with its tail.
+    live_seq: u64,
+    live_used: bool,
     /// A failed paste keeps its bubble until the user closes it.
     bubble_pinned: bool,
     /// The surfaces failed to open; no retry until this recording ends.
@@ -384,7 +429,8 @@ pub struct CursorOverlay {
     close_hover: bool,
     /// When the startup notice is due; it waits briefly for the hotkey to bind.
     notice_due: Option<Instant>,
-    history_enabled: bool,
+    /// Training data capture is on: the tile shows a dot while it records.
+    capturing: bool,
     /// Latest transcripts, newest first, for the menu's Recent list.
     recent: std::collections::VecDeque<String>,
     /// The session whose text `recent[0]` holds; a late chunk updates it.
@@ -448,6 +494,7 @@ impl CursorOverlay {
             tile_scale: Spring::at(1.0),
             tile_size: Spring::at(1.0),
             bubble_lift: Spring::default(),
+            bubble_pos: None,
             bubble_since: now,
             peak: PEAK_FLOOR,
             seen_seq,
@@ -457,6 +504,9 @@ impl CursorOverlay {
             texts: Vec::new(),
             outcome: None,
             bubble: None,
+            shown_words: Vec::new(),
+            live_seq: 0,
+            live_used: false,
             bubble_pinned: false,
             surface_failed: false,
             bubble_at: None,
@@ -464,7 +514,7 @@ impl CursorOverlay {
             cursor: CursorIcon::Default,
             close_hover: false,
             notice_due: Some(now),
-            history_enabled: config.history_config.enabled,
+            capturing: config.training_data.enabled,
             recent: std::collections::VecDeque::new(),
             recent_session: None,
             started: now,
@@ -479,10 +529,7 @@ impl CursorOverlay {
         self.display_mode = config.ui_config.display_mode;
         self.backend = config.backend_config.backend;
         self.model = config.general_config.model.clone();
-        self.history_enabled = config.history_config.enabled;
-        if !self.history_enabled {
-            self.recent.clear();
-        }
+        self.capturing = config.training_data.enabled;
     }
 
     /// Settings the menu changed since the last call.
@@ -796,6 +843,7 @@ impl CursorOverlay {
             _ => {}
         }
         self.collect_deliveries(now);
+        self.collect_live_text();
         self.show_notice_when_due(now);
 
         match self.phase.clone() {
@@ -894,6 +942,10 @@ impl CursorOverlay {
         self.texts.clear();
         self.outcome = None;
         self.bubble = None;
+        self.shown_words.clear();
+        // Only live text that arrives after the start belongs to this session.
+        self.live_seq = self.handles.delivery.read().live_seq;
+        self.live_used = false;
         self.bubble_pinned = false;
         self.bubble_at = None;
         self.drag = None;
@@ -946,6 +998,85 @@ impl CursorOverlay {
         (*at >= self.session_start).then(|| message.clone())
     }
 
+    /// Shows the newest live text while the session records or transcribes.
+    fn collect_live_text(&mut self) {
+        if !matches!(
+            self.phase,
+            Phase::Recording { .. } | Phase::Processing { .. }
+        ) {
+            return;
+        }
+        let delivery = self.handles.delivery.read();
+        if delivery.live_seq == self.live_seq {
+            return;
+        }
+        self.live_seq = delivery.live_seq;
+        let text = delivery.live.clone();
+        let tentative = delivery.live_tentative.clone();
+        drop(delivery);
+        self.live_used = true;
+        self.show_text(&text, &tentative, String::new(), false, LIVE_LINES);
+    }
+
+    /// Lays out the end of `text` and `tentative` in the bubble, at most
+    /// `lines` lines. Words the bubble already showed keep their place and do
+    /// not fade again; new and changed words fade in. `tentative` shows dimmer.
+    fn show_text(&mut self, text: &str, tentative: &str, note: String, error: bool, lines: usize) {
+        let now = Instant::now();
+        let stable = text.split_whitespace().count();
+        let words: Vec<&str> = text
+            .split_whitespace()
+            .chain(tentative.split_whitespace())
+            .collect();
+        let kept = align_words(&self.shown_words, &words);
+        let from = self.tail_start(&words, lines);
+        let offset = usize::from(from > 0);
+        let ellipsis = if from > 0 { "\u{2026} " } else { "" };
+        let body = format!("{ellipsis}{}", words[from..].join(" "));
+        // The ellipsis shows at once; it only marks the cut.
+        let mut known: Vec<Option<Instant>> = Vec::new();
+        if from > 0 {
+            known.push(Some(self.bubble_since));
+        }
+        known.extend_from_slice(&kept[from..]);
+        self.set_bubble_with(body, note, error, &known);
+        let since = match &mut self.bubble {
+            Some(bubble) => {
+                bubble.dim_from = offset + stable.saturating_sub(from);
+                bubble.word_since.clone()
+            }
+            None => Vec::new(),
+        };
+        self.shown_words = words
+            .iter()
+            .enumerate()
+            .map(|(i, word)| ShownWord {
+                word: word.to_string(),
+                since: if i < from {
+                    kept[i].unwrap_or(now)
+                } else {
+                    since.get(i - from + offset).copied().unwrap_or(now)
+                },
+            })
+            .collect();
+    }
+
+    /// The first word of the longest end of `words` that fits in `lines` lines.
+    fn tail_start(&mut self, words: &[&str], lines: usize) -> usize {
+        let limit = self.measure_bubble(&vec!["A"; lines].join("\n")).1 + 0.5;
+        let mut from = words.len();
+        while from > 0 {
+            let ellipsis = if from > 1 { "\u{2026} " } else { "" };
+            let candidate = format!("{ellipsis}{}", words[from - 1..].join(" "));
+            if self.measure_bubble(&candidate).1 > limit {
+                break;
+            }
+            from -= 1;
+        }
+        // At least the last word, also when it alone is wider than the bubble.
+        from.min(words.len().saturating_sub(1))
+    }
+
     fn show_result(&mut self, now: Instant) {
         let text = self.texts.join(" ");
         if text.is_empty() {
@@ -972,11 +1103,12 @@ impl CursorOverlay {
             Some(DeliveryOutcome::Failed(message)) => (message.clone(), true),
         };
         let unit = if words == 1 { "word" } else { "words" };
-        self.set_bubble(
-            shorten(&text, BUBBLE_MAX_CHARS),
-            format!("{note} · {words} {unit}"),
-            error,
-        );
+        let note = format!("{note} · {words} {unit}");
+        if self.live_used {
+            self.show_text(&text, "", note, error, LIVE_DONE_LINES);
+        } else {
+            self.set_bubble(shorten(&text, BUBBLE_MAX_CHARS), note, error);
+        }
         let since = match self.phase {
             Phase::Done { since, .. } => since,
             _ => now,
@@ -999,11 +1131,8 @@ impl CursorOverlay {
         });
     }
 
-    /// Keeps the session text for the menu's Recent list, unless history is off.
+    /// Keeps the session text for the menu's Recent list, in memory only.
     fn remember(&mut self, text: &str) {
-        if !self.history_enabled {
-            return;
-        }
         if self.recent_session == Some(self.session_start) {
             self.recent.pop_front();
         }
@@ -1076,9 +1205,23 @@ impl CursorOverlay {
     }
 
     fn set_bubble(&mut self, body: String, note: String, error: bool) {
+        self.set_bubble_with(body, note, error, &[]);
+    }
+
+    /// `known` gives the fade start of words the bubble already showed, by index
+    /// in `body`; the other words fade in one after another.
+    fn set_bubble_with(
+        &mut self,
+        body: String,
+        note: String,
+        error: bool,
+        known: &[Option<Instant>],
+    ) {
+        let now = Instant::now();
         if self.bubble.is_none() {
             self.bubble_at = None;
-            self.bubble_since = Instant::now();
+            self.bubble_pos = None;
+            self.bubble_since = now;
             self.bubble_lift = Spring::at(6.0);
         }
         let text = if note.is_empty() {
@@ -1087,11 +1230,31 @@ impl CursorOverlay {
             format!("{body}\n{note}")
         };
         let size = self.measure_bubble(&text);
+        let count = body.split_inclusive(char::is_whitespace).count();
+        let fresh = (0..count)
+            .filter(|&i| known.get(i).copied().flatten().is_none())
+            .count();
+        let stagger = WORD_STAGGER.min(REVEAL_SPAN / fresh.max(1) as u32);
+        let start = now + Duration::from_millis(80);
+        let mut next = start;
+        let word_since = (0..count)
+            .map(|i| match known.get(i).copied().flatten() {
+                Some(since) => since,
+                None => {
+                    let since = next;
+                    next += stagger;
+                    since
+                }
+            })
+            .collect();
         self.bubble = Some(Bubble {
             body,
             note,
             error,
             size,
+            word_since,
+            note_since: next + Duration::from_millis(100),
+            dim_from: usize::MAX,
         });
     }
 
@@ -1402,8 +1565,13 @@ impl CursorOverlay {
             self.anchor = Some((width / 2.0, height - 140.0 * sf));
         }
         if self.bubble.as_ref().is_some_and(|b| b.size.0 == 0.0) {
-            if let Some(bubble) = self.bubble.take() {
-                self.set_bubble(bubble.body, bubble.note, bubble.error);
+            if let Some(mut bubble) = self.bubble.take() {
+                bubble.size = if bubble.note.is_empty() {
+                    self.measure_bubble(&bubble.body)
+                } else {
+                    self.measure_bubble(&format!("{}\n{}", bubble.body, bubble.note))
+                };
+                self.bubble = Some(bubble);
             }
         }
         // No pointer report yet: after a short wait, use the bottom of the output.
@@ -1442,6 +1610,26 @@ impl CursorOverlay {
                         y.step(target.1, COMPANION_STIFFNESS, COMPANION_DAMPING, dt);
                         self.anchor = Some((x.x, y.x));
                         self.anchor_velocity = (x.v, y.v);
+                    }
+                }
+            }
+            if let (Some(bubble), Some((cx, cy))) = (&self.bubble, self.anchor) {
+                let (ox, oy) = bubble_origin(cx, cy, bubble.size, sf, width);
+                let (vx, vy) = if follow {
+                    self.anchor_velocity
+                } else {
+                    (0.0, 0.0)
+                };
+                let reach = BUBBLE_LAG_MAX * sf;
+                let target = (
+                    ox - (vx * BUBBLE_LAG).clamp(-reach, reach),
+                    oy - (vy * BUBBLE_LAG).clamp(-reach, reach),
+                );
+                match &mut self.bubble_pos {
+                    None => self.bubble_pos = Some((Spring::at(target.0), Spring::at(target.1))),
+                    Some((x, y)) => {
+                        x.step(target.0, BUBBLE_STIFFNESS, BUBBLE_DAMPING, dt);
+                        y.step(target.1, BUBBLE_STIFFNESS, BUBBLE_DAMPING, dt);
                     }
                 }
             }
@@ -1546,6 +1734,7 @@ impl CursorOverlay {
             renderer.shapes.draw(&mut pass, 0..count as u32);
         }
 
+        let timer_drawn = scene.timer.is_some();
         if let Some((text, x, y, scale, alpha)) = scene.timer {
             renderer.text.render_text(
                 &view,
@@ -1559,10 +1748,20 @@ impl CursorOverlay {
                 (40.0 * sf) as u32,
                 None,
             );
-        } else if let (Some((x, y, alpha)), Some(bubble)) = (scene.bubble_text, &self.bubble) {
+        }
+        if let (Some((x, y, alpha)), Some(bubble)) = (scene.bubble_text, &self.bubble) {
+            if timer_drawn {
+                // glyphon keeps one vertex buffer, so the timer must draw before
+                // the bubble text is prepared.
+                self.queue.submit(Some(encoder.finish()));
+                encoder = self
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("Cursor Overlay Bubble Text"),
+                    });
+            }
             let pad = (13.0 * sf, 10.0 * sf);
-            let elapsed = now.duration_since(self.bubble_since);
-            let spans = reveal_spans(bubble, elapsed, alpha);
+            let spans = reveal_spans(bubble, now, alpha);
             renderer.text.render_spans(
                 &view,
                 &mut encoder,
@@ -1640,9 +1839,7 @@ impl CursorOverlay {
                 .iter()
                 .position(|p| p.backend == self.backend && p.model == model),
             model: model.to_string(),
-            recent: self
-                .history_enabled
-                .then(|| self.recent.iter().cloned().collect()),
+            recent: Some(self.recent.iter().cloned().collect()),
         }
     }
 
@@ -1771,9 +1968,27 @@ impl CursorOverlay {
                     extra: [0.0; 4],
                 });
             }
+            if self.capturing && matches!(self.phase, Phase::Recording { .. }) {
+                // Inside the top right corner, clear of the bars.
+                let r = 3.5 * k;
+                let inset = 0.55 * TILE_CORNER * th;
+                let (dx, dy) = (tx + tw / 2.0 - inset, cy - th / 2.0 + inset);
+                scene.shapes.push(Shape {
+                    rect: [dx - r, dy - r, 2.0 * r, 2.0 * r],
+                    color: [0.86, 0.27, 0.24, 0.9 * alpha],
+                    params: [PANEL, r, FLAT, 0.0],
+                    extra: [0.0; 4],
+                });
+            }
         }
         if let Some((label, label_w)) = timer_label {
             self.add_timer(&mut scene, label, label_w, cx, cy + th / 2.0, sf, alpha);
+        }
+        if matches!(
+            self.phase,
+            Phase::Recording { .. } | Phase::Processing { .. } | Phase::Cancelled { .. }
+        ) {
+            self.add_live_bubble(&mut scene, now, cx, cy, sf, width, alpha);
         }
         if matches!(
             self.phase,
@@ -1791,6 +2006,50 @@ impl CursorOverlay {
         } else {
             (1.0 - (now - until).as_secs_f32() / FADE_OUT.as_secs_f32()).max(0.0)
         }
+    }
+
+    /// Top left of the bubble: its trailing spring, else its place beside the tile.
+    fn bubble_place(&self, bubble: &Bubble, cx: f32, cy: f32, sf: f32, width: f32) -> (f32, f32) {
+        self.bubble_pos.map_or_else(
+            || bubble_origin(cx, cy, bubble.size, sf, width),
+            |(x, y)| (x.x, y.x),
+        )
+    }
+
+    /// The live text beside the tile. It takes no pointer input and has no close button.
+    #[allow(clippy::too_many_arguments)]
+    fn add_live_bubble(
+        &self,
+        scene: &mut Scene,
+        now: Instant,
+        cx: f32,
+        cy: f32,
+        sf: f32,
+        width: f32,
+        tile_alpha: f32,
+    ) {
+        let Some(bubble) = &self.bubble else {
+            return;
+        };
+        let fade_in = (now.duration_since(self.bubble_since).as_secs_f32()
+            / BUBBLE_FADE_IN.as_secs_f32())
+        .min(1.0);
+        let alpha = fade_in * tile_alpha;
+        let (bx, by) = self.bubble_place(bubble, cx, cy, sf, width);
+        let by = by + self.bubble_lift.x * sf;
+        let (w, h) = bubble.size;
+        scene.shapes.push(glass(
+            bx + w / 2.0,
+            by + h / 2.0,
+            w / 2.0,
+            h / 2.0,
+            14.0 * sf,
+            18.0 * sf,
+            0.82,
+            0.0,
+            alpha,
+        ));
+        scene.bubble_text = Some((bx, by, alpha));
     }
 
     fn add_bubble(&self, scene: &mut Scene, now: Instant, cx: f32, cy: f32, sf: f32, width: f32) {
@@ -1812,7 +2071,7 @@ impl CursorOverlay {
         let fade_in = (now.duration_since(self.bubble_since).as_secs_f32()
             / BUBBLE_FADE_IN.as_secs_f32())
         .min(1.0);
-        let (bx, by) = bubble_origin(cx, cy, bubble.size, sf, width);
+        let (bx, by) = self.bubble_place(bubble, cx, cy, sf, width);
         let (bx, by) = self.bubble_at.unwrap_or((bx, by + self.bubble_lift.x * sf));
         let (w, h) = bubble.size;
 
@@ -2023,23 +2282,87 @@ struct Scene {
     labels: Vec<Label>,
 }
 
-/// The bubble text as spans whose words fade in one after another, then the note.
-fn reveal_spans(bubble: &Bubble, elapsed: Duration, alpha: f32) -> Vec<(&str, [f32; 4])> {
-    let words: Vec<&str> = bubble.body.split_inclusive(char::is_whitespace).collect();
-    let stagger = WORD_STAGGER
-        .as_secs_f32()
-        .min(REVEAL_SPAN.as_secs_f32() / words.len().max(1) as f32);
+/// Pairs each word of `new` with the same word in `old`, in order, as the
+/// longest common run of words. Returns the old fade start of each paired word.
+fn align_words(old: &[ShownWord], new: &[&str]) -> Vec<Option<Instant>> {
+    // Words before the window keep their place; the bubble shows only the end.
+    const WINDOW: usize = 160;
+    let mut kept = vec![None; new.len()];
+    let o0 = old.len().saturating_sub(WINDOW);
+    let n0 = new.len().saturating_sub(WINDOW);
+    for (i, word) in new.iter().enumerate().take(n0) {
+        kept[i] = old
+            .get(i)
+            .filter(|w| same_word(&w.word, word))
+            .map(|w| w.since);
+    }
+    let (a, b) = (&old[o0..], &new[n0..]);
+    let (n, m) = (a.len(), b.len());
+    let at = |i: usize, j: usize| i * (m + 1) + j;
+    let mut lcs = vec![0u16; (n + 1) * (m + 1)];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            lcs[at(i, j)] = if same_word(&a[i].word, b[j]) {
+                lcs[at(i + 1, j + 1)] + 1
+            } else {
+                lcs[at(i + 1, j)].max(lcs[at(i, j + 1)])
+            };
+        }
+    }
+    let (mut i, mut j) = (0, 0);
+    while i < n && j < m {
+        if same_word(&a[i].word, b[j]) {
+            kept[n0 + j] = Some(a[i].since);
+            i += 1;
+            j += 1;
+        } else if lcs[at(i + 1, j)] >= lcs[at(i, j + 1)] {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+    kept
+}
+
+/// Whether two words are the same apart from case and punctuation.
+fn same_word(a: &str, b: &str) -> bool {
+    let letters = |w: &str| {
+        w.chars()
+            .filter(|c| c.is_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect::<String>()
+    };
+    letters(a) == letters(b)
+}
+
+/// The bubble text as spans whose words fade in at their own times, then the note.
+fn reveal_spans(bubble: &Bubble, now: Instant, alpha: f32) -> Vec<(&str, [f32; 4])> {
     let fade = WORD_FADE.as_secs_f32();
-    let t = elapsed.as_secs_f32() - 0.08;
+    let shown = |since: Instant| {
+        let t = now.saturating_duration_since(since).as_secs_f32();
+        if now < since {
+            0.0
+        } else {
+            smoothstep(0.0, fade, t)
+        }
+    };
     let color = |a: f32| [TEXT_COLOR[0], TEXT_COLOR[1], TEXT_COLOR[2], a * alpha];
-    let mut spans: Vec<(&str, [f32; 4])> = words
-        .iter()
+    let mut spans: Vec<(&str, [f32; 4])> = bubble
+        .body
+        .split_inclusive(char::is_whitespace)
         .enumerate()
-        .map(|(i, word)| (*word, color(smoothstep(0.0, fade, t - i as f32 * stagger))))
+        .map(|(i, word)| {
+            let since = bubble.word_since.get(i).copied().unwrap_or(now);
+            let dim = if i >= bubble.dim_from {
+                TENTATIVE_ALPHA
+            } else {
+                1.0
+            };
+            (word, color(dim * shown(since)))
+        })
         .collect();
     if !bubble.note.is_empty() {
-        let start = words.len() as f32 * stagger + 0.1;
-        let a = 0.55 * smoothstep(0.0, fade, t - start);
+        let a = 0.55 * shown(bubble.note_since);
         spans.push(("\n", color(a)));
         spans.push((bubble.note.as_str(), color(a)));
     }

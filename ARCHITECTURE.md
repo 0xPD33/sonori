@@ -28,9 +28,14 @@ microphone ─▶ speechcore ─────────────────
 ```
 
 1. speechcore captures 16 kHz mono audio through PortAudio.
-2. In manual mode, speechcore keeps the audio of a session until the session
-   stops. Long sessions go to the backend in parts, cut at a pause. In
-   real-time mode, Silero VAD cuts the audio into speech segments.
+2. In manual mode, Silero VAD runs on the live audio. speechcore sends the
+   audio to the backend in parts while you speak, cut at a pause, and skips
+   parts with no speech. A session has no length limit, but it stops by itself
+   after `silence_stop_secs` without speech. After Stop, the microphone stays
+   open until the last word ends. With live words on, speechcore also
+   transcribes the audio of the current chunk again between parts and sends
+   the result as interim text. In real-time mode, Silero VAD cuts the audio
+   into speech segments.
 3. The backend transcribes each segment or part. speechcore cleans the text and
    sends it on a broadcast channel.
 4. `consume_transcripts` (`src/main.rs`) shows interim text and hands final
@@ -39,7 +44,8 @@ microphone ─▶ speechcore ─────────────────
 5. `finalize_transcripts` runs Magic Mode, adds a space between parts of one
    session, writes the history file, and queues the text for output.
 6. `output_worker` delivers each transcript in order, as the output mode says.
-   It records the result in the shared `Delivery` slot.
+   It records the result in the shared `Delivery` slot. When training data
+   capture is on, it then saves the session audio and a manifest line.
 
 ## Transcription modes
 
@@ -179,6 +185,7 @@ The UI does not draw frames while nothing changes. `about_to_wait` in
 | `doctor.rs` | `sonori doctor`: checks protocols, portals, helpers, the GPU, and microphones |
 | `sound_player.rs`, `sound_generator.rs` | Sound cues for recording and session events |
 | `transcript_writer.rs` | Appends transcripts to the history file |
+| `training_data.rs` | Saves session audio and a NeMo manifest line for each dictation |
 | `enhancement/` | Magic Mode: a local llama.cpp model rewrites the transcript |
 
 ### UI (`src/ui/`)

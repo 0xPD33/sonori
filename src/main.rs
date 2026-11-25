@@ -120,6 +120,12 @@ async fn main() -> anyhow::Result<()> {
         Some(path) => println!("Configuration loaded from {}", path.display()),
         None => println!("Configuration: using defaults (no config file found)"),
     }
+    if app_config.training_data.enabled {
+        eprintln!(
+            "Warning: training data capture is on. Sonori saves the audio and the text of every dictation in {}.",
+            app_config.training_data.dir
+        );
+    }
 
     // Set stable portal App ID env var early for consistent identity across launches
     if std::env::var_os("XDG_DESKTOP_PORTAL_APPLICATION_ID").is_none() {
@@ -517,6 +523,8 @@ impl FeedbackSink for Feedback {
 struct Output {
     text: String,
     mode: OutputMode,
+    /// Saved after the delivery, when training data capture is on.
+    capture: Option<Box<sonori::training_data::Capture>>,
 }
 
 async fn run_gui_mode(
@@ -749,16 +757,14 @@ async fn consume_transcripts(
         // final message for this utterance commits and supersedes it.
         if !message.is_final {
             let preview = {
+                let live = format!("{} {}", message.text, message.tentative);
                 let history = transcript_history.read();
-                if history.is_empty() {
-                    message.text
-                } else {
-                    format!("{} {}", history, message.text)
-                }
+                format!("{} {}", history, live.trim()).trim().to_string()
             };
             // Trailing ellipsis marks the live, provisional tail; the final
             // message replaces it with committed text (no marker).
             audio_visualization_data.write().transcript = format!("{preview} …");
+            delivery.write().set_live(message.text, message.tentative);
             continue;
         }
 
@@ -766,6 +772,7 @@ async fn consume_transcripts(
         let final_transcript = FinalTranscript {
             text: message.text,
             session_id: message.session_id,
+            record: message.record,
         };
         if final_tx.send(final_transcript).is_err() {
             break;
@@ -776,6 +783,7 @@ async fn consume_transcripts(
 struct FinalTranscript {
     text: String,
     session_id: Option<String>,
+    record: Option<Arc<speechcore::SessionRecord>>,
 }
 
 /// Runs Magic Mode, then commits each final transcript in arrival order.
@@ -796,8 +804,10 @@ async fn finalize_transcripts(
     while let Some(FinalTranscript {
         text: mut transcription,
         session_id,
+        record,
     }) = final_rx.recv().await
     {
+        let processed = transcription.clone();
         if let Some(enhancer) = &magic_mode_enhancer {
             let raw_transcription = transcription.clone();
             let enhancer = Arc::clone(enhancer);
@@ -825,13 +835,38 @@ async fn finalize_transcripts(
         audio_visualization_data.write().transcript = updated_transcript;
         *last_transcript.write() = transcription.clone();
 
-        let (history_enabled, history_path, output_mode) = {
+        let (history_enabled, history_path, output_mode, capture) = {
             let config = config_rx.borrow();
+            let capture = record
+                .filter(|_| config.training_data.enabled)
+                .map(|record| sonori::training_data::Capture {
+                    record,
+                    session_id: session_id.clone(),
+                    magic_text: (transcription != processed).then(|| transcription.clone()),
+                    text: processed,
+                    app_id: None,
+                    model: config.general_config.model.clone(),
+                    gpu: config.backend_config.gpu_enabled,
+                    vad_sensitivity: format!("{:?}", config.vad_config.sensitivity),
+                    output_mode: format!("{:?}", config.portal_config.output_mode),
+                });
             (
                 config.history_config.enabled,
                 config.history_config.path.clone(),
                 config.portal_config.output_mode,
+                capture,
             )
+        };
+        let capture = match capture {
+            Some(mut capture) => {
+                // Where the text goes; asked before the paste moves anything.
+                capture.app_id = tokio::task::spawn_blocking(sonori::copy::focused_app_id)
+                    .await
+                    .ok()
+                    .flatten();
+                Some(Box::new(capture))
+            }
+            None => None,
         };
         if let Err(e) = sonori::transcript_writer::append_to_transcript_history(
             &transcription,
@@ -851,6 +886,7 @@ async fn finalize_transcripts(
         let output = Output {
             text: segment_with_space,
             mode: output_mode,
+            capture,
         };
         if let Err(e) = output_tx.try_send(output) {
             match e {
@@ -902,12 +938,26 @@ async fn output_worker(
         None
     };
 
-    while let Some(Output { text, mode }) = output_rx.recv().await {
+    while let Some(Output {
+        text,
+        mode,
+        capture,
+    }) = output_rx.recv().await
+    {
         let paste_shortcut = config_rx.borrow().portal_config.paste_shortcut.clone();
         let shown = text.trim().to_string();
         let (outcome, restore) = deliver(text, mode, portal.as_ref(), paste_shortcut).await;
         if let ui::DeliveryOutcome::Failed(message) = &outcome {
             status.write().report_error(message.clone());
+        }
+        if let Some(capture) = capture {
+            let dir = config_rx.borrow().training_data.dir.clone();
+            let outcome = outcome.clone();
+            tokio::task::spawn_blocking(move || {
+                if let Err(e) = sonori::training_data::save(&dir, &capture, &outcome) {
+                    eprintln!("Failed to save training data: {e}");
+                }
+            });
         }
         delivery.write().record(shown, outcome);
         // Before the next transcript, so its save sees the user's content.
@@ -1084,13 +1134,27 @@ async fn handle_app_commands(
                 } else {
                     OutputMode::Paste
                 };
-                if output_tx.try_send(Output { text, mode }).is_err() {
+                if output_tx
+                    .try_send(Output {
+                        text,
+                        mode,
+                        capture: None,
+                    })
+                    .is_err()
+                {
                     status.write().report_error("Paste queue full; try again");
                 }
             }
             AppCommand::Deliver(text) => {
                 let mode = config_tx.borrow().portal_config.output_mode;
-                if output_tx.try_send(Output { text, mode }).is_err() {
+                if output_tx
+                    .try_send(Output {
+                        text,
+                        mode,
+                        capture: None,
+                    })
+                    .is_err()
+                {
                     status.write().report_error("Paste queue full; try again");
                 }
             }

@@ -47,9 +47,9 @@ The window has one theme only.
 | General | Hotkey, Hotkey mode, Listening, Output, Paste shortcut, Language, Magic Mode, Sounds, Volume | hotkey state, `portal_config.shortcut_mode`, `general_config.transcription_mode`, `portal_config.output_mode`, `portal_config.paste_shortcut`, `general_config.language`, Magic Mode (runtime), `sound_config.enabled`, `sound_config.volume` |
 | Speech | Three model cards; "Advanced: backend, model, GPU" with Backend, Model, Precision, Use the GPU, CPU threads | `backend_config.backend`, `general_config.model`, `backend_config.quantization_level`, `backend_config.gpu_enabled`, `backend_config.threads` |
 | Microphone | Microphone, Input level, Start listening | `audio_processor_config.input_device` (read-only), live level, `vad_config.sensitivity` |
-| Look | Cursor and Overlay cards; Text bubble (Cursor); Theme, Sound picture, Position, Text size, Recording dot, Typewriter effect, Clear on a new recording, Frame sync, Frame-rate cap (Overlay) | `ui_config.display_mode`, `ui_config.cursor_bubble`, `ui_config.*`, `display_config.*`, `manual_mode_config.clear_on_new_session` |
+| Look | Cursor and Overlay cards; Text bubble and Words while you speak (Cursor); Theme, Sound picture, Position, Text size, Recording dot, Typewriter effect, Clear on a new recording, Frame sync, Frame-rate cap (Overlay) | `ui_config.display_mode`, `ui_config.cursor_bubble`, `ui_config.live_text`, `ui_config.*`, `display_config.*`, `manual_mode_config.clear_on_new_session` |
 | Words | Vocabulary chips, Replacements ("heard → meant") | `whisper_cpp_options.initial_prompt`, `post_process_config.replacements` |
-| Advanced | Clean-up rules, Magic Mode model, Keep a history, Config file, Tray icon, Commands | `post_process_config.*`, `enhancement_config.enabled`, `history_config.enabled`, `window_behavior_config.show_in_system_tray` |
+| Advanced | Clean-up rules, Magic Mode model, Keep a history, Save dictations for training, Config file, Tray icon, Commands | `post_process_config.*`, `enhancement_config.enabled`, `history_config.enabled`, `training_data.enabled`, `window_behavior_config.show_in_system_tray` |
 
 The model cards are the quick menu presets (`PRESETS` in
 `src/ui/cursor_overlay/menu.rs`): Parakeet v2, Parakeet v3, Nemotron 3.5,
@@ -93,6 +93,13 @@ A change of model, backend, or precision can start a download. For these, a
 sheet asks first: "Switch to …? Sonori downloads this model the first time,
 then reloads it." After the user confirms, the window saves the config and
 sends `BackendCommand::Reload` to speechcore.
+
+"Keep a history" and "Save dictations for training" keep dictations on disk.
+Before either turns on, the same sheet says what Sonori saves, where, and
+that anyone who can open the file or folder can read it. "Words while you
+speak" keeps the model busy while the user speaks; its sheet explains that,
+and rates the current model and GPU setting. Off needs no confirmation. All
+three are off by default.
 
 Magic Mode and Listening change the running app. The Magic Mode switch sends
 `AppCommand::ToggleMagicMode`, as the quick menu does. A change of Listening

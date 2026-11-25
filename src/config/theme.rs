@@ -179,6 +179,10 @@ pub struct UiConfig {
     /// How long cursor mode shows the delivered text
     pub cursor_bubble: CursorBubble,
 
+    /// Show the words while the user dictates (default: off). The model then
+    /// also runs while the user speaks, so it needs a GPU and a fast model.
+    pub live_text: bool,
+
     /// Curated visual theme preset
     pub visual_theme: VisualThemePreset,
 
@@ -210,6 +214,7 @@ impl Default for UiConfig {
         Self {
             display_mode: DisplayMode::Cursor,
             cursor_bubble: CursorBubble::Brief,
+            live_text: false,
             visual_theme: VisualThemePreset::Focus,
             spectrogram_skin: SpectrogramSkin::Bars,
             font_size: 10.0,

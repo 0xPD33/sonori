@@ -144,7 +144,7 @@ impl Choice {
                     .collect()
             }
             Choice::Vsync => VSYNC.iter().map(|(_, name)| *name).collect(),
-            Choice::Vad => vec!["Easily", "Normal", "Only clear speech"],
+            Choice::Vad => vec!["Very easily", "Easily", "Normal", "Only clear speech"],
             Choice::Backend => BACKENDS.iter().map(|(_, name)| *name).collect(),
             Choice::Model => models(config.backend_config.backend).to_vec(),
             Choice::Precision => vec!["High", "Medium", "Low"],
@@ -198,9 +198,10 @@ impl Choice {
                 .position(|(value, _)| *value == c.display_config.vsync_mode)
                 .or(Some(0)),
             Choice::Vad => Some(match c.vad_config.sensitivity {
-                VadSensitivity::High => 0,
-                VadSensitivity::Medium => 1,
-                VadSensitivity::Low => 2,
+                VadSensitivity::VeryHigh => 0,
+                VadSensitivity::High => 1,
+                VadSensitivity::Medium => 2,
+                VadSensitivity::Low => 3,
             }),
             Choice::Backend => BACKENDS
                 .iter()
@@ -267,6 +268,7 @@ impl Choice {
             Choice::Vsync => c.display_config.vsync_mode = VSYNC[index].0.to_string(),
             Choice::Vad => {
                 c.vad_config.sensitivity = [
+                    VadSensitivity::VeryHigh,
                     VadSensitivity::High,
                     VadSensitivity::Medium,
                     VadSensitivity::Low,
@@ -316,6 +318,7 @@ pub enum Flag {
     MagicModel,
     ClearOnNew,
     Typewriter,
+    LiveText,
     RecordingDot,
     CleanUp,
     Fillers,
@@ -323,6 +326,7 @@ pub enum Flag {
     Capitalize,
     Punctuation,
     History,
+    TrainingData,
     Tray,
     Gpu,
 }
@@ -335,6 +339,7 @@ impl Flag {
             Flag::MagicModel => c.enhancement_config.enabled,
             Flag::ClearOnNew => c.manual_mode_config.clear_on_new_session,
             Flag::Typewriter => c.ui_config.typewriter_effect,
+            Flag::LiveText => c.ui_config.live_text,
             Flag::RecordingDot => c.ui_config.show_recording_indicator,
             Flag::CleanUp => c.post_process_config.enabled,
             Flag::Fillers => c.post_process_config.remove_fillers,
@@ -342,6 +347,7 @@ impl Flag {
             Flag::Capitalize => c.post_process_config.capitalize_sentences,
             Flag::Punctuation => c.post_process_config.ensure_terminal_punctuation,
             Flag::History => c.history_config.enabled,
+            Flag::TrainingData => c.training_data.enabled,
             Flag::Tray => c.window_behavior_config.show_in_system_tray,
             Flag::Gpu => c.backend_config.gpu_enabled,
         }
@@ -354,6 +360,7 @@ impl Flag {
             Flag::MagicModel => &mut c.enhancement_config.enabled,
             Flag::ClearOnNew => &mut c.manual_mode_config.clear_on_new_session,
             Flag::Typewriter => &mut c.ui_config.typewriter_effect,
+            Flag::LiveText => &mut c.ui_config.live_text,
             Flag::RecordingDot => &mut c.ui_config.show_recording_indicator,
             Flag::CleanUp => &mut c.post_process_config.enabled,
             Flag::Fillers => &mut c.post_process_config.remove_fillers,
@@ -361,10 +368,17 @@ impl Flag {
             Flag::Capitalize => &mut c.post_process_config.capitalize_sentences,
             Flag::Punctuation => &mut c.post_process_config.ensure_terminal_punctuation,
             Flag::History => &mut c.history_config.enabled,
+            Flag::TrainingData => &mut c.training_data.enabled,
             Flag::Tray => &mut c.window_behavior_config.show_in_system_tray,
             Flag::Gpu => &mut c.backend_config.gpu_enabled,
         };
         *field = value;
+    }
+
+    /// Turning it on has side effects the user must know first: dictations on
+    /// disk, or model work while the user speaks.
+    pub fn asks_first(self) -> bool {
+        matches!(self, Flag::History | Flag::TrainingData | Flag::LiveText)
     }
 
     fn effect(self) -> Effect {

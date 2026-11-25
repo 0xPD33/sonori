@@ -29,6 +29,16 @@ Realtime mode and sessions outside Wayland always use the fixed overlay.
   hover reach the apps under the pointer. A click on a text field moves the
   focus there, and the transcript is pasted there. The hotkey, tray, and IPC
   commands start, stop, and cancel sessions.
+- Live words (`ui_config.live_text`, off by default): while the user speaks,
+  a glass bubble beside the tile shows the session text, at most two lines;
+  longer text shows its end after an ellipsis. Words that two preview passes
+  agreed on are solid; the newest words are dim, because they can still
+  change. Words keep their place: only new and changed words fade in. The
+  bubble trails the tile on a softer spring, lags behind in the direction of
+  pointer motion by at most 28 px, and glides when it grows or changes side.
+  It takes no pointer input. After Stop, the same bubble stays, and the final
+  text replaces only the words that differ. Then it shows the delivery note
+  and the end of the text, at most three lines.
 - Processing: a soft wave runs across the bars, and the pill says
   "Transcribing…" ("Polishing…" while Magic Mode rewrites the text).
 - Done: the tile edge glows briefly and the tile fades. A glass bubble shows
@@ -74,8 +84,7 @@ functions) and one batch of glyphon labels. Its rows:
 - Display: Cursor or Overlay.
 - Recent: opens a list of the last five transcripts, newest first, one line
   each. A click delivers the transcript again with the current output mode.
-  The list lives in memory only. With the history off
-  (`history_config.enabled = false`), Sonori keeps no list and hides the row.
+  The list lives in memory only, so it does not depend on the history file.
 - More settings: opens the Settings window.
 
 The list gives one good model for each need:

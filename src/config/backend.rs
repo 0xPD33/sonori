@@ -11,26 +11,8 @@ pub enum VadSensitivity {
     Medium,
     /// More sensitive - catches quiet speech, may trigger on background noise
     High,
-}
-
-impl VadSensitivity {
-    /// Get the speech detection threshold for this sensitivity level
-    pub fn threshold(&self) -> f32 {
-        match self {
-            VadSensitivity::Low => 0.15,
-            VadSensitivity::Medium => 0.10,
-            VadSensitivity::High => 0.05,
-        }
-    }
-
-    /// Get the speech end threshold (hysteresis) for this sensitivity level
-    pub fn speech_end_threshold(&self) -> f32 {
-        match self {
-            VadSensitivity::Low => 0.12,
-            VadSensitivity::Medium => 0.08,
-            VadSensitivity::High => 0.03,
-        }
-    }
+    /// Most sensitive - for very quiet or distant speech in a quiet room
+    VeryHigh,
 }
 
 impl From<VadSensitivity> for speechcore::config::VadSensitivity {
@@ -39,6 +21,7 @@ impl From<VadSensitivity> for speechcore::config::VadSensitivity {
             VadSensitivity::Low => Self::Low,
             VadSensitivity::Medium => Self::Medium,
             VadSensitivity::High => Self::High,
+            VadSensitivity::VeryHigh => Self::VeryHigh,
         }
     }
 }
@@ -144,7 +127,7 @@ pub struct VadConfigSerde {
 impl Default for VadConfigSerde {
     fn default() -> Self {
         Self {
-            sensitivity: VadSensitivity::default(), // Medium sensitivity (threshold: 0.10, speech_end: 0.08)
+            sensitivity: VadSensitivity::default(), // Medium sensitivity (threshold: 0.4, speech_end: 0.25)
             hangbefore_frames: 5,                   // 50ms - capture more lead-in audio
             hangover_frames: 30,                    // 300ms - keep more trailing audio
             silence_tolerance_frames: 8,            // 80ms - tolerate more pauses

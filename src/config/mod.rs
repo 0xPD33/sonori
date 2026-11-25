@@ -126,16 +126,21 @@ impl Default for RealtimeModeConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ManualModeConfig {
-    /// Maximum recording duration in seconds (default: 600)
-    /// Buffer size is calculated as: max_recording_duration_secs * sample_rate
+    /// Longest audio in seconds that waits for Stop (default: 600). Only
+    /// `disable_chunking` keeps audio until Stop, so only then it limits a session.
     pub max_recording_duration_secs: u32,
+
+    /// Seconds without speech after which a session stops by itself
+    /// (default: 300). 0 turns the stop off.
+    pub silence_stop_secs: u32,
 
     /// Whether to clear previous transcript when starting new session
     pub clear_on_new_session: bool,
 
-    /// Duration of each chunk in seconds (default: 29.0)
-    /// Note: 29s avoids edge case where duration == chunk_size hits token limits
-    pub chunk_duration_seconds: f32,
+    /// Seconds of audio that each chunk aims for. Unset uses the value of the
+    /// loaded model: 29 s for Whisper's 30 s window, 60 s for Parakeet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chunk_duration_seconds: Option<f32>,
 
     /// EXPERIMENTAL: Disable chunking for manual mode transcription (default: false)
     /// When enabled, processes entire recording as single segment (no chunk limit)
@@ -161,8 +166,9 @@ impl Default for ManualModeConfig {
     fn default() -> Self {
         Self {
             max_recording_duration_secs: 600,
+            silence_stop_secs: 300,
             clear_on_new_session: true,
-            chunk_duration_seconds: 29.0, // 29s avoids edge case at exactly 30s boundary
+            chunk_duration_seconds: None, // The loaded model decides
             disable_chunking: false,      // Chunking enabled by default
         }
     }
@@ -191,22 +197,19 @@ fn is_default_transcript_history_path(path: &str) -> bool {
 }
 
 /// Configuration for debugging and development
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DebugConfig {
     /// Whether to log statistics
     pub log_stats_enabled: bool,
-    /// Whether to save manual mode audio to WAV files for debugging
-    pub save_manual_audio_debug: bool,
-    /// Directory to save debug recordings (default: "recordings")
-    pub recording_dir: String,
 }
 
 /// Configuration for the persistent transcript history file
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TranscriptHistoryConfig {
-    /// Append every final transcript to the history file
+    /// Append every final transcript to the history file (default: off). The
+    /// Settings window asks for confirmation before it turns this on.
     pub enabled: bool,
     /// History file (default: ~/.cache/sonori/transcript_history.txt). Skipped
     /// when serializing the default, so each user keeps their own home path.
@@ -217,8 +220,28 @@ pub struct TranscriptHistoryConfig {
 impl Default for TranscriptHistoryConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             path: default_transcript_history_path(),
+        }
+    }
+}
+
+/// Saves the audio and the text of every dictation, as data to train or test
+/// speech models.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TrainingDataConfig {
+    /// Default: off. The Settings window asks for confirmation before it turns this on.
+    pub enabled: bool,
+    /// Folder for `manifest.jsonl` and the `audio/` folder. A leading `~/` means home.
+    pub dir: String,
+}
+
+impl Default for TrainingDataConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            dir: "~/.local/share/sonori/training-data".to_string(),
         }
     }
 }
@@ -231,16 +254,6 @@ pub struct SoundConfig {
     pub enabled: bool,
     /// Sound volume (0.0-1.0)
     pub volume: f32,
-}
-
-impl Default for DebugConfig {
-    fn default() -> Self {
-        Self {
-            log_stats_enabled: false,
-            save_manual_audio_debug: false,
-            recording_dir: "recordings".to_string(),
-        }
-    }
 }
 
 /// Configuration for transcription post-processing
@@ -386,6 +399,9 @@ pub struct AppConfig {
     /// Persistent transcript history
     pub history_config: TranscriptHistoryConfig,
 
+    /// Audio and text of every dictation, saved to disk
+    pub training_data: TrainingDataConfig,
+
     /// Transcription post-processing configuration
     pub post_process_config: PostProcessConfig,
 
@@ -429,6 +445,7 @@ impl Default for AppConfig {
             sound_config: SoundConfig::default(),
             debug_config: DebugConfig::default(),
             history_config: TranscriptHistoryConfig::default(),
+            training_data: TrainingDataConfig::default(),
             post_process_config: PostProcessConfig::default(),
             enhancement_config: EnhancementConfig::default(),
             ui_config: UiConfig::default(),
@@ -457,7 +474,10 @@ impl From<AppConfig> for speechcore::SpeechConfig {
             },
             manual_mode_config: speechcore::config::ManualModeConfig {
                 max_recording_duration_secs: config.manual_mode_config.max_recording_duration_secs,
+                silence_stop_secs: config.manual_mode_config.silence_stop_secs,
                 clear_on_new_session: config.manual_mode_config.clear_on_new_session,
+                record_sessions: config.training_data.enabled,
+                live_preview: config.ui_config.live_text,
                 chunk_duration_seconds: config.manual_mode_config.chunk_duration_seconds,
                 disable_chunking: config.manual_mode_config.disable_chunking,
             },
@@ -492,8 +512,6 @@ impl From<AppConfig> for speechcore::SpeechConfig {
             },
             debug_config: speechcore::config::DebugConfig {
                 log_stats_enabled: config.debug_config.log_stats_enabled,
-                save_manual_audio_debug: config.debug_config.save_manual_audio_debug,
-                recording_dir: config.debug_config.recording_dir,
             },
             post_process_config: speechcore::config::PostProcessConfig {
                 enabled: config.post_process_config.enabled,
@@ -884,6 +902,16 @@ fn migrate_legacy_keys(user: &mut toml::Value) {
             portal.insert("paste_shortcut".into(), "auto".into());
         }
     }
+    // Older releases wrote `history_config.enabled = true` into every config
+    // without a warning. A file without `training_data` comes from them.
+    if !root.contains_key("training_data") {
+        if let Some(history) = root
+            .get_mut("history_config")
+            .and_then(toml::Value::as_table_mut)
+        {
+            history.insert("enabled".into(), false.into());
+        }
+    }
     if let Some(manual) = root
         .get_mut("manual_mode_config")
         .and_then(toml::Value::as_table_mut)
@@ -891,12 +919,24 @@ fn migrate_legacy_keys(user: &mut toml::Value) {
         // Chunk overlap was never implemented.
         manual.remove("enable_chunk_overlap");
         manual.remove("chunk_overlap_seconds");
+        // Older releases wrote their default 29.0 into every config. The loaded
+        // model now picks the chunk length.
+        if manual
+            .get("chunk_duration_seconds")
+            .and_then(toml::Value::as_float)
+            == Some(29.0)
+        {
+            manual.remove("chunk_duration_seconds");
+        }
     }
     let legacy_path = root
         .get_mut("debug_config")
         .and_then(toml::Value::as_table_mut)
         .and_then(|debug| {
-            // History is on by default now; the old default `false` is not a choice.
+            // `training_data` replaces the debug recordings, which held only the
+            // last part of a long session.
+            debug.remove("save_manual_audio_debug");
+            debug.remove("recording_dir");
             debug.remove("save_transcript_history");
             debug.remove("transcript_history_path")
         });

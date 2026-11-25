@@ -109,7 +109,9 @@ struct Dropdown {
 /// A change that waits for the user to confirm it in the sheet.
 struct Pending {
     change: Change,
-    name: String,
+    title: String,
+    body: String,
+    confirm: &'static str,
     since: Instant,
 }
 
@@ -308,6 +310,9 @@ impl View {
             }
             Hit::Close => return Action::Close,
             Hit::Flag(Flag::Magic) => return Action::ToggleMagic,
+            Hit::Flag(flag) if !flag.get(config) && flag.asks_first() => {
+                self.ask_to_turn_on(flag, config)
+            }
             Hit::Flag(flag) => return Action::Save(Change::Flag(flag, !flag.get(config))),
             Hit::Choose(choice, index) => return self.choose(choice, index, config),
             Hit::OpenSelect(choice) => {
@@ -337,7 +342,7 @@ impl View {
             }
             Hit::Preset(index) => {
                 if preset_of(config) != Some(index) {
-                    self.ask(Change::Preset(index), PRESETS[index].name.to_string());
+                    self.ask_switch(Change::Preset(index), PRESETS[index].name.to_string());
                 }
             }
             Hit::Display(mode) => {
@@ -471,15 +476,57 @@ impl View {
             Choice::Precision => format!("{} precision", label.to_lowercase()),
             _ => label,
         };
-        self.ask(change, name);
+        self.ask_switch(change, name);
         Action::None
     }
 
-    fn ask(&mut self, change: Change, name: String) {
+    fn ask_switch(&mut self, change: Change, name: String) {
+        self.ask(
+            change,
+            format!("Switch to {name}?"),
+            "Sonori downloads this model the first time, then reloads it. Dictation pauses until it is ready.".to_string(),
+            "Switch",
+        );
+    }
+
+    /// The user reads the side effects before the switch turns on.
+    fn ask_to_turn_on(&mut self, flag: Flag, config: &AppConfig) {
+        let (title, body, confirm) = match flag {
+            Flag::LiveText => (
+                "Show words while you speak?",
+                format!(
+                    "Sonori transcribes your speech again about twice a second and shows the words beside the pointer. Dim words can still change. The pasted text comes from the full transcription, so it can differ a little. This keeps the model busy while you speak: it needs a GPU and a fast model, such as Parakeet. Long dictations are then cut every 20 s instead of at the model's length. Applies after a restart.\n\n{}",
+                    live_text_fit(config)
+                ),
+                "Turn on",
+            ),
+            Flag::TrainingData => (
+                "Save dictations for training?",
+                format!(
+                    "Sonori will save the audio and the text of every dictation in {}. Anyone who can open this folder can hear and read them, also passwords and private things that you dictate. One hour of dictation uses about 115 MB. Applies after a restart.",
+                    config.training_data.dir
+                ),
+                "Save my dictations",
+            ),
+            _ => (
+                "Keep a history?",
+                format!(
+                    "Sonori will save the text of every dictation in {}. Anyone who can open this file can read them, also passwords and private things that you dictate.",
+                    super::home_relative(&config.history_config.path)
+                ),
+                "Keep a history",
+            ),
+        };
+        self.ask(Change::Flag(flag, true), title.to_string(), body, confirm);
+    }
+
+    fn ask(&mut self, change: Change, title: String, body: String, confirm: &'static str) {
         self.dropdown = None;
         self.pending = Some(Pending {
             change,
-            name,
+            title,
+            body,
+            confirm,
             since: Instant::now(),
         });
     }
@@ -997,6 +1044,11 @@ impl View {
                         "How long the pasted text stays next to the pointer.",
                         Control::Segmented(Choice::Bubble),
                     ));
+                    v.push(row(
+                        "Words while you speak",
+                        "Shows the text beside the pointer while you dictate. Needs a GPU and a fast model, such as Parakeet. Applies after a restart.",
+                        Control::Switch(Flag::LiveText),
+                    ));
                 } else {
                     v.push(Item::Group("Overlay"));
                     v.push(row(
@@ -1084,11 +1136,16 @@ impl View {
                 v.push(Item::Group("Files"));
                 v.push(row(
                     "Keep a history",
-                    format!(
-                        "Saves every dictation to {} and lists the last five under Recent in the quick menu. Off: Sonori saves no transcripts, and Recent is hidden.",
-                        cx.history_path
-                    ),
+                    format!("Saves the text of every dictation to {}.", cx.history_path),
                     Control::Switch(Flag::History),
+                ));
+                v.push(row(
+                    "Save dictations for training",
+                    format!(
+                        "Saves the audio and the text of every dictation to {}, to train or test speech models.",
+                        cx.config.training_data.dir
+                    ),
+                    Control::Switch(Flag::TrainingData),
                 ));
                 v.push(row(
                     "Config file",
@@ -1950,22 +2007,31 @@ impl View {
     }
 
     fn draw_sheet(&mut self, ui: &mut Ui, g: Rect, now: Instant) {
-        let Some(pending) = &self.pending else {
+        let Some((title, body, confirm, since)) = self
+            .pending
+            .as_ref()
+            .map(|p| (p.title.clone(), p.body.clone(), p.confirm, p.since))
+        else {
             return;
         };
         let sf = ui.sf;
         let px = |v: f32| v * sf;
-        let t = now.duration_since(pending.since).as_secs_f32() / SHEET_FADE.as_secs_f32();
+        let t = now.duration_since(since).as_secs_f32() / SHEET_FADE.as_secs_f32();
         if t < 1.0 {
             self.animating = true;
         }
         let fade = 1.0 - (1.0 - t.min(1.0)).powi(3);
-        let title = format!("Switch to {}?", pending.name);
         fill(ui, g, CORNER, [0.055, 0.07, 0.094, 0.25 * fade]);
         let w = px(340.0);
         let pad = px(18.0);
-        let para = "Sonori downloads this model the first time, then reloads it. Dictation pauses until it is ready.";
-        let lines = self.wrap(ui, para, 13.0, false, w - 2.0 * pad);
+        // Paragraphs are split by a blank line, which stays as an empty line.
+        let mut lines = Vec::new();
+        for (i, paragraph) in body.split("\n\n").enumerate() {
+            if i > 0 {
+                lines.push(String::new());
+            }
+            lines.extend(self.wrap(ui, paragraph, 13.0, false, w - 2.0 * pad));
+        }
         let line = px(13.0 * 1.5);
         let h =
             2.0 * pad + px(16.0 * LABEL_LINE + 10.0) + line * lines.len() as f32 + px(14.0 + 29.0);
@@ -2001,7 +2067,7 @@ impl View {
             ly += line;
         }
         let by = y + h - pad - px(29.0);
-        let switch_w = ui.measure("Switch", 12.5, true) + px(24.0);
+        let switch_w = ui.measure(confirm, 12.5, true) + px(24.0);
         let cancel_w = ui.measure("Cancel", 12.5, true) + px(24.0);
         let switch = [x + w - pad - switch_w, by, switch_w, px(29.0)];
         let cancel = [switch[0] - px(8.0) - cancel_w, by, cancel_w, px(29.0)];
@@ -2015,13 +2081,32 @@ impl View {
         button(
             ui,
             switch,
-            "Switch",
+            confirm,
             true,
             self.hover == Some(Hit::SheetConfirm),
         );
         self.target(cancel, Hit::SheetCancel);
         self.target(switch, Hit::SheetConfirm);
         ui.alpha = 1.0;
+    }
+}
+
+/// How well the current model and GPU setting suit live words.
+fn live_text_fit(config: &AppConfig) -> String {
+    use speechcore::BackendType;
+    let model = &config.general_config.model;
+    if !config.backend_config.gpu_enabled {
+        return format!("Your setup: {model} without the GPU. The words will come late, and Stop can take longer.");
+    }
+    match config.backend_config.backend {
+        BackendType::Parakeet => format!("Your setup: {model} on the GPU. This suits live words."),
+        BackendType::Nemotron => format!("Your setup: {model} streams its own live words."),
+        BackendType::Moonshine => {
+            format!("Your setup: {model} on the GPU. Small and fast, but less accurate.")
+        }
+        _ => format!(
+            "Your setup: {model}, a Whisper model. Its passes are slow; Parakeet works better."
+        ),
     }
 }
 

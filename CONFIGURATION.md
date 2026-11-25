@@ -147,13 +147,14 @@ max_buffer_duration_sec = 30.0    # Maximum audio buffer duration for VAD histor
 max_segment_count = 20            # Maximum number of speech segments to buffer
 
 [manual_mode_config]
-max_recording_duration_secs = 600 # Maximum recording time per session (10 minutes)
+max_recording_duration_secs = 600 # Limit for disable_chunking only (10 minutes)
+silence_stop_secs = 300           # Stop after 5 minutes without speech; 0 = never
 clear_on_new_session = true       # Clear transcript when starting new session
-chunk_duration_seconds = 29.0     # Chunk size in seconds (29s recommended to avoid 30s boundary issues)
+# chunk_duration_seconds = 60.0   # Optional. Unset: the loaded model decides
 disable_chunking = false          # Experimental: Disable chunking for no-limit mode
 
 [vad_config]
-sensitivity = "Medium"            # Voice Activity Detection sensitivity preset
+sensitivity = "Medium"            # Low, Medium, High, or VeryHigh
                                    # Low: Reduces false positives in noisy environments
                                    # Medium: Balanced for most environments (recommended)
                                    # High: Catches quiet speech, may trigger on background noise
@@ -228,6 +229,7 @@ show_in_system_tray = true            # Show icon in system tray
 [ui_config]
 display_mode = "Cursor"              # "Cursor": a tile at the pointer and a bubble; "Overlay": the fixed panel
 cursor_bubble = "Brief"              # How long cursor mode shows the text: "Brief", "Long", or "Off"
+live_text = false                    # Show the words while you dictate; needs a GPU and a fast model
 visual_theme = "Focus"               # Focus, Pulse, Terminal (the fixed overlay)
 spectrogram_skin = "Bars"            # Bars, Waveform, Meter
 font_size = 10.0                     # Transcript font size
@@ -239,12 +241,14 @@ typewriter_effect = false            # Animate text reveal in manual mode
 
 [debug_config]
 log_stats_enabled = false             # Enable detailed performance logging
-save_manual_audio_debug = false       # Save manual mode audio to WAV files
-recording_dir = "recordings"          # Directory to save debug audio recordings
 
 [history_config]
-enabled = true                        # Append every transcript to the history file
+enabled = false                       # Append every transcript to the history file
 # path = "/home/you/notes/dictation.txt"  # Optional; default ~/.cache/sonori/transcript_history.txt
+
+[training_data]
+enabled = false                       # Save the audio and text of every dictation
+dir = "~/.local/share/sonori/training-data"
 ```
 
 ## Configuration Sections
@@ -318,13 +322,37 @@ Parakeet models are auto-downloaded on first run from HuggingFace.
 Manual mode allows push-to-talk transcription with specialized chunking for longer recordings:
 
 #### Chunk Duration (`chunk_duration_seconds`)
-- **Default**: 29.0 seconds
-- **Recommended range**: 25-29 seconds
-- **Why not 30s?**: Whisper has a 224-token output limit per chunk. When recordings exactly match the chunk duration (30s), they can hit this limit with dense speech, causing transcription to cut off prematurely. Using 29s creates safer chunking boundaries.
-- **Effect**: Recordings longer than this value are automatically split into chunks for processing
+- **Default**: unset. The loaded model sets the length.
+- **Whisper** (whisper.cpp, CTranslate2), **Moonshine** and **Nemotron**: 29 seconds. Whisper reads audio in 30-second windows and writes at most 224 tokens for each window. A chunk of exactly 30 seconds can reach this limit with dense speech, and the end of the text is lost.
+- **Parakeet**: 60 seconds. A longer chunk gives the model more context and fewer cut points. Parakeet takes at most 90 seconds in one call.
+- **Effect**: Sonori cuts a chunk at the first pause after this length. If there is no pause, Sonori cuts at the model limit.
+- **Override**: set a value to use it for every model. Sonori reduces it to the limit of the loaded model. Old configs that hold the earlier default 29.0 lose that line, so the model picks the length.
+
+#### Live Words (`ui_config.live_text`)
+
+Off by default. When on, the cursor-mode bubble shows your words while you dictate. The overlay shows them too. Turn it on in Settings → Look → "Words while you speak"; a sheet first explains the points below and rates your current model and GPU setting. It applies after a restart.
+
+How it works: about twice a second, Sonori transcribes the audio of the current chunk again, and shows the result. A word turns solid once two passes in a row agree on it, and it stays until the chunk is transcribed. The newest words show dim, because they can still change. The pasted text always comes from the full transcription of each chunk, as without live words.
+
+Use it with a GPU and a fast model. Parakeet suits it best; Nemotron streams its own live words. Whisper models and any model without the GPU are slow for it.
+
+Side effects:
+- The model works while you speak. This uses GPU time and power, and it competes with Magic Mode for the GPU.
+- Chunks aim for 20 s instead of the model's length (60 s for Parakeet), so each pass stays short.
+- Stop waits for a pass that is still running. With Parakeet on a GPU this is about 0.1 to 0.3 s.
+- Anyone who sees your screen, for example during screen sharing, can read the words.
+
+Known limits:
+- The final text can differ a little from the live words, mostly in the last half second before Stop.
+- If you speak for more than 25 s without a pause, the bubble shows only the last 25 s. The pasted text is complete.
+- If one pass takes more than 2 s, Sonori stops the live words for the rest of that session.
+- With `disable_chunking`, Sonori shows no live words.
 
 #### Other Options
-- `max_recording_duration_secs`: Maximum total recording length (default: 600 seconds). Long recordings are transcribed in chunks while you speak, so Stop only waits for the last chunk
+- A session has no length limit. Sonori transcribes it in chunks while you speak, so Stop only waits for the last chunk. Chunks with no speech are not transcribed.
+- `silence_stop_secs`: Sonori stops a session after this many seconds without speech (default: 300). A click or a cough does not count as speech. Set 0 to turn it off.
+- After Stop, the microphone stays open until your last word ends, at most 0.5 seconds. If you are already quiet, it closes at once.
+- `max_recording_duration_secs`: Longest audio that waits for Stop (default: 600 seconds). Only `disable_chunking` keeps all audio until Stop, so only then this limits a session
 - `clear_on_new_session`: Whether to clear previous transcript when starting new session
 - `disable_chunking`: Experimental mode to process entire recording without chunks (may fail on long/dense speech)
 
@@ -351,7 +379,7 @@ For whisper.cpp you can also bias recognition itself with `whisper_cpp_options.i
 
 ### Voice Activity Detection (VAD)
 
-Voice Activity Detection automatically identifies when speech is present in the audio stream. Sonori uses the Silero VAD model with configurable sensitivity presets.
+Voice Activity Detection automatically identifies when speech is present in the audio stream. Sonori uses the Silero VAD model with configurable sensitivity presets. In real-time mode the VAD cuts the audio into segments. In manual mode it finds pauses to cut chunks at, skips chunks without speech, decides when the microphone closes after Stop, and drives the silence stop.
 
 #### Sensitivity Presets
 
@@ -360,17 +388,22 @@ The `sensitivity` setting controls how aggressively the VAD detects speech. Choo
 **Low** - Reduces false positives in noisy environments
 - Best for: Noisy offices, environments with background conversations, mechanical noise
 - Trade-off: May miss very quiet speech or soft consonants
-- Technical: Higher detection threshold (0.15), higher speech end threshold (0.12)
+- Technical: Higher detection threshold (0.5), higher speech end threshold (0.35)
 
 **Medium** (Recommended)
 - Best for: Most home/office environments with moderate background noise
 - Trade-off: Balanced between catching all speech and avoiding false triggers
-- Technical: Moderate detection threshold (0.10), moderate speech end threshold (0.08)
+- Technical: Moderate detection threshold (0.4), moderate speech end threshold (0.25)
 
 **High** - Catches quiet speech, may trigger on background noise
 - Best for: Quiet environments, soft-spoken users, ASMR/whispered content
 - Trade-off: May trigger on breathing, keyboard sounds, distant conversations
-- Technical: Lower detection threshold (0.05), lower speech end threshold (0.03)
+- Technical: Lower detection threshold (0.3), lower speech end threshold (0.15)
+
+**VeryHigh** - Catches very quiet or distant speech
+- Best for: Quiet rooms, whispering, a microphone far from your mouth
+- Trade-off: Breathing and small noises often count as speech, so chunks with only noise are transcribed and the silence stop comes later
+- Technical: Lowest detection threshold (0.2), lowest speech end threshold (0.1)
 
 #### Advanced VAD Parameters
 
@@ -462,25 +495,17 @@ This feature is useful for:
 - Debugging transcription issues
 - Benchmarking different model configurations
 
-### Audio Recording Debug
-
-Save manual mode audio recordings to WAV files for debugging or review by enabling `save_manual_audio_debug = true`:
-
-- **Format**: 16-bit mono WAV files at 16kHz sample rate
-- **Location**: Saves to directory specified by `recording_dir` (default: `recordings/`)
-- **Naming**: Files are timestamped: `recording_20251211_143022.wav`
-
 ### Transcript History
 
-Transcript history is on by default. Configure it in `[history_config]`:
+Transcript history is off by default. When you turn it on in Settings, Sonori first shows what it will save and where. Configure it in `[history_config]`:
 
 ```toml
 [history_config]
-enabled = true                          # Set false to keep no history
+enabled = true                          # Default false
 path = "~/notes/dictation.txt"          # Optional custom path; a leading ~/ means your home
 ```
 
-Older configs that set `debug_config.transcript_history_path` keep that path; Sonori moves it into `history_config` on the next start.
+Older releases turned the history on without a warning. On the first start of this release, Sonori turns it off in configs from those releases. Turn it on again in Settings if you want it. Older configs that set `debug_config.transcript_history_path` keep that path; Sonori moves it into `history_config` on the next start.
 
 - **Format**: Plain text with timestamps, one entry per line: `[2025-12-11 14:30:22] Your transcribed text`
 - **Default Location**: `~/.cache/sonori/transcript_history.txt` (respects `$XDG_CACHE_HOME`)
@@ -488,6 +513,27 @@ Older configs that set `debug_config.transcript_history_path` keep that path; So
 - **Both Modes**: Works for both real-time and manual transcription modes
 
 The history file grows unbounded. To clear it, simply delete or truncate the file.
+
+The Recent list in the quick menu lives in memory only. It works also with the history off.
+
+### Training Data (`training_data`)
+
+Sonori can save the audio and the text of every manual dictation, so you can train or test speech models on your own voice. It is off by default. When you turn it on in Settings, Sonori first shows what it will save and where. While it is on, the cursor-mode tile shows a small red dot during recording, and the log shows a warning at each start.
+
+```toml
+[training_data]
+enabled = true                                  # Default false. Applies after a restart
+dir = "~/.local/share/sonori/training-data"     # A leading ~/ means your home
+```
+
+Warning: the folder holds everything you dictate, also passwords and private text. Anyone who can open the folder can hear and read it.
+
+- **Audio**: `audio/<date>-<time>-<session>.wav`, the whole session as 16 kHz mono 16-bit PCM. One hour of dictation uses about 115 MB.
+- **Manifest**: one JSON line for each session in `manifest.jsonl`, in the NeMo manifest format (`audio_filepath`, `duration`, `text`), so NeMo can fine-tune Parakeet on it directly.
+- **`text`**: the model's own words, before the clean-up rules. These are not checked labels. Correct them before you train on them.
+- **More fields**: `created`, `session_id`, `sonori_version`, `speechcore_version`, `backend`, `model`, `language`, `gpu`, `vad_sensitivity`, `speech` (where the VAD heard speech, in seconds), `chunks` (start, end, raw and cleaned text, and inference time of each model call), `processed_text`, `magic_mode_text`, `app_id` (the focused app, on niri, Sway, and Hyprland), `output_mode`, `delivery`, and `delivery_error`.
+
+This replaces `debug_config.save_manual_audio_debug`. That option saved only the audio after the last part of a long session. Sonori removes the old keys from the config.
 
 ### System Tray Integration
 
@@ -516,8 +562,8 @@ The tray icon updates to reflect the current recording state and can show a prev
 
 ### Logs and Output
 - `transcription_stats.log` - Performance statistics (when `log_stats_enabled = true`)
-- `recordings/` - Debug audio recordings (when `save_manual_audio_debug = true`)
-- `~/.cache/sonori/transcript_history.txt` - Transcript history (unless `history_config.enabled = false`)
+- `~/.cache/sonori/transcript_history.txt` - Transcript history (when `history_config.enabled = true`)
+- `~/.local/share/sonori/training-data/` - Audio and text of every dictation (when `training_data.enabled = true`)
 
 ### Configuration
 - `~/.config/sonori/config.toml` - User configuration file (or `$XDG_CONFIG_HOME/sonori/config.toml`)

@@ -11,6 +11,7 @@ pub mod portal_tokens;
 pub mod sound_generator;
 pub mod sound_player;
 pub mod system_tray;
+pub mod training_data;
 pub mod transcript_writer;
 pub mod ui;
 

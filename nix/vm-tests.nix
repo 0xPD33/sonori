@@ -40,6 +40,17 @@ let
 
     [ui_config]
     display_mode = "Cursor"
+    live_text = true
+
+    # Short limits: the 45 s dictation must pass the old cap, and a forgotten
+    # session must stop soon, after a silent chunk was skipped.
+    [manual_mode_config]
+    max_recording_duration_secs = 20
+    silence_stop_secs = 45
+
+    [training_data]
+    enabled = true
+    dir = "/tmp/training"
   '';
 
   # Speaks a WAV file into a null sink whose monitor is the default microphone,
@@ -57,6 +68,8 @@ let
         machine.succeed("espeak-ng -m -f /tmp/long.ssml -w /tmp/long.wav")
         machine.succeed("espeak-ng -w /tmp/short.wav 'This text goes nowhere.'")
         machine.succeed("espeak-ng -w /tmp/entry.wav 'Paste into the entry.'")
+        machine.succeed("espeak-ng -w /tmp/forgot.wav 'Then I forgot to stop.'")
+        machine.succeed("espeak-ng -w /tmp/cut.wav 'Please send me the final report today.'")
         print(machine.succeed("soxi -D /tmp/long.wav || ls -l /tmp/long.wav"))
 
         machine.succeed(as_user("${sway} swaymsg exec \"foot sh -c 'stty -icanon -echo; cat > /tmp/pasted'\""))
@@ -73,7 +86,17 @@ let
             machine.succeed(as_user("sonori stop"))
 
         machine.succeed(as_user("wl-copy OLD-CLIPBOARD > /dev/null 2>&1"))
-        dictate("/tmp/long.wav")
+        # Like dictate(), but the screen is read while the words still come.
+        machine.succeed(as_user("sonori start"))
+        machine.sleep(1)
+        machine.succeed(as_user("setsid -f paplay --device=fakemic /tmp/long.wav"))
+        machine.sleep(14)
+        live = screen_word("live-words", {"sentence", "about", "clipboard", "paste", "check"})
+        print(f"live word on screen: {live}")
+        check(live is not None, "the bubble showed no words while the user spoke")
+        machine.wait_until_succeeds("! pgrep -x paplay", timeout=120)
+        machine.sleep(2)
+        machine.succeed(as_user("sonori stop"))
         try:
             machine.wait_until_succeeds("test -s /tmp/pasted", timeout=120)
         except Exception:
@@ -86,9 +109,82 @@ let
         first_chunk = log_text.find("Transcribing manual chunk")
         stop = log_text.find("Recording state changed: true -> false")
         check(0 <= first_chunk < stop, "no chunk was transcribed while recording")
+        first_preview = log_text.find("Live preview: first pass")
+        check(0 <= first_preview < stop, "no live text while recording")
+        print(machine.succeed("grep 'Live preview' /tmp/sonori-dictate.log"))
         clip = machine.succeed(as_user("wl-paste --no-newline"))
         check(clip == "OLD-CLIPBOARD", f"the clipboard was not restored: {clip!r}")
         check('Paste shortcut: Ctrl+Shift+V for app Some("foot")' in log_text, "foot did not get Ctrl+Shift+V")
+        # The session is longer than max_recording_duration_secs, and chunking ignores that cap.
+        check("Manual buffer full" not in log_text, "the length cap stopped a chunked session")
+        print(machine.succeed("grep -E 'manual chunk|silent chunk|Recording state changed' /tmp/sonori-dictate.log"))
+        check("Sentence 10" in pasted, "the end of the 45 s dictation is missing")
+        # dictate() waits 2 s after the audio, so the mic closes at once.
+        check("talking at stop: false" in log_text, "Stop after silence waited for speech")
+
+        # Training data: the session audio and one manifest line for it.
+        machine.wait_until_succeeds("grep -q Sentence /tmp/training/manifest.jsonl", timeout=30)
+        machine.copy_from_vm("/tmp/training/manifest.jsonl", "")
+        lines = [json.loads(l) for l in machine.succeed("cat /tmp/training/manifest.jsonl").splitlines()]
+        long = next((l for l in lines if "Sentence" in l["text"]), None)
+        if long:
+            print(json.dumps({k: v for k, v in long.items() if k != "speech"}, indent=1))
+            wav = "/tmp/training/" + long["audio_filepath"]
+            seconds = float(machine.succeed(f"soxi -D {wav}"))
+            check(abs(seconds - long["duration"]) < 0.01, f"the WAV has {seconds} s, the manifest {long['duration']} s")
+            spoken = float(machine.succeed("soxi -D /tmp/long.wav"))
+            check(seconds > spoken, f"the saved audio is {seconds} s, shorter than the {spoken} s spoken")
+            check(len(long["chunks"]) >= 2, "the manifest has fewer than two chunks")
+            check(long["delivery"] == "pasted" and long["app_id"] == "foot", "delivery or app is wrong in the manifest")
+            check(bool(long["speech"]), "the manifest has no speech ranges")
+        else:
+            check(False, "no manifest line for the long dictation")
+        # The history is off by default, so no transcript file exists.
+        check(machine.execute("test -e /home/alice/.cache/sonori/transcript_history.txt")[0] != 0, "Sonori kept a history by default")
+
+        # A session that nobody stops ends after silence_stop_secs without speech.
+        before = len(machine.succeed("cat /tmp/pasted"))
+        machine.succeed(as_user("sonori start"))
+        machine.sleep(1)
+        machine.succeed(as_user("paplay --device=fakemic /tmp/forgot.wav"))
+        spoken = time.monotonic()
+        try:
+            machine.wait_until_succeeds("grep -q 'after a long silence' /tmp/sonori-dictate.log", timeout=180)
+            silence = time.monotonic() - spoken
+            print(f"silence stop after {silence:.0f} s of silence")
+            check(40 <= silence <= 60, f"the silence stop came after {silence:.0f} s, not about 45 s")
+            machine.wait_until_succeeds(f"test $(stat -c %s /tmp/pasted) -gt {before}", timeout=60)
+        except Exception:
+            print(machine.succeed("tail -40 /tmp/sonori-dictate.log"))
+            check(False, "the silent session did not stop by itself")
+        machine.sleep(2)
+        forgot = machine.succeed("cat /tmp/pasted")[before:]
+        print(f"pasted after the silence stop: {forgot!r}")
+        check("forgot" in forgot.lower(), "the silence stop lost the text")
+        check("BLANK" not in forgot, "the silent rest of the session was transcribed")
+        print(machine.succeed("grep -E 'manual chunk|Skipping a silent' /tmp/sonori-dictate.log"))
+        log_text = machine.succeed("cat /tmp/sonori-dictate.log")
+        check("Skipping a silent" in log_text, "silent chunks were transcribed")
+
+        # Stop while the last word still sounds: the mic stays open until it ends.
+        before = len(machine.succeed("cat /tmp/pasted"))
+        wav_seconds = (int(machine.succeed("stat -c %s /tmp/cut.wav")) - 44) / 44100
+        machine.succeed(as_user("sonori start"))
+        machine.sleep(1)
+        # One shell plays and stops, so paplay does not die with an early su session.
+        # espeak ends the file with a short silence, so the stop lands in the last word.
+        delay = max(wav_seconds - 0.5, 0)
+        machine.succeed(as_user(f"sh -c 'paplay --device=fakemic /tmp/cut.wav & sleep {delay:.2f}; sonori stop; wait'"))
+        try:
+            machine.wait_until_succeeds(f"test $(stat -c %s /tmp/pasted) -gt {before}", timeout=60)
+        except Exception:
+            check(False, "the session stopped during a word gave no text")
+        machine.sleep(2)
+        cut = machine.succeed("cat /tmp/pasted")[before:]
+        print(f"pasted after a stop during the last word: {cut!r}")
+        print(machine.succeed("grep 'talking at stop' /tmp/sonori-dictate.log"))
+        check("today" in cut.lower(), "Stop cut off the last word")
+        check("talking at stop: true" in machine.succeed("cat /tmp/sonori-dictate.log"), "the stop during a word did not wait")
 
         # A GTK entry is not a terminal: it gets Ctrl+V.
         machine.succeed(as_user("${sway} swaymsg exec \"zenity --entry --text=Dictate > /tmp/entry\""))
@@ -158,7 +254,9 @@ let
       extraChecks ? "",
     }:
     ''
+      import json
       import shlex
+      import time
 
       ENV = (
           "XDG_RUNTIME_DIR=/run/user/${uid} "
