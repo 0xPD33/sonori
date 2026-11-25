@@ -96,6 +96,7 @@ pub struct WindowState {
     pub surface: wgpu::Surface<'static>,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
+    pub device_lost: super::gpu_utils::DeviceLost,
     pub config: wgpu::SurfaceConfiguration,
     pub spectrogram: Option<Spectrogram>,
     pub audio_data: Option<Arc<RwLock<AudioVisualizationData>>>,
@@ -192,6 +193,7 @@ impl WindowState {
             adapter,
             device,
             queue,
+            lost: device_lost,
         } = gpu;
 
         let surface = instance.create_surface(window.clone()).map_err(|e| {
@@ -394,6 +396,7 @@ impl WindowState {
             surface,
             device,
             queue,
+            device_lost,
             config,
             spectrogram: None,
             audio_data: None,
@@ -632,12 +635,19 @@ impl WindowState {
             self.hover_animation_progress =
                 (self.hover_animation_progress - delta_time * animation_speed).max(0.0);
         }
+        // A lost device panics in get_current_texture; the app rebuilds this window.
+        if self.device_lost.get() {
+            return;
+        }
         // Every bail-out re-arms the redraw, so a failed frame is retried soon.
         let output = match self.surface.get_current_texture() {
             Ok(output) => output,
             Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
                 // Reconfigure the surface if it's outdated or lost
                 self.surface.configure(&self.device, &self.config);
+                if self.device_lost.get() {
+                    return;
+                }
                 match self.surface.get_current_texture() {
                     Ok(output) => output,
                     Err(e) => {

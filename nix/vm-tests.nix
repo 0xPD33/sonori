@@ -222,6 +222,23 @@ let
         types = machine.succeed(as_user("wl-paste --list-types"))
         check("x-kde-passwordManagerHint" in types, "the transcript has no history hint")
         machine.screenshot("not-pasted")
+
+        # A lost GPU device must not end Sonori: it rebuilds its windows on a new one.
+        start_sonori("gpuloss", "${dictationConfig}", "${sway} SONORI_TEST_GPU_LOSS=10")
+        machine.wait_until_succeeds("grep -q 'Backend loaded' /tmp/sonori-gpuloss.log", timeout=120)
+        machine.wait_until_succeeds("grep -q 'Test: destroying the GPU device' /tmp/sonori-gpuloss.log", timeout=60)
+        machine.sleep(2)
+        dictate("/tmp/short.wav")
+        machine.sleep(3)
+        machine.screenshot("gpu-recovered")
+        gpu_log = machine.succeed("cat /tmp/sonori-gpuloss.log")
+        after = gpu_log.split("rebuilding the windows", 1)
+        check("GPU device lost" in gpu_log, "Sonori did not notice the lost GPU device")
+        check(len(after) == 2, "Sonori did not rebuild its windows after the GPU loss")
+        check(len(after) == 2 and "Cursor mode: the focused output" in after[1], "the cursor overlay did not draw again after the GPU loss")
+        check("panicked" not in gpu_log, "Sonori panicked after the GPU loss")
+        check(machine.succeed("pgrep -x sonori || true").strip() != "", "Sonori exited after the GPU loss")
+        machine.copy_from_vm("/tmp/sonori-gpuloss.log", "")
         machine.copy_from_vm("/tmp/sonori-dictate.log", "")
         machine.copy_from_vm("/tmp/pasted", "")
   '';

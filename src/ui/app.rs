@@ -228,13 +228,6 @@ impl WindowApp {
                 return;
             }
         };
-        let (instance, adapter, device, queue) = (
-            &gpu.instance,
-            gpu.adapter.clone(),
-            gpu.device.clone(),
-            gpu.queue.clone(),
-        );
-
         match event_loop.create_window(attrs) {
             Ok(window) => {
                 let handles = SettingsHandles {
@@ -249,10 +242,7 @@ impl WindowApp {
                 };
                 let settings_win = match SettingsWindow::new(
                     window,
-                    instance,
-                    &adapter,
-                    device,
-                    queue,
+                    &gpu,
                     &self.config,
                     handles,
                     self.settings_position,
@@ -270,6 +260,21 @@ impl WindowApp {
             Err(e) => {
                 eprintln!("Failed to create settings window: {}", e);
             }
+        }
+    }
+
+    /// Drops every window and the lost device. The rest of `about_to_wait`
+    /// builds the overlay again on a new device; Settings opens again if it was open.
+    fn drop_lost_gpu(&mut self, event_loop: &dyn ActiveEventLoop) {
+        eprintln!("GPU device lost; rebuilding the windows on a new device");
+        let settings_open = self.settings_window.take().is_some();
+        self.settings_window_id = None;
+        self.cursor_overlay = None;
+        self.windows.clear();
+        self.window_drag = None;
+        self.gpu = None;
+        if settings_open {
+            self.open_settings_window(event_loop);
         }
     }
 
@@ -864,6 +869,10 @@ impl ApplicationHandler for WindowApp {
                 event_loop.exit();
                 return;
             }
+        }
+
+        if self.gpu.as_ref().is_some_and(|gpu| gpu.lost.get()) {
+            self.drop_lost_gpu(event_loop);
         }
 
         // An idle overlay renders no frames, so this wake-up is what notices new

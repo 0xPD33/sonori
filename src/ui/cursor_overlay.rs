@@ -376,6 +376,7 @@ pub struct CursorOverlay {
     pub adapter: wgpu::Adapter,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
+    device_lost: super::gpu_utils::DeviceLost,
     renderer: Option<Renderer>,
     surfaces: Vec<OutputSurface>,
     /// The surface on the output that has the pointer; the tile draws there.
@@ -474,6 +475,7 @@ impl CursorOverlay {
             adapter,
             device,
             queue,
+            lost: device_lost,
         } = gpu;
         let seen_seq = handles.delivery.read().seq;
         let now = Instant::now();
@@ -482,6 +484,7 @@ impl CursorOverlay {
             adapter,
             device,
             queue,
+            device_lost,
             renderer: None,
             surfaces: Vec::new(),
             active: None,
@@ -1706,6 +1709,10 @@ impl CursorOverlay {
             output.region_dirty = true;
         }
         Self::apply_region(output, capture);
+        // A lost device panics in get_current_texture; the app rebuilds the overlay.
+        if self.device_lost.get() {
+            return;
+        }
         let frame = match output.surface.get_current_texture() {
             Ok(frame) => frame,
             Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {

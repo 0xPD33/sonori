@@ -69,6 +69,7 @@ pub struct SettingsWindow {
     pub window: Arc<dyn Window>,
     device: wgpu::Device,
     queue: wgpu::Queue,
+    device_lost: super::gpu_utils::DeviceLost,
     config: wgpu::SurfaceConfiguration,
     shapes: ShapeRenderer,
     text: TextRenderer,
@@ -97,16 +98,15 @@ pub struct SettingsWindow {
 impl SettingsWindow {
     pub fn new(
         window: Box<dyn Window>,
-        instance: &wgpu::Instance,
-        adapter: &wgpu::Adapter,
-        device: wgpu::Device,
-        queue: wgpu::Queue,
+        gpu: &super::gpu_utils::Gpu,
         initial_config: &AppConfig,
         handles: SettingsHandles,
         position: Option<(f64, f64)>,
     ) -> Result<Self, String> {
         let window: Arc<dyn Window> = Arc::from(window);
-        let surface = instance
+        let (adapter, device, queue) = (&gpu.adapter, gpu.device.clone(), gpu.queue.clone());
+        let surface = gpu
+            .instance
             .create_surface(window.clone())
             .map_err(|e| format!("Failed to create GPU surface for settings window: {e}"))?;
         let caps = surface.get_capabilities(adapter);
@@ -167,6 +167,7 @@ impl SettingsWindow {
             window,
             device,
             queue,
+            device_lost: gpu.lost.clone(),
             config,
             shapes,
             text,
@@ -241,6 +242,10 @@ impl SettingsWindow {
 
     pub fn draw(&mut self) {
         self.apply_drag();
+        // A lost device panics in get_current_texture; the app rebuilds this window.
+        if self.device_lost.get() {
+            return;
+        }
         let frame = match self.surface.get_current_texture() {
             Ok(frame) => frame,
             Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {

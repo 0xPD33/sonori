@@ -1,4 +1,6 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use wgpu::{self, util::DeviceExt};
 
 /// Shared utility for GPU quad rendering to reduce code duplication
@@ -178,6 +180,40 @@ pub fn request_device(adapter: &wgpu::Adapter) -> Result<(wgpu::Device, wgpu::Qu
     })
 }
 
+/// Set once the GPU device is lost, for example after a driver reset. Every
+/// surface then stops drawing, and the app builds a new device and windows.
+#[derive(Clone, Default)]
+pub struct DeviceLost(Arc<AtomicBool>);
+
+impl DeviceLost {
+    pub fn get(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
+
+/// `SONORI_TEST_GPU_LOSS=<seconds>` destroys the first device after that many
+/// seconds, so the VM test can check the recovery.
+fn lose_for_test(device: &wgpu::Device) {
+    static ARMED: AtomicBool = AtomicBool::new(false);
+    let Some(secs) = std::env::var("SONORI_TEST_GPU_LOSS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+    else {
+        return;
+    };
+    if ARMED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let device = device.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(secs));
+        eprintln!("Test: destroying the GPU device");
+        device.destroy();
+        // A destroyed device reports the loss on its next poll.
+        let _ = device.poll(wgpu::PollType::Poll);
+    });
+}
+
 /// The one GPU instance and device of the app; every window draws with it.
 /// Windows come and go as the display mode changes. When each had its own
 /// Vulkan instance, dropping one crashed the NVIDIA driver in another's present.
@@ -187,6 +223,7 @@ pub struct Gpu {
     pub adapter: wgpu::Adapter,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
+    pub lost: DeviceLost,
 }
 
 impl Gpu {
@@ -206,11 +243,19 @@ impl Gpu {
         let (device, queue) = request_device(&adapter)?;
         // A drawing bug must not end the dictation app.
         device.on_uncaptured_error(Box::new(|e| eprintln!("GPU error: {e}")));
+        let lost = DeviceLost::default();
+        let flag = lost.0.clone();
+        device.set_device_lost_callback(move |reason, message| {
+            eprintln!("GPU device lost ({reason:?}): {message}");
+            flag.store(true, Ordering::Release);
+        });
+        lose_for_test(&device);
         Ok(Self {
             instance,
             adapter,
             device,
             queue,
+            lost,
         })
     }
 }
