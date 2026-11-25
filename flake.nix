@@ -145,7 +145,7 @@
               lockFile = ./Cargo.lock;
               outputHashes = {
                 "dpi-0.1.2" = "sha256-7DW0eaqJ5S0ixl4aio+cAE8qnq77tT9yzbemJJOGDX0=";
-                "speechcore-0.3.2" = "sha256-K/InWCD3QoG2mIyiEw67IvMmsmeb/Hy+JjlDjEkcNpQ=";
+                "speechcore-0.4.0" = "sha256-L5Kok79L8UWSXQMT5XV8wT8P+OU3CF7DtGp/NCDLrSI=";
               };
             };
 
