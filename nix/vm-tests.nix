@@ -223,30 +223,6 @@ let
         check("x-kde-passwordManagerHint" in types, "the transcript has no history hint")
         machine.screenshot("not-pasted")
 
-        # A lost GPU device must not end Sonori: it rebuilds its windows on a new one.
-        start_sonori("gpuloss", "${dictationConfig}", "${sway} SONORI_TEST_GPU_LOSS=10")
-        machine.wait_until_succeeds("grep -q 'Backend loaded' /tmp/sonori-gpuloss.log", timeout=120)
-        machine.wait_until_succeeds("grep -q 'Test: destroying the GPU device' /tmp/sonori-gpuloss.log", timeout=60)
-        machine.sleep(2)
-        machine.succeed(as_user("sonori start"))
-        machine.sleep(1)
-        machine.succeed(as_user("paplay --device=fakemic /tmp/short.wav"))
-        machine.screenshot("gpu-recovered")
-        machine.succeed(as_user("sonori stop"))
-        try:
-            machine.wait_until_succeeds("grep -q 'no app read the text' /tmp/sonori-gpuloss.log", timeout=60)
-        except Exception:
-            check(False, "the dictation after the GPU loss did not finish")
-        machine.screenshot("gpu-recovered-bubble")
-        gpu_log = machine.succeed("cat /tmp/sonori-gpuloss.log")
-        after = gpu_log.split("rebuilding the windows", 1)
-        check("GPU device lost" in gpu_log, "Sonori did not notice the lost GPU device")
-        check(len(after) == 2, "Sonori did not rebuild its windows after the GPU loss")
-        check(len(after) == 2 and "Cursor mode: the focused output" in after[1], "the cursor overlay did not draw again after the GPU loss")
-        check("panicked" not in gpu_log, "Sonori panicked after the GPU loss")
-        alive = machine.execute(as_user("sonori status"))[0] == 0
-        check(alive, "Sonori does not answer after the GPU loss")
-        machine.copy_from_vm("/tmp/sonori-gpuloss.log", "")
         machine.copy_from_vm("/tmp/sonori-dictate.log", "")
         machine.copy_from_vm("/tmp/pasted", "")
   '';
@@ -492,8 +468,9 @@ in
                   check(False, "the paste did not fail")
               machine.sleep(2)
 
-              def screen_word(name, wanted):
-                  machine.succeed(as_user(f"grim /tmp/{name}.png"))
+              def screen_word(name, wanted, output=""):
+                  only = f"-o {output} " if output else ""
+                  machine.succeed(as_user(f"grim {only}/tmp/{name}.png"))
                   machine.copy_from_vm(f"/tmp/{name}.png", "")
                   # Upscaled 3x, so OCR reads the small text on Sonori's glass.
                   machine.succeed(f"magick /tmp/{name}.png -resize 300% -colorspace Gray -negate /tmp/{name}-ocr.png")
@@ -647,6 +624,35 @@ in
               machine.copy_from_vm("/tmp/sonori-focus.log", "")
 
           ${dictationChecks "SWAYSOCK=$(ls /run/user/${uid}/sway-ipc.*.sock)"}
+
+          with subtest("recover from a lost GPU device"):
+              # Runs last: it replaces the running Sonori. screen_word comes from the drag test.
+              start_sonori("gpuloss", "${dictationConfig}", "SWAYSOCK=$(ls /run/user/${uid}/sway-ipc.*.sock) SONORI_TEST_GPU_LOSS=10")
+              machine.wait_until_succeeds("grep -q 'Backend loaded' /tmp/sonori-gpuloss.log", timeout=120)
+              machine.wait_until_succeeds("grep -q 'Test: destroying the GPU device' /tmp/sonori-gpuloss.log", timeout=60)
+              machine.sleep(2)
+              machine.succeed(as_user("sonori start"))
+              machine.sleep(1)
+              machine.succeed(as_user("paplay --device=fakemic /tmp/short.wav"))
+              machine.sleep(2)
+              machine.succeed(as_user("sonori stop"))
+              try:
+                  machine.wait_until_succeeds("grep -q 'no app read the text' /tmp/sonori-gpuloss.log", timeout=60)
+              except Exception:
+                  check(False, "the dictation after the GPU loss did not finish")
+              machine.sleep(2)
+              # The focus test adds a second output; OCR reads one output at a time.
+              outputs = machine.succeed(as_user("SWAYSOCK=$(ls /run/user/${uid}/sway-ipc.*.sock) swaymsg -t get_outputs | grep -o 'HEADLESS-[0-9]*' | sort -u")).split()
+              recovered = None
+              for output in outputs:
+                  recovered = recovered or screen_word(f"gpu-recovered-{output}", ["text", "goes", "nowhere", "pasted", "clipboard"], output)
+              gpu_log = machine.succeed("cat /tmp/sonori-gpuloss.log")
+              check("GPU device lost" in gpu_log, "Sonori did not notice the lost GPU device")
+              check("rebuilding the windows" in gpu_log, "Sonori did not rebuild its windows after the GPU loss")
+              check(recovered is not None, "OCR found no bubble after the GPU loss")
+              check("panicked" not in gpu_log, "Sonori panicked after the GPU loss")
+              check(machine.execute(as_user("sonori status"))[0] == 0, "Sonori does not answer after the GPU loss")
+              machine.copy_from_vm("/tmp/sonori-gpuloss.log", "")
 
         '';
       };
