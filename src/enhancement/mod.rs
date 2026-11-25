@@ -113,14 +113,41 @@ impl MagicModeEnhancer {
             .as_deref()
             .or(Some(DEFAULT_ENHANCEMENT_SYSTEM_PROMPT));
 
-        match model.enhance(transcription, system_prompt) {
-            Ok(enhanced) => Ok(enhanced),
-            Err(e) => {
-                eprintln!("Magic Mode enhancement failed: {e}");
-                Ok(transcription.to_string())
-            }
+        // A part that fails keeps its raw text, so no part of the transcript is lost.
+        let parts: Vec<String> = sentence_parts(transcription, PART_WORDS)
+            .into_iter()
+            .map(|part| match model.enhance(&part, system_prompt) {
+                Ok(enhanced) if !enhanced.trim().is_empty() => enhanced,
+                Ok(_) => part,
+                Err(e) => {
+                    eprintln!("Magic Mode enhancement failed: {e}");
+                    part
+                }
+            })
+            .collect();
+        Ok(parts.join(" "))
+    }
+}
+
+/// Words per model call. The prompt and the rewrite of about 200 words fit the
+/// 2048-token context together.
+const PART_WORDS: usize = 200;
+
+/// Splits `text` into parts of at least `min_words` words, cut at sentence ends.
+fn sentence_parts(text: &str, min_words: usize) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut part: Vec<&str> = Vec::new();
+    for word in text.split_whitespace() {
+        part.push(word);
+        if part.len() >= min_words && word.ends_with(['.', '?', '!']) {
+            parts.push(part.join(" "));
+            part.clear();
         }
     }
+    if !part.is_empty() {
+        parts.push(part.join(" "));
+    }
+    parts
 }
 
 /// Trait for text enhancement models

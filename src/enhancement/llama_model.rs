@@ -145,6 +145,7 @@ impl LlamaCppModel {
         // batch, so it continues from the end of the prompt.
         // Stop at the context end too; decoding past it fails.
         let room = (self.context_size as usize).saturating_sub(tokens.len());
+        let mut ended = false;
         for n_cur in (tokens.len() as i32..).take(self.max_tokens.min(room)) {
             // Sample next token
             let token = sampler.sample(&ctx, batch.n_tokens() - 1);
@@ -152,6 +153,7 @@ impl LlamaCppModel {
 
             // Check for end of generation
             if vocab.is_eog(token) {
+                ended = true;
                 break;
             }
 
@@ -160,6 +162,7 @@ impl LlamaCppModel {
             let token_str = String::from_utf8_lossy(&piece);
 
             if token_str.contains("<|im_end|>") || token_str.contains("<|endoftext|>") {
+                ended = true;
                 break;
             }
 
@@ -175,6 +178,13 @@ impl LlamaCppModel {
             ctx.decode(&mut batch).map_err(|e| {
                 EnhancementError::InferenceError(format!("Failed to decode: {:?}", e))
             })?;
+        }
+
+        // A cut-off rewrite would lose the end of the transcript.
+        if !ended {
+            return Err(EnhancementError::InferenceError(
+                "the output reached the token limit".into(),
+            ));
         }
 
         // Decode the bytes as a whole: one UTF-8 character can span two tokens.
